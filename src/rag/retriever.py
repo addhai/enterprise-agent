@@ -23,7 +23,8 @@ class HybridRetriever:
 
     def search(self, query: str, top_k: int = 5) -> List[Document]:
         """混合检索，返回去重合并后的结果"""
-        return self.search_with_scores(query, top_k)
+        results = self.search_with_scores(query, top_k)
+        return [doc for doc, _ in results]
 
     def search_with_scores(self, query: str, top_k: int = 5) -> List[Tuple[Document, float]]:
         """带分数的混合检索"""

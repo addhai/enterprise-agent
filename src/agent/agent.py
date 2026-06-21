@@ -1,6 +1,6 @@
 from langchain_openai import ChatOpenAI
-from langchain.agents import AgentState, create_agent
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, HumanMessage
 from src.config import settings
 from src.agent.prompt import build_prompt
 from src.agent.tools import create_tools

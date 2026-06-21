@@ -91,7 +91,7 @@ def faq_node(state: AgentState) -> Dict[str, Any]:
         return {"faq_match": result, "needs_human": False}
     else:
         # FAQ 没匹配到，标记可能需要转入 RAG
-        return {"faq_match": None, "intent": "technical"}
+        return {"faq_match": None}
 
 
 def rag_node(state: AgentState, retriever=None, user_id: str = "") -> Dict[str, Any]:

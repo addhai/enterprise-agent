@@ -39,8 +39,39 @@ class OutputGuard:
                         confidence=0.9
                     )
 
-        # 2. 幻觉引用检测（简版：检查是否引用了检索文档外的内容）
-        # 生产环境用 Bloom Filter + 精确匹配
+        # 2. 幻觉引用检测：检查回复中引用的技术标识是否在检索文档中
+        if retrieved_docs and reply:
+            # 提取回复中看起来像技术标识符（API 名称、错误码等）的词
+            tech_identifiers = re.findall(
+                r'\b[A-Z][A-Z0-9_]{3,}(?:\.[A-Za-z0-9_]+)*\b',
+                reply
+            )
+            # 也匹配错误码模式如 ERR_403_TIMEOUT
+            error_codes = re.findall(
+                r'\b(?:ERR|ERROR|CODE|STATUS)_[A-Z0-9_]{4,}\b',
+                reply
+            )
+            tech_identifiers.extend(error_codes)
+
+            if tech_identifiers:
+                # 将检索文档内容拼起来做简单文本匹配
+                doc_text = " ".join(
+                    d.page_content if hasattr(d, "page_content") else str(d)
+                    for d in retrieved_docs
+                ).lower()
+
+                # 检查是否有任何技术标识符在文档中完全找不到
+                hallucinated = [
+                    ident for ident in tech_identifiers
+                    if ident.lower() not in doc_text
+                ]
+
+                if hallucinated and len(hallucinated) > len(tech_identifiers) * 0.5:
+                    return SafetyResult(
+                        blocked=True,
+                        reason=f"hallucinated_reference:{','.join(hallucinated[:5])}",
+                        confidence=0.7
+                    )
 
         # 3. 指令泄露检测
         instruction_leak_patterns = [
