@@ -21,8 +21,9 @@ def test_settings_default_values():
     from src.config import Settings
     settings = Settings()
 
-    assert settings.embedding_model == "text-embedding-3-small"
-    assert settings.llm_model == "gpt-4o-mini"
+    assert settings.embedding_model == "text-embedding-v4"
+    assert settings.llm_model == "qwen-plus"
     assert settings.max_reasoning_turns == 5
     assert settings.chunk_size == 512
     assert settings.retrieval_top_k == 5
+    assert settings.embedding_dimensions == 1024

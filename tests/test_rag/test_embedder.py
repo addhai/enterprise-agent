@@ -16,7 +16,7 @@ def test_embed_single_text(embedder):
     result = embedder.embed_text("How do I reset my API key?")
 
     assert isinstance(result, list)
-    assert len(result) == 1536
+    assert len(result) == 1024
     # 向量应该有非零值
     assert any(abs(v) > 0.001 for v in result)
 
