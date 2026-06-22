@@ -32,7 +32,7 @@ def test_embed_multiple_texts(embedder):
     results = embedder.embed_documents(texts)
 
     assert len(results) == 3
-    assert all(len(v) == 1536 for v in results)
+    assert all(len(v) == 1024 for v in results)
 
 
 def test_similar_texts_have_closer_vectors(embedder):
