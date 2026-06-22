@@ -5,11 +5,14 @@ class Settings(BaseSettings):
     """全局配置，从 .env 和环境变量读取"""
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # OpenAI
-    openai_api_key: str = ""
-    embedding_model: str = "text-embedding-3-small"
-    llm_model: str = "gpt-4o-mini"
-    llm_complex_model: str = "gpt-4o"
+	    # OpenAI-compatible (阿里云百炼)
+	    openai_api_key: str = ""
+	    openai_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	    embedding_model: str = "text-embedding-v4"
+	    embedding_dimensions: int = 1024  # text-embedding-v4 默认 1024 维
+	    llm_model: str = "qwen-plus"
+	    llm_complex_model: str = "qwen-max"
+
 
     # LangSmith
     langsmith_api_key: str = ""

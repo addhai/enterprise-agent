@@ -14,6 +14,8 @@ class VectorStoreManager:
         self._embedding_function = OpenAIEmbeddings(
             model=settings.embedding_model,
             api_key=settings.openai_api_key,
+            base_url=settings.openai_api_base,
+            dimensions=settings.embedding_dimensions,
         )
         self._store = None
 

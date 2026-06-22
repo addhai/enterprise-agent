@@ -20,6 +20,7 @@ class CustomerServiceAgent:
         self.llm = ChatOpenAI(
             model=settings.llm_model,
             api_key=settings.openai_api_key,
+            base_url=settings.openai_api_base,
             temperature=0.1,
         )
 

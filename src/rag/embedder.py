@@ -11,6 +11,8 @@ class Embedder:
         self._client = OpenAIEmbeddings(
             model=self.model_name,
             api_key=settings.openai_api_key,
+            base_url=settings.openai_api_base,
+            dimensions=settings.embedding_dimensions,
         )
 
     def embed_text(self, text: str) -> List[float]:
