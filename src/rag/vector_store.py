@@ -1,8 +1,8 @@
 from typing import List
 from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 from src.config import settings
+from src.rag.embedder import Embedder
 
 
 class VectorStoreManager:
@@ -11,12 +11,7 @@ class VectorStoreManager:
     def __init__(self, persist_directory: str = None, collection_name: str = None):
         self.persist_directory = persist_directory or settings.chroma_persist_dir
         self.collection_name = collection_name or settings.chroma_collection_name
-        self._embedding_function = OpenAIEmbeddings(
-            model=settings.embedding_model,
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_api_base,
-            dimensions=settings.embedding_dimensions,
-        )
+        self._embedding_function = Embedder()
         self._store = None
 
     @property
