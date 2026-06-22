@@ -1,3 +1,9 @@
-.claude/
+.env
+chroma_data/
+venv/
+.pytest_cache/
 __pycache__/
 *.pyc
+.claude/
+.DS_Store
+_chk/\nchk_tmp/\nchroma_e2e_test/\ntest_chroma/\ntest_chroma_full/\n.idea/
