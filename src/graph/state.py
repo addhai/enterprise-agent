@@ -12,6 +12,12 @@ class AgentState(TypedDict):
     # 当前识别的用户意图：faq | technical | human | unknown
     intent: Optional[str]
 
+    # 动态 max_turns（根据意图复杂度调整）
+    effective_max_turns: int
+
+    # 是否已经做过 Reflection
+    has_reflected: bool
+
     # RAG 检索到的文档
     retrieved_docs: Optional[List[Any]]
 

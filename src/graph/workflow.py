@@ -8,6 +8,7 @@ from src.graph.nodes import (
     faq_node,
     rag_node,
     human_node,
+    reflect_node,
     reply_node,
 )
 
@@ -53,6 +54,7 @@ def create_workflow(retriever=None):
     workflow.add_node("router", router_node)
     workflow.add_node("faq", faq_node)
     workflow.add_node("rag", rag_node_bound)
+    workflow.add_node("reflect", reflect_node)
     workflow.add_node("human", human_node)
     workflow.add_node("reply", reply_node)
 
@@ -81,8 +83,10 @@ def create_workflow(retriever=None):
         }
     )
 
-    # RAG and Human both go to reply node
-    workflow.add_edge("rag", "reply")
+    # RAG goes to reflect first, then to reply
+    # Human goes directly to reply (no reflection needed)
+    workflow.add_edge("rag", "reflect")
+    workflow.add_edge("reflect", "reply")
     workflow.add_edge("human", "reply")
 
     # Reply node ends

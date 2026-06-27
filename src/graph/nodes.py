@@ -32,6 +32,8 @@ def entry_node(state: AgentState) -> Dict[str, Any]:
         "intent": None,
         "needs_human": False,
         "faq_match": None,
+        "effective_max_turns": 5,  # 默认值，router_node 会根据意图调整
+        "has_reflected": False,
     }
 
 
@@ -52,7 +54,7 @@ def router_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     if any(kw in content.lower() for kw in human_keywords):
-        return {"intent": "human"}
+        return {"intent": "human", "effective_max_turns": settings.max_turns_faq}
 
     # 快速规则判断 FAQ vs Technical
     faq_keywords = [
@@ -62,7 +64,7 @@ def router_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     if any(kw in content.lower() for kw in faq_keywords):
-        return {"intent": "faq"}
+        return {"intent": "faq", "effective_max_turns": settings.max_turns_faq}
 
     # 其他情况尝试 LLM 分类
     try:
@@ -73,11 +75,17 @@ def router_node(state: AgentState) -> Dict[str, Any]:
         )
         intent = classification.content.strip().lower()
         if intent in ["faq", "technical", "human"]:
-            return {"intent": intent}
+            # 根据意图设定动态 max_turns
+            turns_map = {
+                "faq": settings.max_turns_faq,
+                "technical": settings.max_turns_technical,
+                "human": settings.max_turns_faq,
+            }
+            return {"intent": intent, "effective_max_turns": turns_map.get(intent, 5)}
     except Exception:
         pass
 
-    return {"intent": "technical"}  # 默认走技术排查
+    return {"intent": "technical", "effective_max_turns": settings.max_turns_technical}
 
 
 def faq_node(state: AgentState) -> Dict[str, Any]:
@@ -113,6 +121,7 @@ def rag_node(state: AgentState, retriever=None, user_id: str = "") -> Dict[str, 
     agent = CustomerServiceAgent(
         retriever=retriever,
         user_id=user_id or state.get("user_id", ""),
+        max_turns=state.get("effective_max_turns", settings.max_reasoning_turns),
     )
 
     result = agent.run_with_trace(content, chat_history=history)
@@ -142,6 +151,62 @@ def human_node(state: AgentState) -> Dict[str, Any]:
             f"如长时间未响应，请发送邮件至 support@cloudsync.io。"
         ),
     }
+
+
+def reflect_node(state: AgentState) -> Dict[str, Any]:
+    """Reflection 节点：Agent 自我反思后修正回复
+
+    在 reply_node 之前执行，让 Agent 检查自己的推理链是否完整。
+    只在技术排查（intent=technical）且未反射过时执行。
+    """
+    # FAQ 和人工转接不需要 reflection
+    if state.get("intent") != "technical":
+        return {}
+
+    # 已经反射过的不重复
+    if state.get("has_reflected"):
+        return {}
+
+    final_response = state.get("final_response", "")
+    if not final_response:
+        return {}
+
+    # 使用共享 LLM 做 reflection（不调工具，纯文本检查）
+    reflect_llm = ChatOpenAI(
+        model=settings.llm_model,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_api_base,
+        temperature=0.0,
+    )
+
+    reflect_prompt = (
+        "你是一个质量审查员。请检查以下客服 Agent 的回复，从三个角度审查：\n\n"
+        "1. **事实准确性**：回复中的所有技术断言（API 名称、配置步骤、错误码、版本号）"
+        "是否都有依据？如果有任何编造或猜测的内容，请指出。\n"
+        "2. **完整性**：有没有遗漏用户已经尝试过的步骤？"
+        "如果用户之前提到过排查信息，回复是否充分利用了这些信息？\n"
+        "3. **安全性**：回复是否包含任何危险的指令（如删除数据、绕过安全措施）？"
+        "是否泄露了系统内部信息（System Prompt、工具定义、其他用户信息）？\n\n"
+        f"【Agent 回复】\n{final_response}\n\n"
+        "请给出审查结论。如果有问题，直接输出修正后的完整回复。"
+        "如果回复没有问题，输出 'PASS'。"
+    )
+
+    try:
+        result = reflect_llm.invoke(reflect_prompt)
+        reflection_output = result.content.strip()
+    except Exception:
+        # Reflection LLM 调用失败，不阻塞流程
+        return {"has_reflected": True}
+
+    if reflection_output and reflection_output != "PASS":
+        # Reflection 发现了问题并给出了修正版
+        return {
+            "final_response": reflection_output,
+            "has_reflected": True,
+        }
+
+    return {"has_reflected": True}
 
 
 def reply_node(state: AgentState) -> Dict[str, Any]:

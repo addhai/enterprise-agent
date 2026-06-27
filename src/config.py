@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     # Agent
     max_reasoning_turns: int = 5
+    max_turns_faq: int = 1
+    max_turns_technical: int = 5
+    max_turns_complex: int = 8
 
     # Redis
     redis_url: str = "redis://localhost:6379"
