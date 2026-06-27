@@ -1,0 +1,7 @@
+## SDK Initialization 403 Error
+
+If your SDK initialization returns a 403 error:
+
+1. **Check API Key**: Go to Console > Developer Settings. Verify the key is active and not expired. Regenerate if needed.
+
+2. **Check Domain Whitelist**: Go to Console > Developer Settings > Domain Whitelist. Add your application's domain (e.g., app.example.com). Note: localhost is automatically whitelisted for devel
