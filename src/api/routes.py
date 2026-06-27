@@ -53,6 +53,8 @@ async def chat(request: ChatRequest):
             final_response="",
             user_id=request.user_id or "anonymous",
             faq_match=None,
+            effective_max_turns=5,
+            has_reflected=False,
         )
 
         result = app.invoke(

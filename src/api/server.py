@@ -2,7 +2,15 @@
 FastAPI 应用入口
 """
 import logging
+import os
 import sys
+from pathlib import Path
+
+# 确保运行时 cwd 是项目根目录（PyCharm 直接运行本文件时 cwd 可能不对）
+_project_root = Path(__file__).parent.parent.parent
+os.chdir(_project_root)
+sys.path.insert(0, str(_project_root))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.api.routes import router
