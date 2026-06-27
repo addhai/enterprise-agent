@@ -32,6 +32,9 @@ from a2a.server.tasks import InMemoryTaskStore
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.routes import add_a2a_routes_to_fastapi
+from a2a.server.routes.agent_card_routes import create_agent_card_routes
+from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
+from a2a.server.routes.rest_routes import create_rest_routes
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
 
 from fastapi import FastAPI
@@ -180,13 +183,24 @@ def build_a2a_server(workflow=None) -> FastAPI:
     handler = DefaultRequestHandler(
         agent_executor=CustomerServiceExecutor(workflow=workflow),
         task_store=InMemoryTaskStore(),
+        agent_card=SERVICE_AGENT_CARD,
     )
 
-    # 注册 A2A 路由：JSON-RPC + REST + Agent Card
+    # 注册 A2A 路由：Agent Card + JSON-RPC + REST
     add_a2a_routes_to_fastapi(
         app,
-        agent_card=SERVICE_AGENT_CARD,
-        http_handler=handler,
+        agent_card_routes=create_agent_card_routes(
+            agent_card=SERVICE_AGENT_CARD,
+            card_url="/.well-known/agent.json",
+        ),
+        jsonrpc_routes=create_jsonrpc_routes(
+            request_handler=handler,
+            rpc_url="/",
+        ),
+        rest_routes=create_rest_routes(
+            request_handler=handler,
+            path_prefix="/v1",
+        ),
     )
 
     return app
