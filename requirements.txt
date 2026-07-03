@@ -21,6 +21,17 @@ pydantic-settings>=2.0.0
 # RAG
 rank-bm25>=0.2.0
 sentence-transformers>=3.0.0
+pymupdf>=1.23.0          # PDF 加载（PyMuPDF）
+beautifulsoup4>=4.12.0   # HTML 正文提取
+chardet>=5.0.0           # 编码检测
+python-docx>=0.8.11      # DOCX 加载
+
+# 多模态视觉管线（阿里百炼 Qwen-VL）
+# openai>=1.0.0          # 百炼兼容 OpenAI 格式，需安装 openai 客户端
+
+# Level 2: 传统 OCR（二选一，作为视觉模型不可用时的降级）
+# paddleocr>=2.7.0       # 中文 OCR 优先（需 paddlepaddle）
+# pytesseract>=0.3.10    # 英文 OCR 备选（需系统安装 tesseract-ocr）
 
 # Utils
 python-dotenv>=1.0.0

@@ -31,7 +31,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Enterprise Customer Service Agent",
         description="基于 LangGraph + ReAct 的企业级智能客服",
-        version="0.1.0",
+        version="0.2.0",
     )
 
     # CORS
@@ -42,6 +42,28 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # 生命周期事件
+    @app.on_event("startup")
+    async def startup():
+        """应用启动：预初始化单例，确保首次请求不阻塞"""
+        logger.info("App starting — pre-warming singletons...")
+        try:
+            from src.api.dependencies import get_workflow
+            get_workflow()
+            logger.info("Workflow compiled and ready")
+        except Exception as e:
+            logger.warning("Workflow pre-warm failed (will retry on first request): %s", e)
+
+    @app.on_event("shutdown")
+    async def shutdown():
+        """应用停止：清理资源"""
+        logger.info("App shutting down — cleaning up resources...")
+        try:
+            from src.api.dependencies import cleanup_resources
+            cleanup_resources()
+        except Exception as e:
+            logger.warning("Cleanup failed: %s", e)
 
     # 注册路由
     app.include_router(router, prefix="/api/v1")

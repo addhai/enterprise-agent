@@ -1,3 +1,4 @@
+from typing import List, Optional
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
@@ -9,12 +10,30 @@ from src.agent.tools import create_tools
 class CustomerServiceAgent:
     """基于 ReAct 范式的客服 Agent (使用 langchain create_agent + LangGraph)"""
 
-    def __init__(self, retriever=None, user_id: str = "", max_turns: int = None):
+    def __init__(self, retriever=None, user_id: str = "", max_turns: int = None,
+                 memory_context: str = "", tenant_id: str = "",
+                 user_access_levels: Optional[List[str]] = None,
+                 user_roles: Optional[List[str]] = None,
+                 user_plan: str = "free"):
         self.max_turns = max_turns or settings.max_reasoning_turns
         self.user_id = user_id or "anonymous"
+        self.tenant_id = tenant_id
+        self.user_access_levels = user_access_levels or [
+            "public", "internal", "confidential", "restricted"
+        ]
+        self.user_roles = user_roles or []
+        self.user_plan = user_plan
+        self.memory_context = memory_context
 
-        # 创建工具
-        self.tools = create_tools(retriever=retriever, user_id=self.user_id)
+        # 创建工具（传入完整身份上下文 + 权限检查器）
+        self.tools = create_tools(
+            retriever=retriever,
+            user_id=self.user_id,
+            tenant_id=self.tenant_id,
+            user_access_levels=self.user_access_levels,
+            roles=self.user_roles,
+            plan=self.user_plan,
+        )
 
         # 创建 LLM
         self.llm = ChatOpenAI(
@@ -24,8 +43,8 @@ class CustomerServiceAgent:
             temperature=0.1,
         )
 
-        # 构建 System Prompt（含工具描述）
-        system_prompt = build_prompt(self.tools)
+        # 构建 System Prompt（含工具描述 + 长期记忆上下文）
+        system_prompt = build_prompt(self.tools, memory_context=memory_context)
 
         # 创建 Agent (LangGraph-based)
         self.agent = create_agent(

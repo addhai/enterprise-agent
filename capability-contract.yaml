@@ -1,0 +1,103 @@
+name: capability.payment.deduction
+version: 1.0.0
+title: Payment Deduction Capability
+description: |
+  扣款能力：对用户账户进行幂等扣款，支持幂等 token、补偿与失败重试。
+owner:
+  team: payments
+  contact: payments-oncall@example.com
+contract:
+  api:
+    type: http
+    endpoint: /v1/payments/deduct
+    method: POST
+    contentType: application/json
+  inputSchema:
+    $schema: "http://json-schema.org/draft-07/schema#"
+    type: object
+    required: ["requestId","userId","amount","currency","idempotencyKey"]
+    properties:
+      requestId:
+        type: string
+        description: 请求唯一ID（trace-level)
+      idempotencyKey:
+        type: string
+        description: 幂等key，调用者需保证唯一性
+      userId:
+        type: string
+      amount:
+        type: number
+      currency:
+        type: string
+  outputSchema:
+    type: object
+    required: ["status","transactionId"]
+    properties:
+      status:
+        type: string
+        enum: ["SUCCESS","PENDING","FAILED"]
+      transactionId:
+        type: string
+      message:
+        type: string
+  sideEffects:
+    - type: ledger-entry
+      description: 写入账本（不可回滚）
+  idempotency:
+    strategy: store-result
+    store:
+      type: dynamodb
+      table: payments_idempotency
+      ttlSeconds: 259200
+    behavior:
+      - if_seen: return_previous_result
+      - if_in_progress: queue-and-notify
+  errorModel:
+    transientErrors:
+      - code: PAY_GATEWAY_TIMEOUT
+        retry: exponential_backoff
+        maxRetries: 3
+    permanentErrors:
+      - code: INSUFFICIENT_FUNDS
+        retry: none
+  sla:
+    p95_latency_ms: 200
+    availability: 99.95
+  metrics:
+    - name: requests_total
+      type: counter
+    - name: requests_errors
+      type: counter
+    - name: request_latency_ms
+      type: histogram
+  tracing:
+    traceParentHeader: traceparent
+    spans:
+      - name: payment.deduct
+        attributes: [requestId,userId,idempotencyKey]
+  auth:
+    scheme: oauth2
+    scopes: ["payments.write"]
+  rateLimit:
+    requestsPerSecond: 50
+    burst: 100
+  compatibility:
+    semverPolicy: compatible-minor
+    deprecatedIn: null
+tests:
+  contractTests:
+    - name: idempotency_return_previous
+      description: 相同 `idempotencyKey` 重试应返回上次结果且不二次扣款
+    - name: insufficient_funds
+      description: 余额不足返回 `INSUFFICIENT_FUNDS` 且不重试
+  mockBehavior:
+    - path: /v1/payments/deduct
+      method: POST
+      responseFixture: fixtures/deduct_success.json
+deploy:
+  blueGreenSupported: true
+  canaryPercent: 10
+  rollbackPolicy: automatic-on-failure
+notes:
+  docs: ./README.md
+  changelog: ./CHANGELOG.md
