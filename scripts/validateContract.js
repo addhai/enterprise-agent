@@ -10,7 +10,8 @@ function fail(msg) {
 }
 
 try {
-  const contractPath = process.argv[2] || '../capability-contract.yaml';
+  const defaultPaths = ['./capability-contract.yaml','../capability-contract.yaml'];
+  const contractPath = process.argv[2] || defaultPaths.find(p=>{ try{ fs.accessSync(p); return true }catch(e){return false} }) || './capability-contract.yaml';
   const raw = fs.readFileSync(contractPath, 'utf8');
   let doc;
   try { doc = yaml.load(raw); } catch (e) { fail('YAML parse error: ' + e.message); }

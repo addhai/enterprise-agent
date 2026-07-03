@@ -1,51 +1,33 @@
-"""视觉引擎注册表 + 工厂
+"""多模态视觉引擎插件包
 
-通过 @register_vision_engine 装饰器注册引擎实现，
-ImageLoader 通过名称查找并自动实例化。
+通过 @register_vision_engine 和 @register_ocr 装饰器注册引擎实现。
+所有引擎实现导入此包时自动注册。
 """
-from __future__ import annotations
+from src.rag.vision_engines.base import (
+    BaseOCREngine,
+    BaseVisionEngine,
+    VisionCircuitBreaker,
+    VisionResult,
+)
+from src.rag.vision_engines.registry import VisionEngineRegistry
 
-from typing import Dict, Optional, Type
 
-from src.rag.vision_engines.base import BaseOCREngine, BaseVisionEngine
+def register_vision_engine(name: str):
+    """装饰器：注册视觉引擎"""
+    return VisionEngineRegistry.register_vision(name)
 
 
-class VisionEngineRegistry:
-    """视觉引擎注册表"""
+def register_ocr(name: str):
+    """装饰器：注册 OCR 引擎"""
+    return VisionEngineRegistry.register_ocr(name)
 
-    _vision_engines: Dict[str, Type[BaseVisionEngine]] = {}
-    _ocr_engines: Dict[str, Type[BaseOCREngine]] = {}
 
-    @classmethod
-    def register_vision(cls, name: str):
-        """注册视觉引擎"""
-        def decorator(engine_cls: Type[BaseVisionEngine]) -> Type[BaseVisionEngine]:
-            cls._vision_engines[name] = engine_cls
-            return engine_cls
-        return decorator
-
-    @classmethod
-    def register_ocr(cls, name: str):
-        """注册 OCR 引擎"""
-        def decorator(ocr_cls: Type[BaseOCREngine]) -> Type[BaseOCREngine]:
-            cls._ocr_engines[name] = ocr_cls
-            return ocr_cls
-        return decorator
-
-    @classmethod
-    def get_vision(cls, name: str) -> Optional[Type[BaseVisionEngine]]:
-        """根据名称查找视觉引擎类"""
-        return cls._vision_engines.get(name)
-
-    @classmethod
-    def get_ocr(cls, name: str) -> Optional[Type[BaseOCREngine]]:
-        """根据名称查找 OCR 引擎类"""
-        return cls._ocr_engines.get(name)
-
-    @classmethod
-    def list_vision(cls) -> list:
-        return list(cls._vision_engines.keys())
-
-    @classmethod
-    def list_ocr(cls) -> list:
-        return list(cls._ocr_engines.keys())
+__all__ = [
+    "BaseVisionEngine",
+    "BaseOCREngine",
+    "VisionResult",
+    "VisionCircuitBreaker",
+    "VisionEngineRegistry",
+    "register_vision_engine",
+    "register_ocr",
+]

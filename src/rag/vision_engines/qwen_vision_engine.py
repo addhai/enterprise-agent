@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.rag.vision_engines.base import BaseVisionEngine, VisionResult
-from src.rag.vision_engines import VisionEngineRegistry
+from src.rag.vision_engines import register_vision_engine
 
 logger = logging.getLogger(__name__)
 
