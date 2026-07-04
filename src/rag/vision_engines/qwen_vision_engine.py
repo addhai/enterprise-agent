@@ -11,12 +11,11 @@ from pathlib import Path
 from typing import Optional
 
 from src.rag.vision_engines.base import BaseVisionEngine, VisionResult
-from src.rag.vision_engines import register_vision_engine
+from src.rag.vision_engines.registry import VisionEngineRegistry
 
 logger = logging.getLogger(__name__)
 
 
-@register_vision_engine("qwen")
 class QwenVisionEngine(BaseVisionEngine):
     """阿里百炼 Qwen-VL 视觉理解引擎
 
@@ -156,3 +155,7 @@ class QwenVisionEngine(BaseVisionEngine):
             ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
         }
         return mime_map.get(ext, "image/png")
+
+
+# 自动注册
+VisionEngineRegistry.register_vision("qwen")(QwenVisionEngine)

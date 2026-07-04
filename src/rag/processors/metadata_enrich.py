@@ -28,7 +28,16 @@ class MetadataEnrichProcessor(BaseProcessor):
         text = doc.page_content
         filename = doc.metadata.get("source", "")
 
-        doc.metadata["access_level"] = classify_access_level(text, filename)
+        # 权限标注（尊重已有安全检测的升级结果）
+        existing_level = doc.metadata.get("access_level", "")
+        new_level = classify_access_level(text, filename)
+        # 取更高权限等级
+        priority = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3}
+        if priority.get(new_level, 0) > priority.get(existing_level, 0):
+            doc.metadata["access_level"] = new_level
+        else:
+            doc.metadata["access_level"] = existing_level or new_level
+
         doc.metadata["business_domain"] = classify_business_domain(text, filename)
 
         return doc

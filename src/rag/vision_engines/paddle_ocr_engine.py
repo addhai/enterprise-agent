@@ -5,12 +5,11 @@ import logging
 from typing import Optional
 
 from src.rag.vision_engines.base import BaseOCREngine
-from src.rag.vision_engines import VisionEngineRegistry
+from src.rag.vision_engines.registry import VisionEngineRegistry
 
 logger = logging.getLogger(__name__)
 
 
-@register_ocr("paddle")
 class PaddleOCREngine(BaseOCREngine):
     """PaddleOCR 文字识别引擎
 
@@ -37,3 +36,7 @@ class PaddleOCREngine(BaseOCREngine):
         except Exception as e:
             logger.warning("PaddleOCR failed: %s", e)
         return None
+
+
+# 自动注册
+VisionEngineRegistry.register_ocr("paddle")(PaddleOCREngine)

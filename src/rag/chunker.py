@@ -221,7 +221,8 @@ class HybridChunker:
         )
 
     def split_standard(self, documents: List[Document],
-                       source_file: str | None = None) -> List[Document]:
+                       source_file: str | None = None,
+                       doc_id_prefix: str | None = None) -> List[Document]:
         """标准粒度切块（适合技术文档长文段）
 
         Args:
@@ -229,10 +230,18 @@ class HybridChunker:
             source_file: 可选的源文件路径。若提供，为每个 chunk 分配
                 确定性 ID ``f"file:{source_file}:{i}"``，否则使用 LangChain
                 默认的 UUID。
+            doc_id_prefix: 可选的确定性 ID 前缀。若提供，chunk ID 格式为
+                ``{doc_id_prefix}:standard:{i}``。优先级高于 source_file。
         """
         chunks = self.standard_splitter.split_documents(documents)
 
-        if source_file is not None:
+        if doc_id_prefix is not None:
+            for i, chunk in enumerate(chunks):
+                chunk.id = f"{doc_id_prefix}:standard:{i}"
+                chunk.metadata["source_file"] = source_file or ""
+                chunk.metadata["chunk_index"] = i
+                chunk.metadata["chunk_type"] = "standard"
+        elif source_file is not None:
             for i, chunk in enumerate(chunks):
                 chunk.id = f"file:{source_file}:{i}"
                 chunk.metadata["source_file"] = source_file
@@ -242,17 +251,28 @@ class HybridChunker:
         return chunks
 
     def split_sentences(self, documents: List[Document],
-                        source_file: str | None = None) -> List[Document]:
+                        source_file: str | None = None,
+                        doc_id_prefix: str | None = None) -> List[Document]:
         """句子粒度切块（适合 FAQ/错误码精确匹配）
 
         Args:
             documents: 待切分的文档列表
             source_file: 可选的源文件路径。若提供，为每个 chunk 分配
                 确定性 ID ``f"file:{source_file}:sentence:{i}"``。
+            doc_id_prefix: 可选的确定性 ID 前缀。若提供，chunk ID 格式为
+                ``{doc_id_prefix}:sentence:{i}``。优先级高于 source_file。
         """
         chunks = self.sentence_splitter.split(documents)
 
-        if source_file is not None:
+        if doc_id_prefix is not None:
+            idx = 0
+            for doc in chunks:
+                doc.id = f"{doc_id_prefix}:sentence:{idx}"
+                doc.metadata["source_file"] = source_file or ""
+                doc.metadata["chunk_index"] = idx
+                doc.metadata["chunk_type"] = "sentence"
+                idx += 1
+        elif source_file is not None:
             idx = 0
             for doc in chunks:
                 doc.id = f"file:{source_file}:sentence:{idx}"
@@ -264,16 +284,20 @@ class HybridChunker:
         return chunks
 
     def split_both(self, documents: List[Document],
-                   source_file: str | None = None) -> Tuple[List[Document], List[Document]]:
+                   source_file: str | None = None,
+                   doc_id_prefix: str | None = None) -> Tuple[List[Document], List[Document]]:
         """同时生成两种粒度
 
         Args:
             documents: 待切分的文档列表
             source_file: 可选的源文件路径
+            doc_id_prefix: 可选的确定性 ID 前缀
 
         Returns:
             (standard_chunks, sentence_chunks)
         """
-        standard = self.split_standard(documents, source_file=source_file)
-        sentences = self.split_sentences(documents, source_file=source_file)
+        standard = self.split_standard(documents, source_file=source_file,
+                                       doc_id_prefix=doc_id_prefix)
+        sentences = self.split_sentences(documents, source_file=source_file,
+                                         doc_id_prefix=doc_id_prefix)
         return standard, sentences

@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -159,6 +160,21 @@ class DocumentLoader:
         import hashlib
         return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def generate_doc_id(file_path: str, content: str,
+                        chunk_type: str, chunk_index: int) -> str:
+        """基于文件路径 + 内容哈希生成确定性 document_id
+
+        格式：doc:<normalized_path>:<content_hash_short>:<chunk_type>:<chunk_index>
+
+        同一文件多次加载返回相同 ID，内容变化后 ID 变化。
+        """
+        import hashlib
+        normalized_path = str(Path(file_path).resolve())
+        normalized_content = _normalize_for_hash(content)
+        content_hash = hashlib.sha256(normalized_content.encode("utf-8")).hexdigest()[:12]
+        return f"doc:{normalized_path}:{content_hash}:{chunk_type}:{chunk_index}"
+
     def __init__(
         self,
         encoding: str = "utf-8",
@@ -198,6 +214,14 @@ class DocumentLoader:
         完整管线：
             数据源扫描 → 格式加载 → 管道处理 → 质量拦截 → 去重
         """
+        # 初始化可观测性组件
+        from src.rag.metrics import PipelineMetrics
+        from src.rag.tracing import PipelineTracer
+
+        metrics = PipelineMetrics()
+        tracer = PipelineTracer()
+        pipeline_start = time.time()
+
         all_docs: List["_Doc"] = []
         dir_p = Path(dir_path).resolve()
 
@@ -208,49 +232,112 @@ class DocumentLoader:
         # 1. 创建数据源
         source = LocalDirectoryDataSource(str(dir_p))
 
-        # 2. 列出所有文件
+        # 2. 列出文件
         file_infos = source.list_files()
+        metrics.record_count("files_scanned", len(file_infos))
 
-        # 3. 逐个加载
+        # 3. 逐个加载（带分级重试 + 死信队列）
         for info in file_infos:
+            file_start = time.time()
+            fmt = info.ext.lstrip(".")
+            trace = tracer.start_trace(str(info.path), fmt)
+
+            metrics.record_count("files_total", 1, {"format": fmt})
+
             try:
-                docs = self._load_single_file_info(info, source)
+                docs = self._load_single_file_with_retry(info, source)
+                metrics.record_count("files_loaded", len(docs),
+                                   {"format": fmt, "status": "success"})
+
+                # 记录加载耗时
+                load_dur = time.time() - file_start
+                metrics.record_duration("file_duration", load_dur, {"format": fmt})
+                trace.add_step("load", load_dur * 1000, input_count=1, output_count=len(docs))
+
                 all_docs.extend(docs)
+                trace.complete(total_docs=len(docs))
+
             except Exception as e:
+                error_dur = time.time() - file_start
+                metrics.record_count("files_loaded", 1,
+                                   {"format": fmt, "status": "error"})
+                metrics.record_duration("file_duration", error_dur, {"format": fmt})
+                trace.add_step("load", error_dur * 1000, error=str(e))
+                trace.complete()
                 logger.warning("Failed to load %s: %s", info.path, e)
+
+        # 加载失败统计
+        dlq_stats = self._dlq.stats() if hasattr(self, '_dlq') else {}
+        self._stats["dlq_total"] = dlq_stats.get("total", 0)
+        self._stats["dlq_pending"] = dlq_stats.get("pending", 0)
 
         self._stats["loaded"] = len(all_docs)
 
-        # 4. 管道处理（编码检测 + 文本规范化 + 噪声过滤 + 结构感知）
-        encoding = self.encoding
+        # 4. 管道处理
         pipeline = self._build_pipeline()
-
-        # 按文件分组处理（每个文件独立管道）
         grouped: Dict[str, List["_Doc"]] = {}
         for doc in all_docs:
             source_name = doc.metadata.get("source", "unknown")
             grouped.setdefault(source_name, []).append(doc)
 
         processed_docs: List["_Doc"] = []
+        pipeline_start2 = time.time()
         for source_name, docs in grouped.items():
             ctx = pipeline.run(docs)
             processed_docs.extend(ctx)
+        pipeline_dur = time.time() - pipeline_start2
+        metrics.record_duration("pipeline_duration", pipeline_dur)
 
         # 5. 质量拦截
         if self.enforce_quality:
+            pre_quality = len(processed_docs)
             processed_docs = self._enforce_quality(processed_docs)
+            rejected = pre_quality - len(processed_docs)
+            metrics.record_count("files_rejected", rejected, {"reason": "quality"})
+            metrics.record_count("files_quality_accepted", len(processed_docs))
 
         # 6. 去重
         if self.enable_dedup:
+            pre_dedup = len(processed_docs)
             processed_docs = self._deduplicate(processed_docs)
+            deduped = pre_dedup - len(processed_docs)
+            metrics.record_count("files_deduped", deduped)
 
-        logger.info(
-            "Loaded %d docs, accepted %d, rejected %d, outdated_warn %d",
-            self._stats["loaded"],
-            self._stats["accepted"],
-            self._stats["rejected_quality"] + self._stats["rejected_expired"],
-            self._stats["warn_outdated"],
-        )
+        # 记录管道总耗时
+        total_dur = time.time() - pipeline_start
+        metrics.record_duration("pipeline_duration", total_dur)
+
+        # 输出报告和 Trace
+        report = metrics.report()
+        if report:
+            logger.info(report)
+        tracer.flush()
+
+        # 7. 版本历史
+        try:
+            import uuid as _uuid
+            from src.rag.version_history import VersionHistory, VersionSnapshot
+            vh = VersionHistory()
+            for doc in processed_docs:
+                src = doc.metadata.get("source", "")
+                if src:
+                    versions = vh.get_versions(str(info.path))
+                    next_version = (versions[-1].version + 1) if versions else 1
+                    vh.save_snapshot(VersionSnapshot(
+                        snapshot_id=str(_uuid.uuid4()),
+                        file_path=str(info.path),
+                        version=next_version,
+                        content_hash=DocumentLoader.compute_content_hash(doc.page_content)[:16],
+                        content_preview=doc.page_content[:200],
+                        metadata_snapshot={k: v for k, v in doc.metadata.items() if k != "outline"},
+                        doc_ids=[],
+                        processed_at=datetime.now(timezone.utc),
+                        processing_time_ms=total_dur * 1000,
+                        quality_status=doc.metadata.get("quality_status"),
+                    ))
+        except Exception as e:
+            logger.warning("Version history save failed: %s", e, exc_info=True)
+
         return processed_docs
 
     def load_file(self, file_path: str) -> List["_Doc"]:
@@ -292,21 +379,20 @@ class DocumentLoader:
         loader = loader_cls()
         docs = loader.load(info, base_meta)
 
-        # 对加载结果应用管道（编码检测已在 base_meta 中）
-        pipeline = self._build_pipeline()
-        ctx = pipeline.run(docs, file_info=info)
-        return list(ctx)
+        return docs
 
     def _build_pipeline(self) -> IngestionPipeline:
         """构建处理管道"""
         from src.rag.processors.normalize import NormalizeTextProcessor
         from src.rag.processors.noise_filter import NoiseFilterProcessor
         from src.rag.processors.structure_detect import StructureDetectProcessor
+        from src.rag.processors.content_safety import ContentSafetyProcessor
 
         pipeline = IngestionPipeline()
         pipeline.add(NormalizeTextProcessor())
         pipeline.add(NoiseFilterProcessor())
         pipeline.add(StructureDetectProcessor())
+        pipeline.add(ContentSafetyProcessor())
         return pipeline
 
     def _enforce_quality(self, docs: List["_Doc"]) -> List["_Doc"]:
@@ -357,3 +443,168 @@ class DocumentLoader:
     def _get_simhash_threshold(self) -> float:
         """获取 SimHash 阈值（构造函数参数优先，其次 settings）"""
         return getattr(self, "_simhash_threshold_override", settings.dedup_simhash_threshold)
+
+    # --------------------------------------------------------------
+    # 并发加载
+    # --------------------------------------------------------------
+
+    def _load_concurrent(
+        self, file_infos: List["FileInfo"], source: BaseDataSource
+    ) -> List["_Doc"]:
+        """使用线程池并发加载文件"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        max_workers = settings.loader_max_workers
+        logger.info(
+            "Concurrent loading: %d files with %d workers",
+            len(file_infos), max_workers,
+        )
+
+        all_docs: List["_Doc"] = []
+        errors: List[str] = []
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_info = {
+                executor.submit(self._load_single_file_with_retry, info, source): info
+                for info in file_infos
+            }
+
+            for future in as_completed(future_to_info):
+                info = future_to_info[future]
+                try:
+                    docs = future.result()
+                    all_docs.extend(docs)
+                except Exception as e:
+                    error_msg = f"{info.path}: {e}"
+                    errors.append(error_msg)
+                    logger.error("Concurrent load failed: %s", error_msg)
+
+        if errors:
+            logger.warning(
+                "ConcurrentLoader: %d/%d files failed",
+                len(errors), len(file_infos),
+            )
+
+        logger.info(
+            "ConcurrentLoader: %d files → %d docs (%d errors)",
+            len(file_infos), len(all_docs), len(errors),
+        )
+        return all_docs
+
+    # --------------------------------------------------------------
+    # 分级重试 + 死信队列
+    # --------------------------------------------------------------
+
+    def _load_single_file_with_retry(
+        self, info: "FileInfo", source: BaseDataSource
+    ) -> List["_Doc"]:
+        """带分级重试的文件加载
+
+        1. 分类错误类型
+        2. 网络错误 → 自动重试 max_retries 次（指数退避）
+        3. 重试仍失败 / 非网络错误 → 写入 DLQ
+        """
+        from src.rag.dead_letter_queue import (
+            DLQEntry,
+            ErrorCategory,
+            DeadLetterQueue,
+            classify_error,
+        )
+
+        max_retries = settings.dlq_max_retries
+        delay_base = settings.dlq_retry_delay_base
+        auto_retry = settings.dlq_auto_retry_network
+
+        # 初始化 DLQ（懒加载）
+        if not hasattr(self, "_dlq"):
+            self._dlq = DeadLetterQueue()
+
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1 + max_retries if auto_retry else 1):
+            try:
+                return self._load_single_file_info(info, source)
+            except Exception as e:
+                last_error = e
+                error_cat = classify_error(e)
+                logger.warning(
+                    "Attempt %d/%d failed for %s: %s (%s)",
+                    attempt, 1 + max_retries if auto_retry else 1,
+                    info.path, e, error_cat.value,
+                )
+
+                # 非网络错误或不自动重试 → 直接进 DLQ
+                if error_cat != ErrorCategory.NETWORK or not auto_retry:
+                    break
+
+                # 网络错误 → 指数退避后重试
+                if attempt <= max_retries:
+                    delay = delay_base * (2 ** (attempt - 1))
+                    logger.info(
+                        "Network error, retrying in %.1fs...", delay,
+                    )
+                    time.sleep(delay)
+
+        # 所有重试耗尽 → 写入 DLQ
+        error_cat = classify_error(last_error) if last_error else ErrorCategory.LOAD
+        entry = DLQEntry(
+            file_path=str(info.path.resolve()),
+            error_type=error_cat.value,
+            error_message=str(last_error) if last_error else "Unknown",
+            failed_at=datetime.now(timezone.utc),
+            retry_count=max_retries if last_error else 0,
+            last_error=str(last_error) if last_error else "",
+        )
+        self._dlq.add(entry)
+        return []
+
+    def retry_dlq(self) -> dict:
+        """批量重试 DLQ 中所有可重试的文件
+
+        Returns:
+            {"retried": int, "succeeded": int, "failed": int}
+        """
+        if not hasattr(self, "_dlq"):
+            return {"retried": 0, "succeeded": 0, "failed": 0}
+
+        pending = self._dlq.get_pending()
+        if not pending:
+            logger.info("DLQ: no pending entries to retry")
+            return {"retried": 0, "succeeded": 0, "failed": 0}
+
+        logger.info("DLQ: retrying %d entries", len(pending))
+        succeeded = 0
+        failed = 0
+        errors: List[str] = []
+
+        for entry in pending:
+            try:
+                # 重新加载文件
+                source = LocalDirectoryDataSource(str(Path(entry.file_path).parent))
+                docs = self._load_single_file_info(
+                    FileInfo(
+                        path=Path(entry.file_path).resolve(),
+                        name=Path(entry.file_path).name,
+                        ext=Path(entry.file_path).suffix.lower(),
+                        size=Path(entry.file_path).stat().st_size,
+                    ),
+                    source,
+                )
+                if docs:
+                    self._dlq.remove(entry.file_path)
+                    succeeded += 1
+                    logger.info("DLQ retry succeeded: %s", entry.file_path)
+                else:
+                    # 加载成功但无文档（质量拦截等），也算成功
+                    self._dlq.remove(entry.file_path)
+                    succeeded += 1
+            except Exception as e:
+                entry.retry_count += 1
+                entry.last_error = str(e)
+                self._dlq.add(entry)
+                failed += 1
+                errors.append(f"{entry.file_path}: {e}")
+
+        result = {"retried": len(pending), "succeeded": succeeded, "failed": failed}
+        logger.info("DLQ retry complete: %s", result)
+        return result

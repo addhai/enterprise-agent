@@ -346,12 +346,18 @@ class FileSyncManager:
                         )
                     continue
 
+                # 生成确定性 doc_id 前缀: doc:{path}:{content_hash}
+                from src.rag.loader import DocumentLoader
+                # 用空内容占位，实际 content_hash 来自 change.new_content_hash
+                # 生成格式: doc:{path}:{content_hash}
+                doc_id_prefix = f"doc:{path}:{change.new_content_hash or 'none'}"
+
                 # 切块（带确定性 ID）
                 standard_chunks = self.chunker.split_standard(
-                    docs, source_file=path
+                    docs, doc_id_prefix=doc_id_prefix
                 )
                 sentence_chunks = self.chunker.split_sentences(
-                    docs, source_file=path
+                    docs, doc_id_prefix=doc_id_prefix
                 )
 
                 # 入库

@@ -11,6 +11,12 @@ from src.rag.vision_engines.base import (
 )
 from src.rag.vision_engines.registry import VisionEngineRegistry
 
+# 自动导入所有引擎实现，触发 @register_* 装饰器
+from src.rag.vision_engines import qwen_vision_engine  # noqa: F401
+from src.rag.vision_engines import openai_vision_engine  # noqa: F401
+from src.rag.vision_engines import paddle_ocr_engine  # noqa: F401
+from src.rag.vision_engines import tesseract_ocr_engine  # noqa: F401
+
 
 def register_vision_engine(name: str):
     """装饰器：注册视觉引擎"""

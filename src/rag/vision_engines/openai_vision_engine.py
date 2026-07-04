@@ -11,12 +11,11 @@ from pathlib import Path
 from typing import Optional
 
 from src.rag.vision_engines.base import BaseVisionEngine, VisionResult
-from src.rag.vision_engines import VisionEngineRegistry
+from src.rag.vision_engines.registry import VisionEngineRegistry
 
 logger = logging.getLogger(__name__)
 
 
-@register_vision_engine("openai")
 class OpenAIVisionEngine(BaseVisionEngine):
     """OpenAI GPT-4V 视觉理解引擎
 
@@ -103,3 +102,7 @@ class OpenAIVisionEngine(BaseVisionEngine):
             ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
         }
         return mime_map.get(ext, "image/png")
+
+
+# 自动注册
+VisionEngineRegistry.register_vision("openai")(OpenAIVisionEngine)

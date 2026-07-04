@@ -5,12 +5,11 @@ import logging
 from typing import Optional
 
 from src.rag.vision_engines.base import BaseOCREngine
-from src.rag.vision_engines import VisionEngineRegistry
+from src.rag.vision_engines.registry import VisionEngineRegistry
 
 logger = logging.getLogger(__name__)
 
 
-@register_ocr("tesseract")
 class TesseractOCREngine(BaseOCREngine):
     """Tesseract OCR 文字识别引擎
 
@@ -34,3 +33,7 @@ class TesseractOCREngine(BaseOCREngine):
         except Exception as e:
             logger.warning("Tesseract OCR failed: %s", e)
         return None
+
+
+# 自动注册
+VisionEngineRegistry.register_ocr("tesseract")(TesseractOCREngine)

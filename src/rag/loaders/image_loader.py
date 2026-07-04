@@ -46,7 +46,7 @@ class ImageLoader(BaseLoader):
         D. 两者都失败 → 返回空列表
 
     高并发保护：
-        - 熔断器：Vision Engine 连续失败 N 次后自动切 OCR
+        - 全局限流熔断：使用 GlobalLimits 统一管理 QPS 限流和熔断
         - 大图保护：>1024px 的图片先缩放再识别
 
     引擎注入方式（优先级：构造函数 > settings 自动实例化）：
@@ -60,14 +60,8 @@ class ImageLoader(BaseLoader):
         vision_engine: Optional[BaseVisionEngine] = None,
         ocr_engine: Optional[BaseOCREngine] = None,
         fallback_ocr: Optional[BaseOCREngine] = None,
-        circuit_threshold: int = 5,
-        circuit_reset_seconds: int = 60,
         ocr_max_image_size: int = 1024,
     ) -> None:
-        self.circuit_breaker = VisionCircuitBreaker(
-            threshold=circuit_threshold,
-            reset_seconds=circuit_reset_seconds,
-        )
         self.ocr_max_image_size = ocr_max_image_size
 
         # 构造函数注入优先，未设置则从 settings 自动实例化
@@ -89,17 +83,28 @@ class ImageLoader(BaseLoader):
 
         # ===== 方案 A: Vision Engine（首选） =====
         vision_result: Optional[VisionResult] = None
-        if self.circuit_breaker.attempt_request():
-            vision_result = self._call_vision_engine(info.path, img_type)
-            if vision_result:
-                self.circuit_breaker.record_success()
-                meta["confidence"] = vision_result.confidence
-                meta["image_type"] = img_type
-                meta["extraction_method"] = vision_result.extraction_method
-                meta["model"] = vision_result.model
-                return [Document(page_content=vision_result.content, metadata=meta)]
-            else:
-                self.circuit_breaker.record_failure()
+
+        # 使用全局熔断器
+        from src.rag.concurrency import GlobalLimits
+        gl = GlobalLimits()
+        breaker = gl.get_breaker("vision")
+        limiter = gl.get_limiter("vision")
+
+        if not breaker.is_open():
+            # 限流
+            limiter.acquire()
+
+            def _call_vision():
+                return self._call_vision_engine(info.path, img_type)
+
+            vision_result = breaker.call(_call_vision)
+
+        if vision_result:
+            meta["confidence"] = vision_result.confidence
+            meta["image_type"] = img_type
+            meta["extraction_method"] = vision_result.extraction_method
+            meta["model"] = vision_result.model
+            return [Document(page_content=vision_result.content, metadata=meta)]
 
         # ===== 方案 B: 主 OCR Engine（降级） =====
         ocr_text = self._ocr_safe(str(info.path))
