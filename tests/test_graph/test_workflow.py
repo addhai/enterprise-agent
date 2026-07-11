@@ -12,6 +12,10 @@ from src.rag.retriever import HybridRetriever
 @pytest.fixture
 def workflow():
     """Create a workflow with a basic retriever"""
+    # 加载 .env 文件使 OPENAI_API_KEY 生效
+    from dotenv import load_dotenv
+    load_dotenv()
+
     if not os.environ.get("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set")
 
@@ -40,7 +44,15 @@ def test_workflow_handles_faq(workflow):
         turn_count=0,
         final_response="",
         user_id="test_user",
+        session_id="test-session-1",
+        tenant_id="",
+        user_access_levels=["public", "internal", "confidential", "restricted"],
         faq_match=None,
+        effective_max_turns=5,
+        has_reflected=False,
+        memory_context="",
+        quality_score=None,
+        access_filtered=0,
     )
 
     result = workflow.invoke(state, config={"configurable": {"thread_id": "test-1"}})
@@ -59,7 +71,15 @@ def test_workflow_handles_technical(workflow):
         turn_count=0,
         final_response="",
         user_id="test_user",
+        session_id="test-session-2",
+        tenant_id="",
+        user_access_levels=["public", "internal", "confidential", "restricted"],
         faq_match=None,
+        effective_max_turns=5,
+        has_reflected=False,
+        memory_context="",
+        quality_score=None,
+        access_filtered=0,
     )
 
     result = workflow.invoke(state, config={"configurable": {"thread_id": "test-2"}})
@@ -78,7 +98,15 @@ def test_workflow_handles_human_request(workflow):
         turn_count=0,
         final_response="",
         user_id="test_user",
+        session_id="test-session-3",
+        tenant_id="",
+        user_access_levels=["public", "internal", "confidential", "restricted"],
         faq_match=None,
+        effective_max_turns=5,
+        has_reflected=False,
+        memory_context="",
+        quality_score=None,
+        access_filtered=0,
     )
 
     result = workflow.invoke(state, config={"configurable": {"thread_id": "test-3"}})

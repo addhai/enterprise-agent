@@ -1,0 +1,110 @@
+[
+  {
+    "question": "如何重置密码？",
+    "expected_doc": "faq.md",
+    "expected_keyword": "reset password",
+    "category": "faq"
+  },
+  {
+    "question": "怎么更改订阅计划？",
+    "expected_doc": "billing_overview.md",
+    "expected_keyword": "change plan",
+    "category": "faq"
+  },
+  {
+    "question": "pricing plans and storage limits",
+    "expected_doc": "billing_overview.md",
+    "expected_keyword": "pricing",
+    "category": "faq"
+  },
+  {
+    "question": "如何获取 API Key？",
+    "expected_doc": "faq.md",
+    "expected_keyword": "api key",
+    "category": "faq"
+  },
+  {
+    "question": "如何启用两步验证？",
+    "expected_doc": "faq.md",
+    "expected_keyword": "two factor",
+    "category": "faq"
+  },
+  {
+    "question": "同步任务为什么无法工作？",
+    "expected_doc": "faq.md",
+    "expected_keyword": "sync not working",
+    "category": "faq"
+  },
+  {
+    "question": "如何配置 SSO？",
+    "expected_doc": "faq.md",
+    "expected_keyword": "sso",
+    "category": "faq"
+  },
+  {
+    "question": "加密是怎么实现的？",
+    "expected_doc": "faq.md",
+    "expected_keyword": "encryption",
+    "category": "faq"
+  },
+  {
+    "question": "CloudSync API 的认证方式是什么？",
+    "expected_doc": "api_guide.md",
+    "expected_keyword": "Authentication",
+    "category": "technical"
+  },
+  {
+    "question": "API 的分页方式是怎样的？",
+    "expected_doc": "api_pagination_versioning.md",
+    "expected_keyword": "Pagination",
+    "category": "technical"
+  },
+  {
+    "question": "CORS 怎么配置？",
+    "expected_doc": "cors_ssl_security.md",
+    "expected_keyword": "CORS",
+    "category": "technical"
+  },
+  {
+    "question": "SDK 连接池怎么配置？",
+    "expected_doc": "performance_deploy.md",
+    "expected_keyword": "connection_pool",
+    "category": "technical"
+  },
+  {
+    "question": "数据怎么导出？",
+    "expected_doc": "data_migration_export.md",
+    "expected_keyword": "Export",
+    "category": "technical"
+  },
+  {
+    "question": "账号如何通过 API 创建？",
+    "expected_doc": "account_management.md",
+    "expected_keyword": "API",
+    "category": "technical"
+  },
+  {
+    "question": "Webhook 怎么配置？",
+    "expected_doc": "webhook_guide.md",
+    "expected_keyword": "Webhook",
+    "category": "technical"
+  },
+  {
+    "question": "S3 怎么配置？",
+    "expected_doc": "sdk_install.md",
+    "expected_keyword": "S3",
+    "category": "technical"
+  },
+  {
+    "question": "CloudSync 支持哪些云服务提供商？",
+    "expected_doc": "product_overview.md",
+    "expected_keyword": "Providers",
+    "category": "general"
+  },
+  {
+    "question": "版本冲突怎么处理？",
+    "expected_doc": "product_overview.md",
+    "expected_keyword": "conflict",
+    "category": "general"
+  }
+]

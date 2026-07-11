@@ -1,0 +1,49 @@
+# Docker Compose — 精简版（只跑 FastAPI + 本地依赖）
+
+version: '3.8'
+
+services:
+  # ============================================================
+  # FastAPI 业务服务（核心）
+  # ============================================================
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=sk-22ed9fa230ec47c0b05993f229ee1b09
+      - OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+      - REDIS_URL=redis://localhost:6379
+      - DATABASE_URL=postgresql://localhost:5432/agent
+      - LANGSMITH_TRACING=false
+      - ADAPTERS_USE_REAL=false
+    volumes:
+      - ./data:/app/data
+      - ./chroma_data:/app/chroma_data
+
+  # ============================================================
+  # Redis（短期记忆，可选）
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # ============================================================
+  # PostgreSQL（长期记忆，可选）
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=agent
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+volumes:
+  pg_data:

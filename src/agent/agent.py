@@ -1,3 +1,4 @@
+from typing import List, Optional
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
@@ -9,29 +10,49 @@ from src.agent.tools import create_tools
 class CustomerServiceAgent:
     """基于 ReAct 范式的客服 Agent (使用 langchain create_agent + LangGraph)"""
 
-    def __init__(self, retriever=None, user_id: str = "", max_turns: int = None):
+    def __init__(self, retriever=None, user_id: str = "", max_turns: int = None,
+                 memory_context: str = "", tenant_id: str = "",
+                 user_access_levels: Optional[List[str]] = None,
+                 user_roles: Optional[List[str]] = None,
+                 user_plan: str = "free"):
         self.max_turns = max_turns or settings.max_reasoning_turns
         self.user_id = user_id or "anonymous"
+        self.tenant_id = tenant_id
+        self.user_access_levels = user_access_levels or [
+            "public", "internal", "confidential", "restricted"
+        ]
+        self.user_roles = user_roles or []
+        self.user_plan = user_plan
+        self.memory_context = memory_context
 
-        # 创建工具
-        self.tools = create_tools(retriever=retriever, user_id=self.user_id)
+        # 创建工具（传入完整身份上下文 + 权限检查器）
+        self.tools = create_tools(
+            retriever=retriever,
+            user_id=self.user_id,
+            tenant_id=self.tenant_id,
+            user_access_levels=self.user_access_levels,
+            roles=self.user_roles,
+            plan=self.user_plan,
+        )
 
-        # 创建 LLM
+        # 创建 LLM（使用 Medium 模型：qwen-plus / 34B 级）
         self.llm = ChatOpenAI(
-            model=settings.llm_model,
+            model=settings.llm_medium,
             api_key=settings.openai_api_key,
             base_url=settings.openai_api_base,
             temperature=0.1,
+            max_tokens=8192,  # 增大到 8K token，防止长回复被截断
         )
 
-        # 构建 System Prompt（含工具描述）
-        system_prompt = build_prompt(self.tools)
+        # 构建 System Prompt（含工具描述 + 长期记忆上下文）
+        system_prompt = build_prompt(self.tools, memory_context=memory_context)
 
         # 创建 Agent (LangGraph-based)
         self.agent = create_agent(
             self.llm,
             tools=self.tools,
             system_prompt=system_prompt,
+            interrupt_after=lambda state: False,  # 不中断
         )
 
     def run(self, user_message: str, chat_history: list = None) -> str:
@@ -61,7 +82,7 @@ class CustomerServiceAgent:
                 last = output_messages[-1]
                 if hasattr(last, "content"):
                     return last.content
-            return "抱歉，我暂时无法处理您的请求。"
+            return "抱歉，知识库中暂无相关信息，已为您转接人工客服。"
         except Exception as e:
             return f"处理您的请求时出现错误。正在为您转接人工客服。[{str(e)[:100]}]"
 

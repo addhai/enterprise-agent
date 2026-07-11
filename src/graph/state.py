@@ -33,5 +33,44 @@ class AgentState(TypedDict):
     # 用户 ID
     user_id: Optional[str]
 
+    # 会话 ID（用于记忆管理）
+    session_id: Optional[str]
+
+    # 租户 ID（多租户隔离）
+    tenant_id: Optional[str]
+
+    # 用户权限等级列表
+    user_access_levels: Optional[List[str]]
+
+    # 用户角色列表（admin/developer/billing_manager）
+    user_roles: Optional[List[str]]
+
+    # 用户订阅计划（free/pro/enterprise）
+    user_plan: Optional[str]
+
     # FAQ 匹配结果
     faq_match: Optional[str]
+
+    # 记忆上下文（长期记忆 + 用户画像，由 entry_node 注入）
+    memory_context: Optional[str]
+
+    # 对话质量评估（reply_node 之后写入）
+    quality_score: Optional[float]
+
+    # 权限过滤数量（被过滤掉的文档数）
+    access_filtered: Optional[int]
+
+    # 注入式攻击拦截标记
+    injection_blocked: bool
+
+    # 攻击类型（仅在被拦截时）
+    injection_type: Optional[str]
+
+    # 是否需要专家委托（A2A 远程调用）
+    needs_expert_delegation: bool
+
+    # 专家回复内容
+    expert_response: Optional[str]
+
+    # 是否为闲聊（不走知识库检索）
+    is_casual: bool

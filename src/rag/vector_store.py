@@ -1,4 +1,7 @@
 from typing import List
+
+import logging
+
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from src.config import settings
@@ -25,11 +28,15 @@ class VectorStoreManager:
             )
         return self._store
 
-    def add_documents(self, documents: List[Document]) -> None:
-        """添加文档到向量库"""
+    def add_documents(self, documents: List[Document]) -> List[str]:
+        """添加文档到向量库
+
+        Returns:
+            添加的文档 ID 列表
+        """
         if not documents:
-            return
-        self.store.add_documents(documents)
+            return []
+        return self.store.add_documents(documents)
 
     def search(self, query: str, top_k: int = None) -> List[Document]:
         """向量相似度搜索"""
@@ -49,3 +56,23 @@ class VectorStoreManager:
         """删除整个集合（测试用）"""
         if self._store:
             self._store.delete_collection()
+
+    def delete_by_ids(self, ids: List[str]) -> int:
+        """按 ID 删除文档（幂等）
+
+        删除不存在的 ID 不报错。返回请求删除的 ID 数量（非实际删除数，
+        因为 Chroma delete 对不存在的 ID 行为不一致）。
+
+        Args:
+            ids: 要删除的文档 ID 列表
+
+        Returns:
+            请求删除的 ID 数量
+        """
+        if not ids:
+            return 0
+        try:
+            self.store._collection.delete(ids=ids)
+            return len(ids)
+        except Exception:
+            return 0
