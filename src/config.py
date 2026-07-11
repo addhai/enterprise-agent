@@ -55,9 +55,15 @@ class _ModelConfig:
     openai_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embedding_model: str = "text-embedding-v4"
     embedding_dimensions: int = 1024
-    llm_model: str = "qwen-plus"
-    llm_complex_model: str = "qwen-max"
+    # 多模型路由配置（v2.0）
+    llm_light: str = "qwen-turbo"         # Lite: FAQ + 澄清（7B 级）
+    llm_medium: str = "qwen-plus"         # Mid: RAG 故障排查（34B 级）
+    llm_heavy: str = "qwen-max"           # Big: 专家委托（70B 级）
+    llm_safety: str = "qwen-safety"       # Safety: 质检判别（专用）
     llm_temperature: float = 0.0
+    # 向后兼容别名
+    llm_model: str = "qwen-plus"          # 等价于 llm_medium
+    llm_complex_model: str = "qwen-max"   # 等价于 llm_heavy
 
 
 @dataclass
@@ -121,6 +127,14 @@ class _MemoryConfig:
 class _ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
+    ws_host: str = "0.0.0.0"
+    ws_port: int = 8000
+    ws_enabled: bool = True
+    ws_heartbeat_interval: int = 30     # 心跳间隔（秒）
+    ws_session_timeout: int = 1800       # 会话超时（30分钟）
+    ws_streaming_chunk_size: int = 10    # 流式输出每次推送字符数
+    # 适配器配置
+    use_real_adapters: bool = False
 
 
 @dataclass
@@ -272,8 +286,13 @@ class Settings:
             "openai_api_base": "model.openai_api_base",
             "embedding_model": "model.embedding_model",
             "embedding_dimensions": "model.embedding_dimensions",
-            "llm_model": "model.llm_model",
-            "llm_complex_model": "model.llm_complex_model",
+            "llm_light": "model.llm_light",
+            "llm_medium": "model.llm_medium",
+            "llm_heavy": "model.llm_heavy",
+            "llm_safety": "model.llm_safety",
+            "llm_model": "model.llm_medium",  # 向后兼容别名
+            "llm_complex_model": "model.llm_heavy",  # 向后兼容别名
+            "llm_temperature": "model.llm_temperature",
             # Chroma
             "chroma_persist_dir": "chroma.persist_dir",
             "chroma_collection_name": "chroma.collection_name",
@@ -297,6 +316,13 @@ class Settings:
             # Server
             "host": "server.host",
             "port": "server.port",
+            "ws_host": "server.ws_host",
+            "ws_port": "server.ws_port",
+            "ws_enabled": "server.ws_enabled",
+            "ws_heartbeat_interval": "server.ws_heartbeat_interval",
+            "ws_session_timeout": "server.ws_session_timeout",
+            "ws_streaming_chunk_size": "server.ws_streaming_chunk_size",
+            "use_real_adapters": "server.use_real_adapters",
             # Evaluation
             "eval_llm_judge_enabled": "evaluation.llm_judge_enabled",
             "eval_online_sampling_rate": "evaluation.online_sampling_rate",
@@ -448,7 +474,37 @@ class Settings:
                         setattr(section_obj, key, value)
 
     def _apply_env_overrides(self, yaml_data: Dict) -> None:
-        """应用环境变量覆盖（优先级最高）"""
+        """应用环境变量覆盖（优先级最高）
+
+        支持两种环境变量格式：
+            1. YAML_CONFIG_MODEL_OPENAI_API_KEY  （前缀格式，正式）
+            2. OPENAI_API_KEY / LANGSMITH_API_KEY  （裸格式，来自 .env）
+        """
+        # 先处理裸环境变量（来自 .env 文件的常见变量名）
+        bare_mappings = {
+            "OPENAI_API_KEY": "model.openai_api_key",
+            "LANGSMITH_API_KEY": "langsmith.api_key",
+            "CHROMA_PERSIST_DIR": "chroma.persist_dir",
+            "REDIS_URL": "memory.redis_url",
+            "DATABASE_URL": "memory.database_url",
+        }
+        for bare_key, dotted_path in bare_mappings.items():
+            val = os.environ.get(bare_key)
+            if not val:
+                # 尝试从 .env 文件读取
+                try:
+                    from dotenv import dotenv_values
+                    env_vals = dotenv_values(CONFIG_PATH.parent / ".env")
+                    val = env_vals.get(bare_key)
+                except Exception:
+                    pass
+            if val:
+                try:
+                    self._set_nested(dotted_path, val)
+                except (AttributeError, KeyError):
+                    pass
+
+        # 再处理 YAML_CONFIG_ 前缀的环境变量
         for env_key, env_value in os.environ.items():
             if not env_key.startswith(ENV_PREFIX):
                 continue

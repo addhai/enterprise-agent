@@ -65,3 +65,12 @@ class AgentState(TypedDict):
 
     # 攻击类型（仅在被拦截时）
     injection_type: Optional[str]
+
+    # 是否需要专家委托（A2A 远程调用）
+    needs_expert_delegation: bool
+
+    # 专家回复内容
+    expert_response: Optional[str]
+
+    # 是否为闲聊（不走知识库检索）
+    is_casual: bool

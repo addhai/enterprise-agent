@@ -35,12 +35,13 @@ class CustomerServiceAgent:
             plan=self.user_plan,
         )
 
-        # 创建 LLM
+        # 创建 LLM（使用 Medium 模型：qwen-plus / 34B 级）
         self.llm = ChatOpenAI(
-            model=settings.llm_model,
+            model=settings.llm_medium,
             api_key=settings.openai_api_key,
             base_url=settings.openai_api_base,
             temperature=0.1,
+            max_tokens=8192,  # 增大到 8K token，防止长回复被截断
         )
 
         # 构建 System Prompt（含工具描述 + 长期记忆上下文）
@@ -51,6 +52,7 @@ class CustomerServiceAgent:
             self.llm,
             tools=self.tools,
             system_prompt=system_prompt,
+            interrupt_after=lambda state: False,  # 不中断
         )
 
     def run(self, user_message: str, chat_history: list = None) -> str:
@@ -80,7 +82,7 @@ class CustomerServiceAgent:
                 last = output_messages[-1]
                 if hasattr(last, "content"):
                     return last.content
-            return "抱歉，我暂时无法处理您的请求。"
+            return "抱歉，知识库中暂无相关信息，已为您转接人工客服。"
         except Exception as e:
             return f"处理您的请求时出现错误。正在为您转接人工客服。[{str(e)[:100]}]"
 

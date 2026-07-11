@@ -9,9 +9,14 @@ logger = logging.getLogger(__name__)
 
 
 # 简单的内存 FAQ 存储（用于 search_faq 工具）
+# 支持中英文关键词匹配，覆盖高频客服场景
 _FAQ_STORE = {
+    # 英文关键词
     "reset password": "To reset your password: Go to Login > Forgot Password. Enter your email. Check your inbox for a reset link valid for 30 minutes.",
     "change plan": "To change your plan: Go to Settings > Billing > Change Plan. Upgrade takes effect immediately. Downgrade takes effect at the end of the billing cycle.",
+    "更改计划": "设置 > 账单 > 更改计划。升级立即生效，降级在计费周期结束时生效。",
+    "修改计划": "设置 > 账单 > 更改计划。升级立即生效，降级在计费周期结束时生效。",
+    "订阅计划": "设置 > 账单 > 更改计划。升级立即生效，降级在计费周期结束时生效。",
     "cancel subscription": "To cancel: Go to Settings > Billing > Cancel Subscription. You retain access until the end of the billing period.",
     "api key": "To get an API Key: Go to Console > Developer Settings > API Keys > Generate New Key. Copy immediately — it won't be shown again.",
     "403 error": "403 errors mean access denied. Common causes: 1) Invalid/expired API Key, 2) Domain not whitelisted, 3) CORS configuration missing.",
@@ -20,6 +25,19 @@ _FAQ_STORE = {
     "two factor": "Enable 2FA at Settings > Security > Two-Factor Authentication. Choose authenticator app or SMS.",
     "sync not working": "Check: 1) Providers are authenticated, 2) Available storage, 3) The files are not locked by another process.",
     "pricing": "Plans: Free (5GB, 2 providers), Pro ($15/mo, 100GB, 5 providers), Enterprise ($50/user/mo, unlimited).",
+    # 中文关键词（映射到相同答案）
+    "重置密码": "登录页面 > 忘记密码 > 输入邮箱 > 查收重置链接（30 分钟内有效）。",
+    "修改计划": "设置 > 账单 > 更改计划。升级立即生效，降级在计费周期结束时生效。",
+    "取消订阅": "设置 > 账单 > 取消订阅。在计费周期结束前仍可继续使用。",
+    "获取 API Key": "控制台 > 开发者设置 > API 密钥 > 生成新密钥。请立即复制，生成后将不再显示。",
+    "403 错误": "403 表示访问被拒绝。常见原因：1) API Key 无效/过期 2) 域名未加入白名单 3) CORS 配置缺失。",
+    "SSO 配置": "CloudSync 支持 Okta、Azure AD、Google Workspace 和自定义 SAML 2.0。前往设置 > SSO 进行配置。",
+    "加密方式": "CloudSync 传输中加密（TLS 1.3），静态数据加密（AES-256）。企业版支持客户自管加密密钥。",
+    "两步验证": "设置 > 安全 > 两步验证。可选择验证器应用或短信验证。",
+    "同步失败": "检查：1) 服务商是否已认证 2) 剩余存储空间 3) 文件是否被其他进程锁定。",
+    "定价方案": "免费版：5GB 存储，2 个提供商；专业版：$15/月，100GB 存储；企业版：定制报价，无限存储。",
+    "退款": "免费计划用户无法直接申请退款，已为您转接人工客服处理。",
+    "取消订单": "设置 > 订单管理 > 取消订单。取消后数据将保留 30 天。",
 }
 
 
@@ -213,8 +231,8 @@ class PermissionChecker:
             2. 敏感工具 → 先查缓存，缓存命中且未过期 → 用缓存
                             缓存未命中或过期 → 调权威数据源
         """
-        # 规则 1: 只读工具（搜索/FAQ）对所有用户开放
-        if tool_name in ("search_knowledge_base", "search_faq"):
+        # 规则 1: 只读工具（搜索/FAQ/查询订单）对所有用户开放
+        if tool_name in ("search_knowledge_base", "search_faq", "query_order"):
             return True
 
         # 规则 2: 转人工需要确认身份
@@ -285,58 +303,6 @@ class PermissionChecker:
             logger.warning("Authority refresh failed: %s", e)
             return None
 
-    def check(self, tool_name: str, resource_scope: Optional[str] = None) -> bool:
-        """检查用户是否有权限调用此工具
-
-        缓存策略：
-            1. 只读工具 → 用缓存快照（快）
-            2. 敏感工具 → 先查缓存，缓存命中且未过期 → 用缓存
-                            缓存未命中或过期 → 调权威数据源
-        """
-        # 规则 1: 只读工具（搜索/FAQ）对所有用户开放
-        if tool_name in ("search_knowledge_base", "search_faq"):
-            return True
-
-        # 规则 2: 转人工需要确认身份
-        if tool_name == "escalate_to_human":
-            # 敏感操作 → 强制查权威数据源
-            if self._authority_source:
-                fresh = self._refresh_authority()
-                if fresh:
-                    self.roles = fresh.get("roles", [])
-                    self.plan = fresh.get("plan", "free")
-                    self.access_levels = fresh.get("access_levels", ["public"])
-
-            if not self.user_id or self.user_id == "anonymous":
-                self._audit("ESCALATE_DENIED", tool_name, "anonymous user")
-                return False
-            return True
-
-        # 规则 3: 受限工具（未来扩展）
-        restricted_tools = {
-            "manage_billing": ["admin", "billing_manager"],
-            "manage_users": ["admin"],
-            "manage_sso": ["admin"],
-        }
-        if tool_name in restricted_tools:
-            # 敏感操作 → 强制查权威数据源
-            if self._authority_source:
-                fresh = self._refresh_authority()
-                if fresh:
-                    self.roles = fresh.get("roles", [])
-                    self.plan = fresh.get("plan", "free")
-                    self.access_levels = fresh.get("access_levels", ["public"])
-
-            required_roles = restricted_tools[tool_name]
-            if not any(r in self.roles for r in required_roles):
-                self._audit("TOOL_DENIED", tool_name, f"missing roles: {required_roles}")
-                return False
-
-        # 规则 4: 资源级权限
-        if resource_scope:
-            return self._check_resource_permission(resource_scope)
-
-        return True
 
     def validate_params(
         self, tool_name: str, params: dict
@@ -799,4 +765,146 @@ def create_tools(
 
         return f"[Escalated to Human] 已为您转接人工客服。转接原因：{reason}。请稍候，客服专员将很快为您服务。"
 
-    return [search_knowledge_base, search_faq, escalate_to_human]
+    # ====================================================================
+    # 执行工具（v1.0 新增）— 让 Agent 真正解决问题
+    # ====================================================================
+
+    @tool
+    def query_order(order_id: str) -> str:
+        """查询订单状态和物流信息。
+
+        当用户询问订单状态、物流进度、发货时间等问题时使用。
+        需要用户提供订单号（格式如 ORD-123456）。
+
+        Args:
+            order_id: 订单号，如 "ORD-123456"
+        """
+        if not checker.check("query_order"):
+            return "[权限不足] 您没有权限查询订单。"
+
+        if not order_id or len(order_id) < 5:
+            return "请提供有效的订单号（如 ORD-123456）。"
+
+        # 调用订单适配器
+        try:
+            from src.adapters.base import AdapterFactory
+            order_adapter = AdapterFactory.get_order_adapter()
+            result = order_adapter.query_order(order_id, user_id)
+            if result and "error" in result:
+                return f"未找到订单 {order_id}。请检查订单号是否正确。"
+            if result:
+                status = result.get("status", "unknown")
+                tracking = result.get("tracking_number", "N/A")
+                carrier = result.get("carrier", "N/A")
+                est = result.get("estimated_delivery", "N/A")
+                return (
+                    f"订单 {order_id} 状态：{status}\n"
+                    f"物流公司：{carrier} ({tracking})\n"
+                    f"预计送达：{est}"
+                )
+        except Exception as e:
+            logger.warning("Order query adapter failed: %s", e)
+
+        return "订单查询服务暂时不可用，请稍后重试或转人工客服。"
+
+    @tool
+    def apply_refund(order_id: str, reason: str) -> str:
+        """申请退款。
+
+        当用户要求退款时使用。
+        注意：此操作涉及资产变更，需要用户确认后才能执行。
+
+        Args:
+            order_id: 订单号
+            reason: 退款原因
+        """
+        # 权限检查：退款需要 pro 或以上计划
+        if checker.plan == "free":
+            checker._audit("PLAN_RESTRICTED", "apply_refund",
+                          f"free plan cannot refund, order={order_id}")
+            return (
+                "抱歉，免费计划用户无法直接申请退款。"
+                "已为您转接人工客服处理。"
+            )
+
+        if not checker.check("apply_refund"):
+            return "[权限不足] 您没有权限申请退款。"
+
+        # 参数校验
+        if not order_id or not reason:
+            return "请提供订单号和退款原因。"
+
+        # 高风险操作：记录审计日志
+        checker._audit("REFUND_REQUEST", "apply_refund",
+                       f"order={order_id}, reason={reason}")
+
+        # 调用工单适配器创建退款工单
+        try:
+            from src.adapters.base import AdapterFactory
+            ticket_adapter = AdapterFactory.get_ticket_adapter()
+            ticket = ticket_adapter.create_ticket(
+                user_id=user_id,
+                subject=f"退款申请 - {order_id}",
+                description=f"原因: {reason}",
+                priority="high",
+            )
+            return (
+                f"[退款申请已提交]\n"
+                f"订单号: {order_id}\n"
+                f"退款原因: {reason}\n"
+                f"工单号: {ticket.get('ticket_id', 'N/A')}\n"
+                f"状态: 待人工审核\n\n"
+                f"人工客服将在 24 小时内处理您的退款申请。"
+            )
+        except Exception as e:
+            logger.warning("Ticket adapter failed: %s", e)
+            return (
+                "退款申请已记录，工单系统暂时不可用。"
+                "人工客服将在 24 小时内处理您的退款申请。"
+            )
+
+    @tool
+    def cancel_order(order_id: str) -> str:
+        """取消订单。
+
+        当用户要求取消订单时使用。
+        注意：此操作涉及资产变更，需要用户确认后才能执行。
+
+        Args:
+            order_id: 订单号
+        """
+        # 权限检查：取消订单需要 pro 或以上计划
+        if checker.plan == "free":
+            checker._audit("PLAN_RESTRICTED", "cancel_order",
+                          f"free plan cannot cancel, order={order_id}")
+            return (
+                "抱歉，免费计划用户无法直接取消订单。"
+                "已为您转接人工客服处理。"
+            )
+
+        if not checker.check("cancel_order"):
+            return "[权限不足] 您没有权限取消订单。"
+
+        if not order_id:
+            return "请提供订单号。"
+
+        # 高风险操作：记录审计日志
+        checker._audit("CANCEL_REQUEST", "cancel_order", f"order={order_id}")
+
+        # 调用订单适配器取消
+        try:
+            from src.adapters.base import AdapterFactory
+            order_adapter = AdapterFactory.get_order_adapter()
+            result = order_adapter.cancel_order(order_id, user_id)
+            if result.get("success"):
+                return f"订单 {order_id} 已成功取消。"
+            return f"取消订单失败：{result.get('error', '未知原因')}"
+        except Exception as e:
+            logger.warning("Cancel order adapter failed: %s", e)
+            return (
+                "取消订单请求已记录，系统暂时不可用。"
+                "人工客服将核实后为您取消订单。"
+            )
+
+    return [search_knowledge_base, search_faq, escalate_to_human,
+            query_order, apply_refund, cancel_order]

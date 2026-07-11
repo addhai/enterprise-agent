@@ -1,0 +1,180 @@
+# RAG 知识库系统配置文件
+# 所有可配置参数集中管理，支持环境变量覆盖
+# 修改后无需改代码，重启生效（或调用 settings.reload() 热更新）
+
+# ============================================================================
+# 模型配置
+# ============================================================================
+model:
+  openai_api_key: ""
+  openai_api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  embedding_model: "text-embedding-v4"
+  embedding_dimensions: 1024
+  # 多模型路由（v2.0）
+  llm_light: "qwen-turbo"        # Lite: FAQ + 澄清（7B 级）
+  llm_medium: "qwen-plus"        # Mid: RAG 故障排查（34B 级）
+  llm_heavy: "qwen-max"          # Big: 专家委托（70B 级）
+  llm_safety: "qwen-safety"      # Safety: 质检判别（专用）
+  llm_model: "qwen-plus"         # 向后兼容别名 → llm_medium
+  llm_complex_model: "qwen-max"  # 向后兼容别名 → llm_heavy
+  llm_temperature: 0.0          # 所有 LLM 调用的温度参数
+
+# ============================================================================
+# LangSmith 追踪
+# ============================================================================
+langsmith:
+  api_key: ""
+  project: "enterprise-agent"
+  tracing: false
+
+# ============================================================================
+# 向量数据库
+# ============================================================================
+chroma:
+  persist_dir: "./chroma_data"
+  collection_name: "knowledge_base"
+  long_term_collection: "long_term_memory"
+
+# ============================================================================
+# 检索配置
+# ============================================================================
+retrieval:
+  top_k: 5
+  rerank_top_n: 3
+  min_tokens: 200
+  context_window: 3             # 句子窗口大小
+  rrf_fusion_k: 60              # RRF 融合常数
+  bm25_score_decay: 0.05        # BM25 分数衰减因子
+  access_levels:                # 默认权限等级列表
+    - "public"
+    - "internal"
+    - "confidential"
+    - "restricted"
+
+# ============================================================================
+# 分块配置
+# ============================================================================
+chunking:
+  chunk_size: 512
+  chunk_overlap: 64
+  min_sentence_length: 10       # 最小句子长度（过滤太短句子）
+  separators:                   # 切分分隔符优先级
+    - "\n## "
+    - "\n### "
+    - "\n#### "
+    - "\n---PAGE-BREAK---"
+    - "\n"
+    - " "
+    - ""
+
+# ============================================================================
+# Agent 配置
+# ============================================================================
+agent:
+  max_reasoning_turns: 5
+  max_turns_faq: 1
+  max_turns_technical: 5
+  max_turns_complex: 8
+
+# ============================================================================
+# 记忆配置
+# ============================================================================
+memory:
+  redis_url: "redis://localhost:6379"
+  short_term_ttl: 3600
+  short_term_max_window: 20
+  database_url: "postgresql://localhost:5432/agent"
+  long_term_max_per_user: 1000
+  context_max_docs: 3
+  summary_model: ""
+
+# ============================================================================
+# 服务器配置
+# ============================================================================
+server:
+  host: "0.0.0.0"
+  port: 8000
+  # WebSocket 配置
+  ws_enabled: true
+  ws_host: "0.0.0.0"
+  ws_port: 8000
+  ws_heartbeat_interval: 30     # 心跳间隔（秒）
+  ws_session_timeout: 1800       # 会话超时（30分钟）
+  ws_streaming_chunk_size: 10    # 流式输出每次推送字符数
+
+# ============================================================================
+# 评估配置
+# ============================================================================
+evaluation:
+  llm_judge_enabled: false
+  online_sampling_rate: 0.0
+  hallucination_check_enabled: true
+  hallucination_threshold: 0.5  # 幻觉检测阈值
+
+# ============================================================================
+# 视觉 / OCR 配置
+# ============================================================================
+vision:
+  engine_name: "qwen"           # qwen / openai
+  model: "qwen-vl-plus"
+  timeout: 10.0
+  ocr_engine_name: "paddle"
+  fallback_ocr_name: "tesseract"
+  ocr_max_image_size: 1024
+  circuit_threshold: 5          # 熔断连续失败阈值
+  circuit_reset_seconds: 60     # 熔断恢复时间（秒）
+
+# ============================================================================
+# 去重配置
+# ============================================================================
+dedup:
+  exact_enabled: true
+  simhash_enabled: true
+  simhash_threshold: 0.95       # SimHash 相似度阈值
+  simhash_window: 500           # SimHash 文本窗口长度
+  semantic_enabled: false       # 语义去重（预留）
+  semantic_threshold: 0.90
+
+# ============================================================================
+# 大纲 / 章节配置
+# ============================================================================
+outline:
+  store_full_json: false        # 是否在 chunk metadata 中存储完整大纲 JSON
+
+# ============================================================================
+# 死信队列配置
+# ============================================================================
+dlq:
+  db_path: "./chroma_data/.dead_letter.db"
+  max_retries: 3
+  retry_delay_base: 1.0       # 指数退避基数（秒）
+  auto_retry_network: true
+
+# ============================================================================
+# 并发 / 限流配置
+# ============================================================================
+concurrency:
+  loader_concurrent: true
+  loader_max_workers: 4
+  rate_limit_qps: 10.0
+  rate_limit_burst: 20
+  circuit_breaker_threshold: 5
+  circuit_breaker_recovery: 60
+  ocr_rate_limit: 20.0          # OCR 专属限流
+  safety_rate_limit: 5.0        # 内容安全专属限流
+
+# ============================================================================
+# 文档加载器配置
+# ============================================================================
+loader:
+  encoding: "utf-8"
+  enable_dedup: true
+  dedup_window: 200
+  default_tenant_id: ""
+  enforce_quality: true
+  max_days_outdated: 180        # 文档过期天数阈值
+  current_version: 302          # 当前最新版本号（3.02）
+  quality_score_min_threshold: 0.3  # 质量评分最低阈值
+  a2a:
+    delegate_timeout: 30        # A2A 委托超时
+    port: 9001                  # A2A 服务端口

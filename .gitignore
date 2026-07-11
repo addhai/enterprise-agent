@@ -1,11 +1,37 @@
-.env
-chroma_data/
+# Python
 venv/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# Data
+chroma_data/
+data/*.db
+logs/
+
+# IDE
 .claude/
-.DS_Store
 .idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+node_modules/
+
+# Test
 _chk/
 chk_tmp/
 chk_rf/
@@ -13,3 +39,8 @@ chk_rf2/
 chroma_e2e_test/
 test_chroma/
 test_chroma_full/
+
+# Secrets
+*.key
+*.pem
+.certs/

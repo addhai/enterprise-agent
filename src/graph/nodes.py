@@ -1,23 +1,18 @@
 """LangGraph 工作流节点
 
-七节点 DAG：
-    entry → clarify → router → faq/rag/human → reflect → reply → END
+六节点 DAG：
+    entry → classify → {faq_handle | rag_handle | human} → reply → END
 
 记忆接入（三处）：
     entry → MemoryManager.on_entry()    注入长期记忆 + 用户画像
     rag   → MemoryManager.on_rag_start()  提取对话历史
     reply → MemoryManager.on_completion() 持久化长期记忆 + 质量评估
 
-v0.5 更新（2026-07-02）：
-    - clarify_node：意图澄清（补全/追问/放行）
-    - rag_node：检索置信度检查（低置信度拒答）
-    - reflect_node：增强证据支撑检查
-    - reply_node：结构化抽取 fallback
-
-v0.6 更新（2026-07-03）：
-    - 注入式攻击检测：entry_node 拦截越权意图，直接终止任务
-    - 系统提示词只做约束，不当安全边界
-    - 关键资源必须靠服务端鉴权（PermissionChecker）
+v1.0 更新（2026-07-11）：
+    - classify_node：合并 clarify + router，先意图分类再决定是否需要追问
+    - faq_handler 豁免：FAQ 类问题不触发追问
+    - 情绪检测前置：愤怒/紧急用户直接标记
+    - 追问仅对 technical 意图生效
 """
 from __future__ import annotations
 
@@ -38,33 +33,19 @@ logger = logging.getLogger(__name__)
 
 # 共享的 LLM 实例（用于意图分类，延迟初始化以避免无 API Key 时导入失败）
 _intent_llm: Optional[ChatOpenAI] = None
-_clarify_llm: Optional[ChatOpenAI] = None
 
 
 def _get_intent_llm() -> ChatOpenAI:
-    """获取或初始化意图分类 LLM"""
+    """获取或初始化意图分类 LLM（使用 Lite 模型）"""
     global _intent_llm
     if _intent_llm is None:
         _intent_llm = ChatOpenAI(
-            model=settings.llm_model,
+            model=settings.llm_light,
             api_key=settings.openai_api_key,
             base_url=settings.openai_api_base,
             temperature=0.0,
         )
     return _intent_llm
-
-
-def _get_clarify_llm() -> ChatOpenAI:
-    """获取或初始化意图澄清 LLM"""
-    global _clarify_llm
-    if _clarify_llm is None:
-        _clarify_llm = ChatOpenAI(
-            model=settings.llm_model,
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_api_base,
-            temperature=0.0,
-        )
-    return _clarify_llm
 
 
 # ======================================================================
@@ -132,54 +113,187 @@ def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         "has_reflected": False,
         "memory_context": memory_context,
         "injection_blocked": False,
+        "needs_expert_delegation": False,
+        "expert_response": None,
     }
 
 
 # ======================================================================
-# Node 1.5: clarify_node — 意图澄清
+# Node 1.5: classify_node — 意图分类 + 情绪检测 + 追问决策
 # ======================================================================
 
-def clarify_node(state: AgentState) -> Dict[str, Any]:
-    """意图澄清节点：判断用户问题是否缺少关键信息
+# FAQ 豁免列表 — 这些问题不需要追问技术环境
+_FAQ_EXEMPTION_KEYWORDS = [
+    # 中文
+    "重置密码", "修改密码", "忘记密码", "密码",
+    "更改计划", "修改计划", "订阅", "取消订阅",
+    "定价", "价格", "多少钱",
+    "api key", "密钥",
+    "403", "404", "500", "错误",
+    "ss", "sso", "单点登录",
+    "加密", "2fa", "两步验证", "双因素",
+    "同步", "退款", "取消订单",
+    # 英文
+    "reset password", "forgot password", "change plan",
+    "pricing", "how much", "cancel subscription",
+    "api key", "two factor", "encryption",
+    "sync not working", "403 error", "sso",
+]
 
-    处理策略：
-        1. 信息完整 → 直接放行（clarity_status="clear"）
-        2. 信息缺失但可推断 → Query Rewrite 补全（clarity_status="rewritten"）
-        3. 信息缺失且无法推断 → 追问用户（clarity_status="needs_clarification"）
+# 闲聊关键词
+_CASUAL_KEYWORDS = [
+    "你好", "hello", "hi", "嗨", "hey", "在吗", "有人在吗",
+    "早上好", "晚上好", "下午好", "谢谢", "thank", "thanks",
+    "再见", "bye", "ok", "好的", "嗯", "哦",
+]
 
-    判断维度：
-        - 产品范围：用户说的是哪个产品/服务？
-        - 操作场景：用户想做什么操作？
-        - 技术环境：用户用的是哪个 SDK/版本/平台？
-        - 错误信息：用户是否提供了错误码/日志？
+# 转人工关键词
+_HUMAN_KEYWORDS = [
+    "talk to human", "speak to agent", "real person",
+    "转人工", "人工客服", "投诉", "complaint",
+    "退款", "refund", "cancel my account",
+]
+
+
+def classify_node(state: AgentState) -> Dict[str, Any]:
+    """意图分类节点：合并 classify + clarify 的职责
+
+    执行顺序：
+    1. 情绪检测（愤怒/紧急 → 直接标记）
+    2. 闲聊检测 → intent=faq, is_casual=True
+    3. FAQ 豁免检测 → intent=faq（不需要追问）
+    4. 转人工检测 → intent=human
+    5. 技术排查检测 → intent=technical（需要追问）
+    6. LLM 兜底分类
     """
     messages = state.get("messages", [])
+    if not messages:
+        return {"intent": "faq", "effective_max_turns": 5}
+
     last_message = messages[-1]
     content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    content_lower = content.lower()
     memory_context = state.get("memory_context", "")
 
-    # 判断是否缺少关键信息
-    missing_info = _detect_missing_info(content, memory_context)
+    # ================================================================
+    # 1. 情绪检测兜底
+    # ================================================================
+    try:
+        from src.sentiment.analyzer import get_sentiment_analyzer
+        analyzer = get_sentiment_analyzer()
+        sentiment = analyzer.analyze(content)
 
-    if not missing_info:
-        return {"clarity_status": "clear"}
+        if analyzer.should_escalate_immediately(sentiment):
+            return {
+                "intent": "human",
+                "effective_max_turns": 1,
+                "clarity_status": "sentiment_escalation",
+                "sentiment": sentiment.sentiment,
+                "urgency": sentiment.urgency,
+                "keywords": sentiment.keywords_found,
+            }
+        elif analyzer.should_skip_clarification(sentiment):
+            return {
+                "intent": "faq",  # 先走 FAQ 路由，reply_node 会处理情绪标记
+                "effective_max_turns": settings.max_turns_faq,
+                "clarity_status": "sentiment_warning",
+                "sentiment": sentiment.sentiment,
+                "urgency": sentiment.urgency,
+                "keywords": sentiment.keywords_found,
+            }
+    except Exception:
+        pass  # 情绪分析失败不影响主流程
 
-    # 尝试从长期记忆中推断
-    inferred = _try_infer_from_memory(missing_info, memory_context)
-    if inferred:
-        rewritten = _rewrite_query(content, inferred)
+    # ================================================================
+    # 2. 闲聊检测
+    # ================================================================
+    if any(kw in content_lower for kw in _CASUAL_KEYWORDS):
         return {
-            "clarity_status": "rewritten",
-            "original_query": content,
-            "rewritten_query": rewritten,
+            "intent": "faq",
+            "effective_max_turns": 1,
+            "is_casual": True,
+            "clarity_status": "clear",
         }
 
-    # 无法推断 → 追问
-    clarification_question = _generate_clarification_question(missing_info, content)
+    # ================================================================
+    # 3. FAQ 豁免检测 — 这些关键词不需要追问
+    # ================================================================
+    if any(kw in content_lower for kw in _FAQ_EXEMPTION_KEYWORDS):
+        return {
+            "intent": "faq",
+            "effective_max_turns": settings.max_turns_faq,
+            "clarity_status": "clear",
+        }
+
+    # ================================================================
+    # 4. 转人工检测
+    # ================================================================
+    if any(kw in content_lower for kw in _HUMAN_KEYWORDS):
+        return {
+            "intent": "human",
+            "effective_max_turns": settings.max_turns_faq,
+            "clarity_status": "clear",
+        }
+
+    # ================================================================
+    # 5. 追问检测 — 仅对 technical 意图触发
+    # ================================================================
+    missing_info = _detect_missing_info(content, memory_context)
+
+    if missing_info:
+        # 尝试从长期记忆中推断
+        inferred = _try_infer_from_memory(missing_info, memory_context)
+        if inferred:
+            rewritten = _rewrite_query(content, inferred)
+            return {
+                "clarity_status": "rewritten",
+                "original_query": content,
+                "rewritten_query": rewritten,
+                "intent": "technical",  # 改写后走 RAG
+                "effective_max_turns": settings.max_turns_technical,
+            }
+
+        # 无法推断 → 追问（仅 technical 意图）
+        clarification_question = _generate_clarification_question(missing_info, content)
+        return {
+            "clarity_status": "needs_clarification",
+            "missing_info": missing_info,
+            "clarification_question": clarification_question,
+            "intent": "technical",
+            "effective_max_turns": settings.max_turns_technical,
+        }
+
+    # ================================================================
+    # 6. 默认 LLM 分类
+    # ================================================================
+    try:
+        llm = _get_intent_llm()
+        classification = llm.invoke(
+            f"将以下用户消息分类为 'faq'（简单常见问题）、'technical'（需要技术文档查询）或 'human'（需要人工客服）。"
+            f"只有当用户明确表达投诉、退款、转人工意愿时才分类为 'human'。"
+            f"普通的问候语如'你好'、'在吗'应分类为 'faq'。\n"
+            f"只返回一个词，不要有其他内容。\n\n用户消息：{content[:500]}"
+        )
+        intent = classification.content.strip().lower()
+        if intent in ["faq", "technical", "human"]:
+            turns_map = {
+                "faq": settings.max_turns_faq,
+                "technical": settings.max_turns_technical,
+                "human": settings.max_turns_faq,
+            }
+            return {
+                "intent": intent,
+                "effective_max_turns": turns_map.get(intent, 5),
+                "clarity_status": "clear",
+            }
+    except Exception:
+        pass
+
+    # 默认走技术排查
     return {
-        "clarity_status": "needs_clarification",
-        "missing_info": missing_info,
-        "clarification_question": clarification_question,
+        "intent": "technical",
+        "effective_max_turns": settings.max_turns_technical,
+        "clarity_status": "clear",
     }
 
 
@@ -201,18 +315,10 @@ def _detect_missing_info(content: str, memory_context: str) -> List[str]:
         if not has_error_code and not has_error_msg:
             missing.append("错误码或错误详情")
 
-    # 配置类问题必须有产品/服务名称
-    config_indicators = ["配置", "setup", "configure", "设置", "安装"]
-    if any(kw in content_lower for kw in config_indicators):
-        # 检查是否指定了具体产品
-        product_names = ["sdk", "api", "dashboard", "console", "app", "cloudsync"]
-        if not any(kw in content_lower for kw in product_names):
-            missing.append("具体产品或服务名称")
-
     # 排查类问题必须有技术环境
-    troubleshoot_indicators = ["排查", "troubleshoot", "问题", "问题", "怎么"]
+    troubleshoot_indicators = ["排查", "troubleshoot", "怎么排查", "怎么解决", "怎么处理", "怎么办"]
     if any(kw in content_lower for kw in troubleshoot_indicators):
-        env_indicators = ["version", "v\\d", "sdk", "python", "javascript", "node", "java", "windows", "linux", "mac"]
+        env_indicators = ["version", r"v\d", "sdk", "python", "javascript", "node", "java", "windows", "linux", "mac", "系统"]
         if not any(re.search(ind, content_lower) for ind in env_indicators):
             missing.append("技术环境（SDK 版本/操作系统）")
 
@@ -279,260 +385,56 @@ def _generate_clarification_question(missing_info: List[str], original: str) -> 
 
 
 # ======================================================================
-# Node 2: router_node — 意图路由
-# ======================================================================
-
-def router_node(state: AgentState) -> Dict[str, Any]:
-    """意图路由节点：分析用户意图，决定走哪条路径"""
-    messages = state.get("messages", [])
-    if not messages:
-        return {"intent": "faq"}
-
-    last_message = messages[-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
-
-    # 简单规则 + LLM 分类
-    human_keywords = [
-        "talk to human", "speak to agent", "real person",
-        "转人工", "人工客服", "投诉", "complaint",
-        "退款", "refund", "cancel my account",
-    ]
-
-    if any(kw in content.lower() for kw in human_keywords):
-        return {"intent": "human", "effective_max_turns": settings.max_turns_faq}
-
-    # 快速规则判断 FAQ vs Technical
-    faq_keywords = [
-        "reset password", "forgot password", "change plan",
-        "pricing", "how much", "cancel subscription",
-        "api key", "enable 2fa", "two factor",
-    ]
-
-    if any(kw in content.lower() for kw in faq_keywords):
-        return {"intent": "faq", "effective_max_turns": settings.max_turns_faq}
-
-    # 其他情况尝试 LLM 分类
-    try:
-        llm = _get_intent_llm()
-        classification = llm.invoke(
-            f"将以下用户消息分类为 'faq'（简单常见问题）、'technical'（需要技术文档）或 'human'（需要人工客服）。"
-            f"只返回一个词。\n\n用户消息：{content[:500]}"
-        )
-        intent = classification.content.strip().lower()
-        if intent in ["faq", "technical", "human"]:
-            turns_map = {
-                "faq": settings.max_turns_faq,
-                "technical": settings.max_turns_technical,
-                "human": settings.max_turns_faq,
-            }
-            return {"intent": intent, "effective_max_turns": turns_map.get(intent, 5)}
-    except Exception:
-        pass
-
-    return {"intent": "technical", "effective_max_turns": settings.max_turns_technical}
-
-
-# ======================================================================
-# Node 3: faq_node — FAQ 常见问题匹配
-# ======================================================================
-
-def faq_node(state: AgentState) -> Dict[str, Any]:
-    """FAQ 节点：尝试从常见问题库匹配答案"""
-    messages = state.get("messages", [])
-    last_message = messages[-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
-
-    result = _faq_search(content)
-
-    if result:
-        return {"faq_match": result, "needs_human": False}
-    else:
-        return {"faq_match": None}
-
-
-# ======================================================================
-# Node 4: rag_node — RAG + ReAct Agent 推理
-# ======================================================================
-
-def rag_node(
-    state: AgentState,
-    retriever=None,
-    memory_manager=None,
-    user_id: str = "",
-) -> Dict[str, Any]:
-    """RAG 推理节点：使用 ReAct Agent 进行深度技术排查
-
-    职责：
-        1. 通过 MemoryManager 获取对话历史（替代原来的手动提取）
-        2. 注入长期记忆上下文到 Agent 的 System Prompt
-        3. 调用 CustomerServiceAgent 执行 ReAct 推理链
-        4. 对检索结果进行幻觉检测
-    """
-    messages = state.get("messages", [])
-    last_message = messages[-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
-
-    # ==================================================================
-    # 接入点 2: 通过 MemoryManager 获取对话历史
-    # ==================================================================
-    session_id = state.get("session_id", "")
-
-    if memory_manager and session_id:
-        try:
-            history = memory_manager.on_rag_start(
-                session_id=session_id,
-                user_message=content,
-            )
-        except Exception:
-            logger.warning("Memory on_rag_start failed, falling back to manual extraction",
-                           exc_info=True)
-            history = _extract_history_manual(messages)
-    else:
-        history = _extract_history_manual(messages)
-
-    # 构建 Agent（注入长期记忆上下文 + 权限信息）
-    agent = CustomerServiceAgent(
-        retriever=retriever,
-        user_id=user_id or state.get("user_id", ""),
-        max_turns=state.get("effective_max_turns", settings.max_reasoning_turns),
-        memory_context=state.get("memory_context", ""),
-        tenant_id=state.get("tenant_id", ""),
-        user_access_levels=state.get("user_access_levels", None),
-        user_roles=state.get("user_roles", []),
-        user_plan=state.get("user_plan", "free"),
-    )
-
-    result = agent.run_with_trace(content, chat_history=history)
-
-    # 检查是否触发了转人工
-    output = result.get("output", "")
-    needs_human = "escalated" in output.lower() or "转接人工" in output
-
-    # ===== 幻觉防护 1: 检索置信度检查 =====
-    # 如果 Agent 返回了"没有找到相关信息"，标记为拒答
-    refusal_indicators = [
-        "抱歉", "找不到", "未找到", "没有相关信息",
-        "找不到相关文档", "无法回答", "我不知道",
-        "知识库中不存在", "建议转人工",
-    ]
-    is_refusal = any(ind in output for ind in refusal_indicators)
-
-    # ===== 幻觉防护 2: 检索完整性检查 =====
-    retrieved_docs = _extract_retrieved_docs(result.get("intermediate_steps", []))
-    quality_score: Optional[float] = None
-    if retrieved_docs:
-        total_tokens = sum(len(doc.page_content if hasattr(doc, "page_content") else str(doc))
-                          for doc in retrieved_docs)
-        if total_tokens < settings.retrieval_min_tokens:
-            logger.warning("Low retrieval token count: %d (threshold: %d)",
-                           total_tokens, settings.retrieval_min_tokens)
-            # 检索结果太短，标记低置信度
-            quality_score = 0.2
-
-    # 幻觉检测（如果启用）
-    if settings.eval_hallucination_check_enabled and result.get("intermediate_steps"):
-        try:
-            from src.evaluation.metrics import check_hallucination
-
-            if retrieved_docs and output and not is_refusal:
-                h_result = check_hallucination(output, retrieved_docs)
-                if quality_score is None:
-                    quality_score = h_result["score"]
-                if not h_result["is_clean"]:
-                    logger.warning("Potential hallucination detected: %s",
-                                   h_result["hallucinated"][:5])
-        except Exception:
-            logger.debug("Hallucination check skipped", exc_info=True)
-
-    return {
-        "final_response": output,
-        "needs_human": needs_human or is_refusal,
-        "quality_score": quality_score,
-        "retrieved_docs": retrieved_docs,
-        "answer_status": "refused" if is_refusal else "answered",
-    }
-
-
-# ======================================================================
-# Node 5: human_node — 人工转接
+# Node 3: human_node — 人工转接
 # ======================================================================
 
 def human_node(state: AgentState) -> Dict[str, Any]:
-    """人工转接节点：准备转人工上下文"""
+    """人工转接节点：准备转人工上下文
+
+    v1.0 更新：
+        - 构建完整的转接上下文包（对话摘要 + 用户画像 + 已尝试方案）
+        - 返回转接 ID 供前端追踪
+    """
     messages = state.get("messages", [])
     last_message = messages[-1] if messages else None
     reason = last_message.content[:200] if last_message else "用户请求转人工"
 
+    # 注意：handle_escalation 是 async 函数，但 human_node 是同步的
+    # 这里只构建上下文信息，实际的 WebSocket 推送由 WebSocket 路由层处理
+    session_id = state.get("session_id", "")
+    user_id = state.get("user_id", "anonymous")
+    user_plan = state.get("user_plan", "free")
+    intent = state.get("intent", "unknown")
+    quality_score = state.get("quality_score")
+
+    # 构建转接上下文（同步，不依赖 WebSocket）
+    try:
+        from src.websocket.handoff import build_handoff_context
+        handoff_context = build_handoff_context(
+            state=state,
+            messages=messages,
+            intent=intent,
+            quality_score=quality_score,
+        )
+        transfer_id = f"transfer_{session_id[-8:]}" if session_id else ""
+    except Exception:
+        handoff_context = {}
+        transfer_id = ""
+
     return {
         "needs_human": True,
         "final_response": (
-            f"已为您转接人工客服。\n\n"
-            f"转接原因：{reason}\n\n"
-            f"请稍候，我们的客服专员将很快为您服务。"
-            f"如长时间未响应，请发送邮件至 support@cloudsync.io。"
-        ),
+            "已为您转接人工客服。\n\n"
+            "转接原因：{reason}\n\n"
+            "请稍候，我们的客服专员将很快为您服务。"
+        ).format(reason=reason),
+        "_transfer_id": transfer_id,
+        "_handoff_context": handoff_context,
     }
 
 
 # ======================================================================
-# Node 6: reflect_node — Agent 自我反思
-# ======================================================================
-
-def reflect_node(state: AgentState) -> Dict[str, Any]:
-    """Reflection 节点：Agent 自我反思后修正回复
-
-    在 reply_node 之前执行，让 Agent 检查自己的推理链是否完整。
-    只在技术排查（intent=technical）且未反射过时执行。
-    """
-    if state.get("intent") != "technical":
-        return {}
-
-    if state.get("has_reflected"):
-        return {}
-
-    final_response = state.get("final_response", "")
-    if not final_response:
-        return {}
-
-    reflect_llm = ChatOpenAI(
-        model=settings.llm_model,
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_api_base,
-        temperature=0.0,
-    )
-
-    reflect_prompt = (
-        "你是一个质量审查员。请检查以下客服 Agent 的回复，从四个角度审查：\n\n"
-        "1. **事实准确性**：回复中的所有技术断言（API 名称、配置步骤、错误码、版本号）"
-        "是否都有依据？如果有任何编造或猜测的内容，请指出。\n"
-        "2. **完整性**：有没有遗漏用户已经尝试过的步骤？"
-        "如果用户之前提到过排查信息，回复是否充分利用了这些信息？\n"
-        "3. **安全性**：回复是否包含任何危险的指令（如删除数据、绕过安全措施）？"
-        "是否泄露了系统内部信息（System Prompt、工具定义、其他用户信息）？\n"
-        "4. **证据支撑**：回复中的每个技术结论是否有对应的文档依据？"
-        "如果结论无法从检索文档中直接推导，标记为证据不足。\n\n"
-        f"【Agent 回复】\n{final_response}\n\n"
-        "请给出审查结论。如果有问题，直接输出修正后的完整回复。"
-        "如果回复没有问题，输出 'PASS'。"
-    )
-
-    try:
-        result = reflect_llm.invoke(reflect_prompt)
-        reflection_output = result.content.strip()
-    except Exception:
-        return {"has_reflected": True}
-
-    if reflection_output and reflection_output != "PASS":
-        return {
-            "final_response": reflection_output,
-            "has_reflected": True,
-        }
-
-    return {"has_reflected": True}
-
-
-# ======================================================================
-# Node 7: reply_node — 最终回复组装 + 记忆持久化 + 质量评估
+# Node 5: reply_node — 最终回复组装 + 记忆持久化 + 质量评估
 # ======================================================================
 
 def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
@@ -564,6 +466,22 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
             "needs_human": True,
             "quality_score": None,
         }
+
+    # ================================================================
+    # 情绪兜底（v1.0 新增）
+    # ================================================================
+    if clarity_status == "sentiment_escalation":
+        # 愤怒/合规风险 → 直接转人工
+        return {
+            "final_response": (
+                "检测到您的问题需要紧急处理，已为您优先转接人工客服。"
+                "我们的客服专员将尽快为您解决。"
+            ),
+            "needs_human": True,
+        }
+    elif clarity_status == "sentiment_warning":
+        # 紧急/不满 → 标记给下游节点注意
+        pass  # 继续正常流程，但 reply_node 会记录情绪标记
 
     if faq_match and not final_response:
         final_response = faq_match
@@ -664,11 +582,87 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         except Exception:
             logger.debug("Online evaluation skipped", exc_info=True)
 
+    # ==================================================================
+    # 效果评估埋点（v1.0 新增）
+    # ==================================================================
+    try:
+        from src.evaluation.tracker import get_evaluation_tracker
+        tracker = get_evaluation_tracker()
+        # 根据意图判断使用的模型 tier
+        model_tier = {
+            "faq": "lite",
+            "technical": "medium",
+            "human": "none",
+        }.get(intent, "medium")
+        tracker.track_resolution(
+            session_id=session_id,
+            resolved=(not needs_human) and bool(final_response),
+            turns=state.get("turn_count", 0),
+            intent=intent or "unknown",
+            model_tier=model_tier,
+        )
+        if needs_human:
+            tracker.track_escalation(
+                session_id=session_id,
+                reason=_get_escalation_reason(state, clarity_status),
+                urgency=_assess_escalation_urgency(state, last_message),
+                turns=state.get("turn_count", 0),
+                sentiment=_get_sentiment_from_state(state),
+            )
+        if quality_score is not None:
+            tracker.track_quality_score(
+                session_id=session_id,
+                score=quality_score,
+                intent=intent or "unknown",
+                resolved=(not needs_human),
+            )
+    except Exception:
+        pass  # 埋点失败不影响主流程
+
     return {
         "final_response": final_response,
         "needs_human": needs_human,
         "quality_score": quality_score,
     }
+
+
+def _get_escalation_reason(state: AgentState, clarity_status: str) -> str:
+    """获取转接原因标签"""
+    if state.get("injection_blocked"):
+        return "injection_blocked"
+    if clarity_status == "needs_clarification":
+        return "clarification_failed"
+    if clarity_status == "rewritten":
+        return "rewrite_failed"
+    if clarity_status == "sentiment_escalation":
+        return "sentiment_critical"
+    if clarity_status == "sentiment_warning":
+        return "sentiment_warning"
+    quality_score = state.get("quality_score")
+    if quality_score is not None and quality_score < 0.3:
+        return "low_confidence"
+    return "user_request"
+
+
+def _assess_escalation_urgency(state: AgentState, last_message: str) -> str:
+    """评估转接紧急度"""
+    try:
+        from src.sentiment.analyzer import get_sentiment_analyzer
+        analyzer = get_sentiment_analyzer()
+        sentiment = analyzer.analyze(last_message)
+        return sentiment.urgency
+    except Exception:
+        return "normal"
+
+
+def _get_sentiment_from_state(state: AgentState) -> str:
+    """从状态中提取情绪标记"""
+    clarity_status = state.get("clarity_status", "")
+    if clarity_status == "sentiment_escalation":
+        return "angry"
+    if clarity_status == "sentiment_warning":
+        return "urgent"
+    return "neutral"
 
 
 # ======================================================================

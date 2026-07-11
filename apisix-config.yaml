@@ -1,0 +1,88 @@
+# APISIX 网关配置
+# 部署位置: apisix/conf/config.yaml
+
+apisix:
+  node_listen: 9080              # APISIX 监听端口
+  enable_ipv6: false
+
+deployment:
+  admin:
+    key: edd1c9f034335f136f87ad84b625c8f1  # admin key（生产环境务必修改）
+    allow_admin:
+      - 0.0.0.0/0
+
+  admin_key:
+    - name: "admin"
+      role: admin
+      token: edd1c9f034335f136f8f87ad84b625c8f1
+
+# ==================== 路由配置 ====================
+# 通过 APISIX Admin API 注册路由（或用 etcd 配置）
+
+# 路由 1: 业务 API（普通 HTTP）
+# PUT /apisix/admin/routes/1
+# {
+#   "uri": "/api/v1/*",
+#   "upstream": {
+#     "type": "roundrobin",
+#     "nodes": {
+#       "127.0.0.1:8000": 1
+#     }
+#   },
+#   "plugins": {
+#     "limit-count": {
+#       "count": 100,
+#       "time_window": 60,
+#       "rejected_code": 429,
+#       "key": "remote_addr"
+#     },
+#     "key-auth": {
+#       "key_name": "X-API-Key",
+#       "plugins": {
+#         "jwt-auth": {}
+#       }
+#     }
+#   }
+# }
+
+# 路由 2: WebSocket 端点
+# PUT /apisix/admin/routes/2
+# {
+#   "uri": "/ws/*",
+#   "upstream": {
+#     "type": "roundrobin",
+#     "nodes": {
+#       "127.0.0.1:8000": 1
+#     }
+#   },
+#   "plugins": {
+#     "proxy-rewrite": {
+#       "regex_uri": ["^/ws/(.*)", "/ws/$1"]
+#     }
+#   }
+# }
+
+# 路由 3: Chatwoot Webhook
+# PUT /apisix/admin/routes/3
+# {
+#   "uri": "/chatwoot/webhook/*",
+#   "upstream": {
+#     "type": "roundrobin",
+#     "nodes": {
+#       "127.0.0.1:8000": 1
+#     }
+#   },
+#   "plugins": {
+#     "jwt-auth": {},
+#     "limit-count": {
+#       "count": 50,
+#       "time_window": 60,
+#       "rejected_code": 429
+#     }
+#   }
+# }
+
+# ==================== 限流策略 ====================
+# limit-count: 基于 IP 的限流
+# jwt-auth: JWT 令牌认证
+# cors: 跨域支持

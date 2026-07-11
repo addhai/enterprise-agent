@@ -3,7 +3,7 @@ API 路由定义
 """
 import uuid
 import logging
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage
@@ -75,6 +75,8 @@ async def chat(request: ChatRequest):
             memory_context="",
             quality_score=None,
             access_filtered=0,
+            needs_expert_delegation=False,
+            expert_response=None,
         )
 
         result = app.invoke(
