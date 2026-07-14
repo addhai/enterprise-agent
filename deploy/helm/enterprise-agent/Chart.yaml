@@ -1,0 +1,7 @@
+# Enterprise Agent — Helm Chart (K3s 部署)
+apiVersion: v2
+name: enterprise-agent
+description: 企业级智能客服系统 — 云原生微服务部署
+type: application
+version: 0.1.0
+appVersion: "0.2.0"

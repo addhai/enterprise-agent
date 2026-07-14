@@ -1,0 +1,88 @@
+# =============================================================================
+# Helm Values — Staging (测试环境)
+# =============================================================================
+
+global:
+  environment: staging
+  imagePullPolicy: Always
+
+secrets:
+  openaiApiKey: ""  # 从 CI Variable 或 External Secrets 注入
+  openaiApiBase: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  langsmithApiKey: ""
+
+api:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    LLM_MODEL: qwen-plus
+    LANGSMITH_TRACING: "true"
+    EVAL_LLM_JUDGE_ENABLED: "true"
+    EVAL_ONLINE_SAMPLING_RATE: "0.3"
+
+rag:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+worker:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  resources:
+    limits:
+      memory: 512Mi
+
+ws:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  resources:
+    limits:
+      memory: 256Mi
+
+frontend:
+  replicaCount: 1
+
+apisix:
+  enabled: false  # staging 用 K8s Ingress
+
+ingress:
+  enabled: true
+  className: nginx
+  certIssuer: letsencrypt-staging  # 测试环境用 staging issuer
+  hosts:
+    - host: staging-agent.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+externalServices:
+  postgres:
+    host: postgres.staging.svc.cluster.local
+    password: ""
+  redis:
+    host: redis.staging.svc.cluster.local
+  milvus:
+    host: milvus-standalone.staging.svc.cluster.local
+  minio:
+    host: minio.staging.svc.cluster.local
+    secretKey: ""
+  rabbitmq:
+    host: rabbitmq.staging.svc.cluster.local
+    password: ""

@@ -1,0 +1,86 @@
+# =============================================================================
+# Prometheus 告警规则 — Enterprise Agent
+# =============================================================================
+
+groups:
+  - name: agent-service
+    rules:
+      # ---- 服务可用性 ----
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} 服务不可用"
+          description: "{{ $labels.service }} 已超过 2 分钟无响应 (instance: {{ $labels.instance }})"
+
+      # ---- API 延迟 ----
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{service="api"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API P95 延迟 > 2秒"
+          description: "API 服务 P95 延迟 {{ $value }}s，可能存在问题"
+
+      # ---- API 错误率 ----
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 5xx 错误率 > 5%"
+          description: "当前错误率 {{ $value | humanizePercentage }}"
+
+      # ---- LLM 调用失败 ----
+      - alert: LLMCallFailures
+        expr: rate(llm_call_errors_total[5m]) / rate(llm_call_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 调用失败率 > 10%"
+          description: "阿里百炼 API 调用失败率 {{ $value | humanizePercentage }}"
+
+      # ---- RabbitMQ 消息堆积 ----
+      - alert: QueueBacklog
+        expr: rabbitmq_queue_messages_ready{queue="agent.inference.queue"} > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "推理队列消息堆积 > 100"
+          description: "agent.inference.queue 积压 {{ $value }} 条消息，可能需要扩容 worker"
+
+      # ---- Redis 内存使用 ----
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 内存使用 > 85%"
+          description: "Redis 内存使用率 {{ $value | humanizePercentage }}"
+
+      # ---- WebSocket 连接数 ----
+      - alert: HighWSConnections
+        expr: ws_active_connections > 800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket 连接数接近上限"
+          description: "当前活跃连接 {{ $value }}，上限 1000"
+
+      # ---- 熔断器触发 ----
+      - alert: CircuitBreakerOpen
+        expr: apisix_plugin_breaker_status{name="api-breaker"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "APISIX 熔断器已触发"
+          description: "API 断路器已熔断，后端服务可能异常"

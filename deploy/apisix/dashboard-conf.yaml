@@ -1,0 +1,22 @@
+# APISIX Dashboard 配置
+# 启动: docker compose --profile dashboard up -d apisix-dashboard
+
+conf:
+  listen:
+    host: 0.0.0.0
+    port: 9000
+
+  etcd:
+    endpoints:
+      - apisix:9092
+
+  # 连接到 APISIX Admin API（standalone 模式下仅查看）
+  apisix:
+    admin_key: edd1c9f034335f136f87ad84b625c8f1
+
+  log:
+    error_log:
+      level: warn
+      file_path: /dev/stderr
+    access_log:
+      file_path: /dev/stdout

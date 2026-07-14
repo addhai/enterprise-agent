@@ -1,0 +1,61 @@
+{{/* =============================================================================
+  Ingress — K8s Ingress（备选方案，APISIX 优先）
+  ============================================================================= */}}
+{{- if and .Values.ingress.enabled (not .Values.apisix.enabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.certIssuer | quote }}
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          # 前端静态
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}-frontend
+                port:
+                  number: 80
+          # API
+          - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}-api
+                port:
+                  number: 8000
+          # WebSocket
+          - path: /ws/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}-ws
+                port:
+                  number: 8000
+          # Health
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $.Release.Name }}-api
+                port:
+                  number: 8000
+    {{- end }}
+{{- end }}

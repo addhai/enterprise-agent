@@ -1,0 +1,62 @@
+Enterprise Agent — Cloud-Native Deployment
+
+================================================================================
+  Release: {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+  Environment: {{ .Values.global.environment }}
+  Chart Version: {{ .Chart.Version }}
+  App Version: {{ .Chart.AppVersion }}
+================================================================================
+
+Services deployed:
+{{- if .Values.api.enabled }}
+  ✅ API Service        replicas={{ .Values.api.replicaCount }}  port={{ .Values.api.service.port }}
+{{- end }}
+{{- if .Values.rag.enabled }}
+  ✅ RAG Service        replicas={{ .Values.rag.replicaCount }}  port={{ .Values.rag.service.port }}
+{{- end }}
+{{- if .Values.worker.enabled }}
+  ✅ Agent Worker       replicas={{ .Values.worker.replicaCount }}
+{{- end }}
+{{- if .Values.ws.enabled }}
+  ✅ WebSocket          replicas={{ .Values.ws.replicaCount }}  port={{ .Values.ws.service.port }}
+{{- end }}
+{{- if .Values.frontend.enabled }}
+  ✅ Frontend           replicas={{ .Values.frontend.replicaCount }}  port={{ .Values.frontend.service.port }}
+{{- end }}
+{{- if .Values.apisix.enabled }}
+  ✅ APISIX Gateway     replicas={{ .Values.apisix.replicaCount }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
+  ✅ Ingress            class={{ .Values.ingress.className }}
+{{- end }}
+
+External Services:
+  PostgreSQL: {{ .Values.externalServices.postgres.host }}:{{ .Values.externalServices.postgres.port }}
+  Redis:      {{ .Values.externalServices.redis.host }}:{{ .Values.externalServices.redis.port }}
+  Milvus:     {{ .Values.externalServices.milvus.host }}:{{ .Values.externalServices.milvus.port }}
+  MinIO:      {{ .Values.externalServices.minio.host }}:{{ .Values.externalServices.minio.port }}
+  RabbitMQ:   {{ .Values.externalServices.rabbitmq.host }}:{{ .Values.externalServices.rabbitmq.port }}
+
+Access:
+{{- if .Values.apisix.enabled }}
+  HTTP:  http://<node-ip>:{{ .Values.apisix.service.httpPort | default 80 }}
+  HTTPS: https://<node-ip>:{{ .Values.apisix.service.httpsPort | default 443 }}
+{{- else if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  URL: https://{{ .host }}
+{{- end }}
+{{- else }}
+  Port-forward:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-api 8000:8000
+{{- end }}
+
+Monitoring:
+  Prometheus:  kubectl port-forward -n {{ .Release.Namespace }} svc/prometheus 9090:9090
+  Grafana:     kubectl port-forward -n {{ .Release.Namespace }} svc/grafana 3000:3000
+
+Next Steps:
+  1. Verify:  kubectl get pods -n {{ .Release.Namespace }}
+  2. Logs:    kubectl logs -f -n {{ .Release.Namespace }} deployment/{{ .Release.Name }}-api
+  3. Scale:   kubectl scale -n {{ .Release.Namespace }} deployment/{{ .Release.Name }}-api --replicas=3
+================================================================================

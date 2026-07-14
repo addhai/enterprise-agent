@@ -1,0 +1,127 @@
+# =============================================================================
+# Helm Values — Production (生产环境)
+# =============================================================================
+
+global:
+  environment: production
+  imagePullPolicy: IfNotPresent
+  nodeSelector:
+    workload: production
+  tolerations:
+    - key: "production"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+
+secrets:
+  openaiApiKey: ""  # 生产密钥由 Sealed Secrets 或 Vault 注入
+  openaiApiBase: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  langsmithApiKey: ""
+
+api:
+  replicaCount: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2048Mi
+  env:
+    LLM_MODEL: qwen-max
+    LANGSMITH_TRACING: "true"
+    EVAL_LLM_JUDGE_ENABLED: "true"
+    EVAL_ONLINE_SAMPLING_RATE: "0.1"
+
+rag:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2048Mi
+
+worker:
+  replicaCount: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 60
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 4000m
+      memory: 4096Mi
+
+ws:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 60
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1024Mi
+
+frontend:
+  replicaCount: 2
+
+apisix:
+  enabled: true
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2048Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  certIssuer: letsencrypt-prod
+  hosts:
+    - host: agent.cloudsync.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - agent.cloudsync.io
+      secretName: agent-tls-cert
+
+externalServices:
+  postgres:
+    host: postgres.prod.svc.cluster.local
+    password: ""
+  redis:
+    host: redis.prod.svc.cluster.local
+  milvus:
+    host: milvus-standalone.prod.svc.cluster.local
+  minio:
+    host: minio.prod.svc.cluster.local
+    secretKey: ""
+  rabbitmq:
+    host: rabbitmq.prod.svc.cluster.local
+    password: ""

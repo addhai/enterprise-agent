@@ -1,0 +1,79 @@
+{{/* =============================================================================
+  WebSocket Service — Deployment + Service
+  ============================================================================= */}}
+{{- if .Values.ws.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-ws
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: websocket
+spec:
+  replicas: {{ .Values.ws.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "enterprise-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: websocket
+  template:
+    metadata:
+      labels:
+        {{- include "enterprise-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: websocket
+    spec:
+      containers:
+        - name: ws
+          image: "{{ .Values.ws.image.repository }}:{{ .Values.ws.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "src.websocket.server"]
+          ports:
+            - containerPort: 8000
+              name: ws-http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-config
+            - secretRef:
+                name: {{ .Release.Name }}-secrets
+          resources:
+            {{- toYaml .Values.ws.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /ws/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /ws/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ws
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: websocket
+spec:
+  type: {{ .Values.ws.service.type }}
+  selector:
+    {{- include "enterprise-agent.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: websocket
+  ports:
+    - port: {{ .Values.ws.service.port }}
+      targetPort: ws-http
+      protocol: TCP
+      name: ws-http
+{{- end }}

@@ -1,0 +1,88 @@
+# =============================================================================
+# Prometheus 监控配置 — Enterprise Agent
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: agent-k3s
+    environment: ${ENV:-dev}
+
+# ---- Alertmanager (可选，暂不配置) ----
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  # ---- 自监控 ----
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # ---- APISIX 网关 ----
+  - job_name: apisix
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['apisix:9092']
+        labels:
+          service: apisix
+
+  # ---- API Service ----
+  - job_name: api-service
+    metrics_path: /api/v1/metrics
+    static_configs:
+      - targets: ['api-service:8000']
+        labels:
+          service: api
+
+  # ---- RAG Service ----
+  - job_name: rag-service
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['rag-service:8001']
+        labels:
+          service: rag
+
+  # ---- WebSocket Service ----
+  - job_name: ws-service
+    static_configs:
+      - targets: ['ws-service:8000']
+        labels:
+          service: websocket
+
+  # ---- Milvus ----
+  - job_name: milvus
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['milvus-standalone:9091']
+        labels:
+          service: milvus
+
+  # ---- PostgreSQL ----
+  # (需要 postgres_exporter sidecar)
+  - job_name: postgres
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: postgres
+
+  # ---- Redis ----
+  # (需要 redis_exporter sidecar)
+  - job_name: redis
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: redis
+
+  # ---- RabbitMQ ----
+  - job_name: rabbitmq
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['rabbitmq:15692']
+        labels:
+          service: rabbitmq

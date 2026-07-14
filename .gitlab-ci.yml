@@ -1,0 +1,284 @@
+# =============================================================================
+# GitLab CI/CD Pipeline — Enterprise Agent
+# =============================================================================
+#
+# 流程:
+#   Push/MR → Lint → Unit Test → SAST Scan → Build Image → Push Registry
+#     → (测试环境) 自动 ArgoCD Sync
+#     → (生产环境) 手动审批 → ArgoCD Sync
+#
+# 前提条件:
+#   1. GitLab Container Registry 已启用
+#   2. K3s 集群已部署 (或 Docker Compose 验证)
+#   3. ArgoCD 已安装并连接 Git 仓库
+#   4. GitLab CI Variables 配置:
+#      - REGISTRY_USER / REGISTRY_PASSWORD
+#      - KUBECONFIG (for ArgoCD / kubectl)
+# =============================================================================
+
+stages:
+  - lint
+  - test
+  - sast
+  - build
+  - deploy-staging
+  - deploy-prod
+
+# =========================================================================
+# 缓存与变量
+# =========================================================================
+variables:
+  DOCKER_BUILDKIT: "1"
+  DOCKER_DRIVER: overlay2
+  IMAGE_BASE: ${CI_REGISTRY_IMAGE}
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - .pip-cache/
+    - frontend/node_modules/
+
+before_script:
+  - echo "Pipeline triggered by ${CI_COMMIT_REF_NAME} (${CI_COMMIT_SHA})"
+
+# =========================================================================
+# Stage 1: Lint & Format
+# =========================================================================
+python-lint:
+  stage: lint
+  image: python:3.11-slim
+  before_script:
+    - pip install ruff
+  script:
+    - ruff check src/ tests/
+    - ruff format --check src/ tests/
+  allow_failure: false
+
+frontend-lint:
+  stage: lint
+  image: node:22-alpine
+  before_script:
+    - cd frontend && npm ci
+  script:
+    - cd frontend && npm run lint
+  allow_failure: false
+
+# =========================================================================
+# Stage 2: Unit Test
+# =========================================================================
+python-test:
+  stage: test
+  image: python:3.11-slim
+  services:
+    - name: redis:7-alpine
+      alias: redis
+    - name: postgres:16-alpine
+      alias: postgres
+      variables:
+        POSTGRES_DB: agent_test
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+  variables:
+    REDIS_URL: redis://redis:6379
+    DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agent_test
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
+  before_script:
+    - pip install -r requirements.txt
+    - pip install pytest pytest-cov pytest-asyncio
+  script:
+    - pytest tests/ -v --cov=src --cov-report=term --cov-report=xml --junitxml=report.xml
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+      junit: report.xml
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  allow_failure: false
+
+frontend-test:
+  stage: test
+  image: node:22-alpine
+  before_script:
+    - cd frontend && npm ci
+  script:
+    - cd frontend && npx vitest run --reporter=junit --outputFile.junit=../report-frontend.xml
+  artifacts:
+    reports:
+      junit: report-frontend.xml
+  allow_failure: true   # 初期前端单测不强制阻断
+
+# =========================================================================
+# Stage 3: SAST Scan
+# =========================================================================
+python-security:
+  stage: sast
+  image: python:3.11-slim
+  before_script:
+    - pip install bandit semgrep
+  script:
+    - bandit -r src/ -f json -o bandit-report.json
+    - semgrep scan --config auto --error --json -o semgrep-report.json src/ 2>/dev/null || true
+  artifacts:
+    paths:
+      - bandit-report.json
+      - semgrep-report.json
+    when: always
+  allow_failure: true   # SAST 告警不阻断（初期），后续收紧
+
+container-scan:
+  stage: sast
+  image: aquasec/trivy:latest
+  script:
+    # 构建后扫描；此处先配置占位
+    - trivy config --severity HIGH,CRITICAL --exit-code 1 ./docker/
+  allow_failure: false
+
+# =========================================================================
+# Stage 4: Build & Push Images
+# =========================================================================
+build-api:
+  stage: build
+  image: docker:27-dind
+  services:
+    - docker:27-dind
+  before_script:
+    - echo "${CI_REGISTRY_PASSWORD}" | docker login ${CI_REGISTRY} -u ${CI_REGISTRY_USER} --password-stdin
+  script:
+    - IMAGE_TAG=${IMAGE_BASE}/api-service:${CI_COMMIT_SHORT_SHA}
+    - docker build -f docker/api/Dockerfile -t ${IMAGE_TAG} -t ${IMAGE_BASE}/api-service:latest .
+    - docker push ${IMAGE_TAG}
+    - docker push ${IMAGE_BASE}/api-service:latest
+  only:
+    - main
+    - /^v\d+\.\d+/
+
+build-rag:
+  stage: build
+  image: docker:27-dind
+  services:
+    - docker:27-dind
+  before_script:
+    - echo "${CI_REGISTRY_PASSWORD}" | docker login ${CI_REGISTRY} -u ${CI_REGISTRY_USER} --password-stdin
+  script:
+    - IMAGE_TAG=${IMAGE_BASE}/rag-service:${CI_COMMIT_SHORT_SHA}
+    - docker build -f docker/rag/Dockerfile -t ${IMAGE_TAG} -t ${IMAGE_BASE}/rag-service:latest .
+    - docker push ${IMAGE_TAG}
+    - docker push ${IMAGE_BASE}/rag-service:latest
+  only:
+    - main
+    - /^v\d+\.\d+/
+
+build-worker:
+  stage: build
+  image: docker:27-dind
+  services:
+    - docker:27-dind
+  before_script:
+    - echo "${CI_REGISTRY_PASSWORD}" | docker login ${CI_REGISTRY} -u ${CI_REGISTRY_USER} --password-stdin
+  script:
+    - IMAGE_TAG=${IMAGE_BASE}/agent-worker:${CI_COMMIT_SHORT_SHA}
+    - docker build -f docker/worker/Dockerfile -t ${IMAGE_TAG} -t ${IMAGE_BASE}/agent-worker:latest .
+    - docker push ${IMAGE_TAG}
+    - docker push ${IMAGE_BASE}/agent-worker:latest
+  only:
+    - main
+    - /^v\d+\.\d+/
+
+build-frontend:
+  stage: build
+  image: node:22-alpine
+  before_script:
+    - cd frontend && npm ci
+  script:
+    - cd frontend && npm run build
+  artifacts:
+    paths:
+      - static/           # 构建产物 (Vite 输出到 static/)
+    expire_in: 7 days
+  only:
+    - main
+    - /^v\d+\.\d+/
+
+# =========================================================================
+# Stage 5: Deploy to Staging (自动)
+# =========================================================================
+deploy-staging:
+  stage: deploy-staging
+  image: alpine/k8s:1.29
+  environment:
+    name: staging
+    url: https://staging-agent.example.com
+  before_script:
+    - echo "${KUBECONFIG_STAGING}" | base64 -d > /tmp/kubeconfig
+  script:
+    # ArgoCD 方式：更新 Git 仓库中的 image tag → ArgoCD 自动 sync
+    - echo "Updating Helm values for staging..."
+    - apk add --no-cache yq git
+    - |
+      git config user.email "ci@agent.internal"
+      git config user.name "GitLab CI"
+      cd deploy/helm/enterprise-agent
+      yq -i '.api.image.tag = "'${CI_COMMIT_SHORT_SHA}'"' values-staging.yaml
+      yq -i '.rag.image.tag = "'${CI_COMMIT_SHORT_SHA}'"' values-staging.yaml
+      yq -i '.worker.image.tag = "'${CI_COMMIT_SHORT_SHA}'"' values-staging.yaml
+      git add values-staging.yaml
+      git commit -m "ci: bump staging images to ${CI_COMMIT_SHORT_SHA}" || true
+      git push origin main
+
+    # 等待 ArgoCD Sync（或手动触发）
+    - kubectl --kubeconfig /tmp/kubeconfig -n argocd patch application agent-staging \
+        --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}' \
+        2>/dev/null || echo "ArgoCD Application 'agent-staging' not found, skipping sync trigger"
+  only:
+    - main
+  needs:
+    - build-api
+    - build-rag
+    - build-worker
+    - build-frontend
+    - python-test
+    - python-lint
+    - container-scan
+
+# =========================================================================
+# Stage 6: Deploy to Production (手动)
+# =========================================================================
+deploy-prod:
+  stage: deploy-prod
+  image: alpine/k8s:1.29
+  environment:
+    name: production
+    url: https://agent.example.com
+  when: manual
+  allow_failure: false
+  before_script:
+    - echo "${KUBECONFIG_PROD}" | base64 -d > /tmp/kubeconfig
+  script:
+    - echo "Deploying to production..."
+    - apk add --no-cache yq git
+    - |
+      git config user.email "ci@agent.internal"
+      git config user.name "GitLab CI"
+      cd deploy/helm/enterprise-agent
+      yq -i '.api.image.tag = "'${CI_COMMIT_SHORT_SHA}'"' values-prod.yaml
+      yq -i '.rag.image.tag = "'${CI_COMMIT_SHORT_SHA}'"' values-prod.yaml
+      yq -i '.worker.image.tag = "'${CI_COMMIT_SHORT_SHA}'"' values-prod.yaml
+      git add values-prod.yaml
+      git commit -m "ci: bump production images to ${CI_COMMIT_SHORT_SHA}" || true
+      git push origin main
+
+    # 触发 ArgoCD Production sync
+    - kubectl --kubeconfig /tmp/kubeconfig -n argocd patch application agent-production \
+        --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}' \
+        2>/dev/null || echo "ArgoCD Application 'agent-production' not found"
+  only:
+    - /^v\d+\.\d+\.\d+$/    # 仅 tag v1.2.3 格式触发
+  needs:
+    - build-api
+    - build-rag
+    - build-worker
+    - build-frontend
+    - python-test
+    - python-lint
+    - container-scan

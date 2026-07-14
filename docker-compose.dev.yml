@@ -1,0 +1,84 @@
+# =============================================================================
+# Docker Compose — 本地开发热重载覆盖文件
+# =============================================================================
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# =============================================================================
+
+services:
+  # API Service — hot reload (uvicorn --reload)
+  api-service:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    command:
+      - uvicorn
+      - src.api.server:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --reload
+      - --reload-dir=/app/src
+    volumes:
+      - ./src:/app/src         # 绑定挂载源码，修改即时生效
+      - ./data:/app/data
+    environment:
+      - LOG_LEVEL=DEBUG
+      - LANGSMITH_TRACING=false
+      - EVAL_LLM_JUDGE_ENABLED=false
+      - EVAL_ONLINE_SAMPLING_RATE=0.0
+      - VECTOR_STORE_BACKEND=chroma    # 开发用 Chroma，不依赖 Milvus
+    ports:
+      - "8000:8000"
+      - "5678:5678"             # debugpy 远程调试端口
+
+  # RAG Service — hot reload
+  rag-service:
+    build:
+      context: .
+      dockerfile: docker/rag/Dockerfile
+    command:
+      - uvicorn
+      - src.rag.server:app
+      - --host=0.0.0.0
+      - --port=8001
+      - --reload
+      - --reload-dir=/app/src
+    volumes:
+      - ./src:/app/src
+    environment:
+      - LOG_LEVEL=DEBUG
+      - VECTOR_STORE_BACKEND=chroma
+    ports:
+      - "8001:8001"
+
+  # Agent Worker — 单进程 + debug
+  agent-worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    command: ["python", "-m", "src.worker.consumer"]
+    volumes:
+      - ./src:/app/src
+    environment:
+      - LOG_LEVEL=DEBUG
+      - RABBITMQ_URL=amqp://agent:agent@rabbitmq:5672
+
+  # 关闭 Milvus (开发用 Chroma)
+  milvus-standalone:
+    profiles:
+      - disabled
+
+  # 关闭 MinIO (开发用本地文件系统)
+  minio:
+    profiles:
+      - disabled
+
+  # APISIX 保留但简化路由 (开发用)
+  apisix:
+    image: apache/apisix:3.14.1-debian
+    environment:
+      - APISIX_STAND_ALONE=true
+      - APISIX_ADMIN_KEY=dev-key
+    ports:
+      - "9080:9080"
+      - "9092:9092"

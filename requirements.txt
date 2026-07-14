@@ -33,8 +33,15 @@ python-docx>=0.8.11      # DOCX 加载
 # paddleocr>=2.7.0       # 中文 OCR 优先（需 paddlepaddle）
 # pytesseract>=0.3.10    # 英文 OCR 备选（需系统安装 tesseract-ocr）
 
+# Cloud-Native (Milvus + MinIO + RabbitMQ)
+pymilvus>=2.5.0           # Milvus 向量库客户端
+minio>=7.2.0              # MinIO S3 对象存储客户端
+pika>=1.3.0               # RabbitMQ AMQP 客户端
+boto3>=1.34.0             # AWS S3 SDK (MinIO 兼容)
+
 # Utils
 python-dotenv>=1.0.0
 httpx>=0.27.0
 tiktoken>=0.7.0
 sse-starlette
+ruff>=0.9.0               # Lint & Format (替代 flake8+black)

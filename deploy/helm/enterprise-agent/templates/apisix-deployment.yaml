@@ -1,0 +1,170 @@
+{{/* =============================================================================
+  APISIX Gateway — Deployment + Service
+  ============================================================================= */}}
+{{- if .Values.apisix.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-apisix-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  config.yaml: |
+    apisix:
+      enable_control: true
+      node_listen: 9080
+      enable_admin: true
+      enable_heartbeat: false
+
+    deployment:
+      admin:
+        admin_key:
+          - name: admin
+            key: edd1c9f034335f136f87ad84b625c8f1
+            role: admin
+        allow_admin:
+          - 0.0.0.0/0
+      role: data_plane
+      role_data_plane:
+        config_provider: yaml
+
+    plugin_attr:
+      prometheus:
+        export_uri: /metrics
+        enable_export_server: true
+        export_addr:
+          ip: "0.0.0.0"
+          port: 9092
+
+  apisix.yml: |
+    routes:
+      - id: frontend
+        uri: /*
+        name: "frontend-static"
+        priority: 1
+        upstream:
+          type: roundrobin
+          nodes:
+            "{{ .Release.Name }}-frontend.{{ .Release.Namespace }}.svc.cluster.local:80": 1
+      - id: api-chat
+        uri: /api/v1/chat
+        name: "api-chat"
+        priority: 100
+        methods: ["POST"]
+        upstream:
+          type: roundrobin
+          nodes:
+            "{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc.cluster.local:8000": 1
+      - id: api-v1
+        uri: /api/v1/*
+        name: "api-v1-general"
+        priority: 90
+        upstream:
+          type: roundrobin
+          nodes:
+            "{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc.cluster.local:8000": 1
+      - id: websocket
+        uri: /ws/*
+        name: "websocket"
+        priority: 100
+        enable_websocket: true
+        upstream:
+          type: roundrobin
+          nodes:
+            "{{ .Release.Name }}-ws.{{ .Release.Namespace }}.svc.cluster.local:8000": 1
+    plugins:
+      - name: prometheus
+        enable: true
+        attrs:
+          prefer_name: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-apisix
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.apisix.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "enterprise-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "enterprise-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      containers:
+        - name: apisix
+          image: "{{ .Values.apisix.image.repository }}:{{ .Values.apisix.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 9080
+              name: http
+            - containerPort: 9443
+              name: https
+            - containerPort: 9092
+              name: metrics
+          env:
+            - name: APISIX_STAND_ALONE
+              value: "true"
+            - name: APISIX_ADMIN_KEY
+              value: "edd1c9f034335f136f87ad84b625c8f1"
+          volumeMounts:
+            - name: apisix-config
+              mountPath: /usr/local/apisix/conf/config.yaml
+              subPath: config.yaml
+            - name: apisix-config
+              mountPath: /usr/local/apisix/conf/apisix.yaml
+              subPath: apisix.yml
+          livenessProbe:
+            tcpSocket:
+              port: 9080
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: 9080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.apisix.resources | nindent 12 }}
+      volumes:
+        - name: apisix-config
+          configMap:
+            name: {{ .Release.Name }}-apisix-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-apisix
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: LoadBalancer
+  selector:
+    {{- include "enterprise-agent.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 9080
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: 9443
+      protocol: TCP
+    - name: metrics
+      port: 9092
+      targetPort: 9092
+      protocol: TCP
+{{- end }}

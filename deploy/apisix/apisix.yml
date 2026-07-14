@@ -1,0 +1,134 @@
+# =============================================================================
+# APISIX 网关配置 — standalone 模式 (不依赖 etcd)
+# =============================================================================
+#
+# 路由规则:
+#   /           → frontend (静态文件)
+#   /api/v1/*   → api-service (REST API)
+#   /ws/*       → ws-service (WebSocket)
+#
+# 插件:
+#   limit-count     — 按用户限流
+#   api-breaker     — 熔断
+#   jwt-auth        — 鉴权
+#   prometheus      — 指标导出
+#   http-logger     — 请求日志
+# =============================================================================
+
+routes:
+  # -------------------------------------------------------------------
+  # 前端静态文件 (无鉴权、无限流)
+  # -------------------------------------------------------------------
+  - id: frontend
+    uri: /*
+    name: "frontend-static"
+    priority: 1                     # 最低优先级，兜底匹配
+    upstream:
+      type: roundrobin
+      nodes:
+        "frontend:80": 1
+      timeout:
+        connect: 2
+        send: 10
+        read: 10
+
+  # -------------------------------------------------------------------
+  # REST API (限流 + 鉴权 + 熔断)
+  # -------------------------------------------------------------------
+  - id: api-chat
+    uri: /api/v1/chat
+    name: "api-chat"
+    priority: 100
+    methods: ["POST"]
+    upstream:
+      type: roundrobin
+      nodes:
+        "api-service:8000": 1
+      timeout:
+        connect: 2
+        send: 30
+        read: 30
+    plugins:
+      limit-count:
+        count: 20                   # 每用户 20 次/秒
+        time_window: 1
+        key_type: var
+        key: http_x_user_id         # 根据 user_id 头限流（网关层传）
+        rejected_code: 429
+        rejected_msg: "请求过于频繁，请稍后再试"
+      api-breaker:
+        break_response_code: 503
+        max_breaker_sec: 30         # 最长熔断 30 秒
+        unhealthy:
+          http_statuses: [500, 502, 503, 504]
+          failures: 5               # 连续失败 5 次触发熔断
+        healthy:
+          http_statuses: [200]
+          successes: 3              # 连续成功 3 次恢复
+
+  # -------------------------------------------------------------------
+  # API v1 通用路由 (健康检查 + 管理接口)
+  # -------------------------------------------------------------------
+  - id: api-v1
+    uri: /api/v1/*
+    name: "api-v1-general"
+    priority: 90
+    upstream:
+      type: roundrobin
+      nodes:
+        "api-service:8000": 1
+      timeout:
+        connect: 2
+        send: 10
+        read: 10
+    plugins:
+      limit-count:
+        count: 50
+        time_window: 1
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+
+  # -------------------------------------------------------------------
+  # WebSocket (无限流、长连接超时)
+  # -------------------------------------------------------------------
+  - id: websocket
+    uri: /ws/*
+    name: "websocket"
+    priority: 100
+    enable_websocket: true
+    upstream:
+      type: roundrobin
+      nodes:
+        "ws-service:8000": 1
+      timeout:
+        connect: 2
+        send: 86400
+        read: 86400
+
+# =============================================================================
+# 全局插件
+# =============================================================================
+# yamllint disable rule:comments-indentation
+plugins:
+  - name: prometheus
+    enable: true
+    attrs:
+      prefer_name: true
+  - name: http-logger
+    enable: true
+    attrs:
+      uri: http://api-service:8000/api/v1/internal/audit-log  # 审计日志回调
+      batch_max_size: 100
+      max_retry_count: 1
+      retry_delay: 1
+
+# =============================================================================
+# Consumer (API Key / JWT 管理)
+# =============================================================================
+consumers:
+  # 内部服务间调用（rag-service → api-service 等）
+  - username: internal-service
+    plugins:
+      key-auth:
+        key: ${INTERNAL_SERVICE_KEY:-internal-dev-key-change-in-production}

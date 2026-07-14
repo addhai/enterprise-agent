@@ -1,0 +1,420 @@
+# =============================================================================
+# Enterprise Agent — Cloud-Native Docker Compose
+# Phase 1: 全量基础设施 + 微服务拆分
+# =============================================================================
+#
+# 服务清单:
+#   网关层:  apisix (网关) + apisix-dashboard (管理UI)
+#   业务层:  api-service, ws-service, agent-worker, rag-service
+#   数据层:  postgres, milvus, minio, redis
+#   中间件:  rabbitmq
+#   前端:    frontend
+#
+# 启动:    docker compose up -d
+# 停止:    docker compose down
+# 日志:    docker compose logs -f <service-name>
+# =============================================================================
+
+services:
+  # =========================================================================
+  # 网关层 — Apache APISIX (替代 Nginx)
+  # =========================================================================
+  apisix:
+    image: apache/apisix:3.14.1-debian
+    container_name: agent-apisix
+    restart: unless-stopped
+    ports:
+      - "9080:9080"   # HTTP
+      - "9443:9443"   # HTTPS (TLS)
+      - "9092:9092"   # Prometheus metrics
+    environment:
+      - APISIX_STAND_ALONE=true              # 不依赖 etcd，适合单机/开发
+      - APISIX_ADMIN_KEY=${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}
+    volumes:
+      - ./deploy/apisix/apisix.yml:/usr/local/apisix/conf/apisix.yaml:ro
+      - ./deploy/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./logs/apisix:/usr/local/apisix/logs
+    networks:
+      - agent-net
+    depends_on:
+      - api-service
+      - ws-service
+      - frontend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9080/apisix/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  apisix-dashboard:
+    image: apache/apisix-dashboard:3.0.1-alpine
+    container_name: agent-apisix-dashboard
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      - APISIX_DASHBOARD_ADMIN_KEY=${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}
+    volumes:
+      - ./deploy/apisix/dashboard-conf.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
+    networks:
+      - agent-net
+    profiles:
+      - dashboard  # 按需启动: docker compose --profile dashboard up -d
+
+  # =========================================================================
+  # 业务服务层 — 微服务拆分
+  # =========================================================================
+
+  # REST API 入口 — 同步对话、健康检查、管理接口
+  api-service:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    container_name: agent-api
+    restart: unless-stopped
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-v4}
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-agent}
+      - MILVUS_HOST=milvus-standalone
+      - MILVUS_PORT=19530
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-agent}:${RABBITMQ_PASS:-agent}@rabbitmq:5672
+      - RAG_SERVICE_URL=http://rag-service:8001
+      - MEMORY_SERVICE_URL=http://api-service:8000   # 当前 memory 内嵌在 api 中
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - EVAL_LLM_JUDGE_ENABLED=false
+      - EVAL_ONLINE_SAMPLING_RATE=0.0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src:ro
+    networks:
+      - agent-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # LangGraph Agent Worker — 异步消费推理任务
+  agent-worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    container_name: agent-worker
+    restart: unless-stopped
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-v4}
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-agent}
+      - MILVUS_HOST=milvus-standalone
+      - MILVUS_PORT=19530
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-agent}:${RABBITMQ_PASS:-agent}@rabbitmq:5672
+      - RAG_SERVICE_URL=http://rag-service:8001
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+    volumes:
+      - ./src:/app/src:ro
+    networks:
+      - agent-net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      milvus-standalone:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # RAG 检索服务 — 文档加载/切块/嵌入/检索
+  rag-service:
+    build:
+      context: .
+      dockerfile: docker/rag/Dockerfile
+    container_name: agent-rag
+    restart: unless-stopped
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-v4}
+      - MILVUS_HOST=milvus-standalone
+      - MILVUS_PORT=19530
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-agent}:${RABBITMQ_PASS:-agent}@rabbitmq:5672
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./src/rag:/app/src/rag:ro
+      - ./src/config.py:/app/src/config.py:ro
+      - ./data:/app/data:ro
+    networks:
+      - agent-net
+    depends_on:
+      milvus-standalone:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # WebSocket 长连接服务
+  ws-service:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile   # 共用 api 镜像
+      target: production
+    container_name: agent-ws
+    restart: unless-stopped
+    command: ["python", "-m", "src.websocket.server"]
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-agent}
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-agent}:${RABBITMQ_PASS:-agent}@rabbitmq:5672
+    volumes:
+      - ./src:/app/src:ro
+    networks:
+      - agent-net
+    depends_on:
+      - redis
+      - rabbitmq
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  # 前端 — React SPA 静态服务
+  frontend:
+    image: nginx:1.27-alpine
+    container_name: agent-frontend
+    restart: unless-stopped
+    volumes:
+      - ./static:/usr/share/nginx/html:ro
+      - ./deploy/nginx-frontend.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - agent-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+
+  # =========================================================================
+  # 数据存储层
+  # =========================================================================
+
+  # PostgreSQL — 业务结构化数据
+  postgres:
+    image: postgres:16-alpine
+    container_name: agent-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-agent}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --locale=C
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - agent-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Milvus Standalone — 向量数据库 (替代 Chroma)
+  milvus-standalone:
+    image: milvusdb/milvus:v2.5.9
+    container_name: agent-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    ports:
+      - "19530:19530"   # gRPC
+      - "9091:9091"     # Prometheus metrics
+    environment:
+      - ETCD_USE_EMBED=true                          # 内嵌 etcd，不额外部署
+      - ETCD_DATA_DIR=/var/lib/milvus/etcd
+      - COMMON_STORAGETYPE=minio
+      - MINIO_ADDRESS=minio:9000
+      - MINIO_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - MINIO_BUCKET_NAME=milvus-bucket
+      - MINIO_USE_SSL=false
+      - COMMON_RETENTIONDURATION=86400
+    volumes:
+      - milvus_data:/var/lib/milvus
+    networks:
+      - agent-net
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9091/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # MinIO — 对象存储 (文档/图片/模型权重/日志归档)
+  minio:
+    image: minio/minio:RELEASE.2025-06-26T15-28-46Z
+    container_name: agent-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    networks:
+      - agent-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Redis — 缓存 + 分布式锁 + 会话
+  redis:
+    image: redis:7-alpine
+    container_name: agent-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+    volumes:
+      - redis_data:/data
+    networks:
+      - agent-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  # =========================================================================
+  # 消息中间件 — RabbitMQ (异步任务队列)
+  # =========================================================================
+  rabbitmq:
+    image: rabbitmq:4.0-management-alpine
+    container_name: agent-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-agent}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASS:-agent}
+      - RABBITMQ_DEFAULT_VHOST=/
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbitmq_management agent_metrics_collect_interval 10000
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./deploy/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    networks:
+      - agent-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+# ===========================================================================
+# 持久化卷
+# ===========================================================================
+volumes:
+  pg_data:
+    name: agent-pg-data
+  milvus_data:
+    name: agent-milvus-data
+  minio_data:
+    name: agent-minio-data
+  redis_data:
+    name: agent-redis-data
+  rabbitmq_data:
+    name: agent-rabbitmq-data
+
+# ===========================================================================
+# 网络
+# ===========================================================================
+networks:
+  agent-net:
+    name: agent-net
+    driver: bridge

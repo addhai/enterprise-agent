@@ -9,16 +9,23 @@ v0.3 更新（2026-07-01）：
 v0.4 更新（2026-07-02）：
     - 版本冲突检测：同一问题召回多个版本时自动排序 + 废弃过滤
     - 冲突提示：当同一主题有多个活跃版本时，在 metadata 中标注 conflict
+
+v0.5 更新（2026-07-15）：
+    - 多后端支持：Chrom | Milvus，通过 vector_store_backend 配置切换
+    - 远程 RAG Service 调用：可选的 HTTP 调用 rag-service
+    - 自动降级：Milvus 不可用时降级到 Chroma
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from langchain_core.documents import Document
 from langchain_community.retrievers import BM25Retriever
+from src.config import settings
 from src.rag.chunker import SentenceWindowSplitter
 from src.rag.vector_store import VectorStoreManager
 
@@ -43,26 +50,71 @@ class HybridRetriever:
         persist_directory: str = None,
         collection_name: str = None,
         context_window: int = 3,
+        backend: str = None,      # "chroma" | "milvus" | "auto" | "remote"
+        rag_service_url: str = None,
     ):
         self.context_window = context_window
         self.sentence_splitter = SentenceWindowSplitter(
             context_window=context_window,
         )
 
-        # 标准粒度索引
+        # ---- 后端选择 ----
+        self.backend = backend or settings.vector_store_backend
+        self.rag_service_url = rag_service_url or settings.rag_service_url
+
+        # Milvus 客户端 (懒加载)
+        self._milvus_store = None
+
+        # 标准粒度索引 (Chroma)
         self.vector_store = VectorStoreManager(
             persist_directory=persist_directory,
             collection_name=collection_name,
         )
 
-        # 句子粒度索引（独立 collection）
+        # 句子粒度索引（独立 collection）— 仅 Chroma 模式
         self.sentence_store = VectorStoreManager(
             persist_directory=persist_directory,
             collection_name=f"{collection_name}_sentences",
-        ) if collection_name else None
+        ) if collection_name and self.backend != "remote" else None
 
         self.bm25_retriever: BM25Retriever = None
         self._all_documents: List[Document] = []
+
+        logger.info("HybridRetriever initialized: backend=%s, rag_url=%s",
+                     self.backend, self.rag_service_url if self.backend == "remote" else "N/A")
+
+    # ------------------------------------------------------------------
+    # Milvus 懒加载 + 降级
+    # ------------------------------------------------------------------
+
+    @property
+    def milvus_store(self):
+        """懒加载 Milvus 连接，自动降级"""
+        if self._milvus_store is not None:
+            return self._milvus_store
+
+        try:
+            from src.rag.milvus_store import MilvusVectorStore
+            self._milvus_store = MilvusVectorStore(
+                host=settings.milvus_host,
+                port=settings.milvus_port,
+            )
+            self._milvus_store.ensure_collection()
+            logger.info("Milvus store initialized (host=%s:%d)",
+                        settings.milvus_host, settings.milvus_port)
+        except Exception as e:
+            logger.warning("Milvus unavailable (%s), falling back to Chroma", e)
+            self._milvus_store = None
+            self.backend = "chroma"  # 降级
+        return self._milvus_store
+
+    @property
+    def _use_milvus(self) -> bool:
+        return self.backend in ("milvus", "auto") and self.milvus_store is not None
+
+    @property
+    def _use_remote(self) -> bool:
+        return self.backend == "remote" and bool(self.rag_service_url)
 
     def index_documents(self, documents: List[Document]) -> None:
         """索引文档：同时写入向量库和 BM25
@@ -194,10 +246,109 @@ class HybridRetriever:
     def _vector_search(
         self, query: str, top_k: int, filter_by: Optional[dict]
     ) -> List[Tuple[Document, float]]:
+        """向量检索 — 根据 backend 自动路由
+
+        Chroma:  本地 LangChain Chroma wrapper
+        Milvus:  pymilvus 直连 (多租户 + 标量过滤)
+        Remote:  HTTP 调用 rag-service
+        Auto:    Milvus 优先，不可用时 Chroma 降级
+        """
+        # ---- Remote 模式 ----
+        if self._use_remote:
+            return self._remote_vector_search(query, top_k, filter_by)
+
+        # ---- Milvus 模式 ----
+        if self._use_milvus:
+            return self._milvus_vector_search(query, top_k, filter_by)
+
+        # ---- Chroma 模式 (默认/降级) ----
         results = self.vector_store.search_with_scores(query, top_k)
         if filter_by:
             results = self._apply_filter(results, filter_by)
         return results
+
+    def _milvus_vector_search(
+        self, query: str, top_k: int, filter_by: Optional[dict]
+    ) -> List[Tuple[Document, float]]:
+        """通过 Milvus 进行向量检索"""
+        tenant_id = filter_by.get("tenant_id", "") if filter_by else ""
+        access_levels = filter_by.get("access_levels") if filter_by else None
+        filter_expr = filter_by.get("filter_expr") if filter_by else None
+
+        hits = self.milvus_store.search(
+            query_text=query,
+            top_k=top_k,
+            tenant_id=tenant_id,
+            access_levels=access_levels,
+            filter_expr=filter_expr,
+        )
+
+        results = []
+        for h in hits:
+            doc = Document(
+                page_content=h["text"],
+                metadata={
+                    "doc_id": h["doc_id"],
+                    "chunk_index": h["chunk_index"],
+                    "access_level": h["access_level"],
+                    "source": h["metadata"].get("source", h["doc_id"]),
+                    **h["metadata"],
+                },
+            )
+            results.append((doc, h["score"]))
+
+        return results
+
+    def _remote_vector_search(
+        self, query: str, top_k: int, filter_by: Optional[dict]
+    ) -> List[Tuple[Document, float]]:
+        """通过 HTTP 调用远端 RAG Service"""
+        import json
+        import urllib.request
+        import urllib.error
+
+        payload = {
+            "query": query,
+            "top_k": top_k,
+            "tenant_id": filter_by.get("tenant_id", "") if filter_by else "",
+            "access_levels": filter_by.get("access_levels") if filter_by else None,
+            "filter_expr": filter_by.get("filter_expr") if filter_by else None,
+        }
+
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                f"{self.rag_service_url}/search",
+                data=data,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=settings.rag_service_timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+
+            results = []
+            for item in body.get("results", []):
+                doc = Document(
+                    page_content=item["text"],
+                    metadata={
+                        "doc_id": item["doc_id"],
+                        "chunk_index": item.get("chunk_index", 0),
+                        "access_level": item.get("access_level", "public"),
+                        "source": item["metadata"].get("source", item["doc_id"]),
+                        **item.get("metadata", {}),
+                    },
+                )
+                results.append((doc, item["score"]))
+
+            logger.debug("Remote RAG search: %d hits in %.1fms",
+                         len(results), body.get("latency_ms", 0))
+            return results
+
+        except urllib.error.URLError as e:
+            logger.error("Remote RAG service unreachable (%s): %s", self.rag_service_url, e)
+            return []
+        except Exception as e:
+            logger.exception("Remote RAG search failed: %s", e)
+            return []
 
     def _bm25_search(
         self, query: str, top_k: int, filter_by: Optional[dict]

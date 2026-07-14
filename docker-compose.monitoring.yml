@@ -1,0 +1,138 @@
+# =============================================================================
+# Prometheus + Grafana + Exporters — 监控栈 (可选)
+# =============================================================================
+# 启动: docker compose -f docker-compose.monitoring.yml up -d
+# 停止: docker compose -f docker-compose.monitoring.yml down
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # Prometheus — 指标采集
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:v3.3.0
+    container_name: agent-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - agent-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ===========================================================================
+  # Grafana — 可视化面板
+  # ===========================================================================
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: agent-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASS:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./deploy/monitoring/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    networks:
+      - agent-net
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ===========================================================================
+  # PostgreSQL Exporter
+  # ===========================================================================
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    container_name: agent-pg-exporter
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_URI=postgres:5432/agent?sslmode=disable
+      - DATA_SOURCE_USER=${POSTGRES_USER:-postgres}
+      - DATA_SOURCE_PASS=${POSTGRES_PASSWORD:-postgres}
+    networks:
+      - agent-net
+    depends_on:
+      - prometheus
+
+  # ===========================================================================
+  # Redis Exporter
+  # ===========================================================================
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    container_name: agent-redis-exporter
+    restart: unless-stopped
+    command:
+      - --redis.addr=redis:6379
+    networks:
+      - agent-net
+    depends_on:
+      - prometheus
+
+  # ===========================================================================
+  # Loki — 日志聚合 (可选)
+  # ===========================================================================
+  loki:
+    image: grafana/loki:3.3.0
+    container_name: agent-loki
+    restart: unless-stopped
+    profiles:
+      - logging
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+    networks:
+      - agent-net
+
+  # Promtail — 日志收集 (可选，配合 Loki)
+  promtail:
+    image: grafana/promtail:3.3.0
+    container_name: agent-promtail
+    restart: unless-stopped
+    profiles:
+      - logging
+    volumes:
+      - ./logs:/var/log/agent:ro
+      - ./deploy/monitoring/promtail-config.yaml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - agent-net
+
+volumes:
+  prometheus_data:
+    name: agent-prometheus-data
+  grafana_data:
+    name: agent-grafana-data
+  loki_data:
+    name: agent-loki-data
+
+networks:
+  agent-net:
+    external: true
+    name: agent-net

@@ -1,0 +1,34 @@
+{{/* =============================================================================
+  ConfigMap — Enterprise Agent 非敏感配置
+  ============================================================================= */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: config
+data:
+  ENVIRONMENT: {{ .Values.global.environment | quote }}
+  LLM_MODEL: {{ .Values.api.env.LLM_MODEL | default "qwen-plus" | quote }}
+  EMBEDDING_MODEL: {{ .Values.api.env.EMBEDDING_MODEL | default "text-embedding-v4" | quote }}
+  MILVUS_HOST: {{ .Values.externalServices.milvus.host | quote }}
+  MILVUS_PORT: {{ .Values.externalServices.milvus.port | default 19530 | quote }}
+  MILVUS_COLLECTION_NAME: "knowledge_chunks"
+  VECTOR_STORE_BACKEND: "milvus"
+  MINIO_ENDPOINT: "{{ .Values.externalServices.minio.host }}:{{ .Values.externalServices.minio.port | default 9000 }}"
+  MINIO_USE_SSL: "false"
+  MINIO_BUCKET_DOCS: "agent-docs"
+  MINIO_BUCKET_LOGS: "agent-logs"
+  RABBITMQ_EXCHANGE: "agent.tasks"
+  RABBITMQ_INFERENCE_QUEUE: "agent.inference.queue"
+  RABBITMQ_PERSIST_QUEUE: "memory.persist.queue"
+  RABBITMQ_INDEX_QUEUE: "rag.index.queue"
+  RABBITMQ_NOTIFY_QUEUE: "notify.push.queue"
+  RAG_SERVICE_URL: "http://{{ .Release.Name }}-rag.{{ .Release.Namespace }}.svc.cluster.local:8001"
+  RAG_SERVICE_TIMEOUT: "10.0"
+  LANGSMITH_TRACING: {{ .Values.api.env.LANGSMITH_TRACING | default "false" | quote }}
+  LANGSMITH_PROJECT: "enterprise-agent"
+  EVAL_LLM_JUDGE_ENABLED: {{ .Values.api.env.EVAL_LLM_JUDGE_ENABLED | default "false" | quote }}
+  EVAL_ONLINE_SAMPLING_RATE: {{ .Values.api.env.EVAL_ONLINE_SAMPLING_RATE | default "0.0" | quote }}

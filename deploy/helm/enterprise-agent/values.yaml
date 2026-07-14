@@ -1,0 +1,185 @@
+# =============================================================================
+# Helm Values — Enterprise Agent
+# 由 -staging.yaml / -prod.yaml 覆盖关键字段
+# =============================================================================
+
+nameOverride: ""
+serviceAccount:
+  create: false
+  name: ""
+
+# ---- 全局 ----
+global:
+  environment: dev
+  imagePullPolicy: IfNotPresent
+  nodeSelector: {}
+  tolerations: []
+
+# ---- 敏感配置 (Sealed Secrets / External Secrets Operator 注入) ----
+secrets:
+  openaiApiKey: ""
+  openaiApiBase: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  langsmithApiKey: ""
+
+# ---- API 服务 ----
+api:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: registry.example.com/enterprise-agent/api-service
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+  env:
+    LLM_MODEL: qwen-plus
+    EMBEDDING_MODEL: text-embedding-v4
+    LANGSMITH_TRACING: "false"
+    EVAL_LLM_JUDGE_ENABLED: "false"
+    EVAL_ONLINE_SAMPLING_RATE: "0.0"
+
+# ---- RAG 服务 ----
+rag:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: registry.example.com/enterprise-agent/rag-service
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8001
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+# ---- Agent Worker ----
+worker:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: registry.example.com/enterprise-agent/agent-worker
+    tag: latest
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 2000m
+      memory: 1024Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 60
+
+# ---- WebSocket 服务 ----
+ws:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: registry.example.com/enterprise-agent/api-service
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 60
+
+# ---- 前端 ----
+frontend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: nginx
+    tag: 1.27-alpine
+  service:
+    type: ClusterIP
+    port: 80
+
+# ---- 外部中间件连接信息 ----
+externalServices:
+  postgres:
+    host: postgres
+    port: 5432
+    database: agent
+    user: postgres
+    password: postgres
+    secretName: agent-postgres-secret
+  redis:
+    host: redis
+    port: 6379
+    secretName: agent-redis-secret
+  milvus:
+    host: milvus-standalone
+    port: 19530
+  minio:
+    host: minio
+    port: 9000
+    accessKey: minioadmin
+    secretKey: minioadmin
+    secretName: agent-minio-secret
+  rabbitmq:
+    host: rabbitmq
+    port: 5672
+    user: agent
+    password: agent
+    secretName: agent-rabbitmq-secret
+
+# ---- APISIX 网关 ----
+apisix:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: apache/apisix
+    tag: 3.14.1-debian
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 2000m
+      memory: 2048Mi
+
+# ---- Ingress 备选方案 ----
+ingress:
+  enabled: false
+  className: nginx
+  certIssuer: letsencrypt-staging
+  hosts:
+    - host: agent.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []

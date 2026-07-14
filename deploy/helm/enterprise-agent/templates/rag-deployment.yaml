@@ -1,0 +1,82 @@
+{{/* =============================================================================
+  RAG Service — Deployment + Service
+  ============================================================================= */}}
+{{- if .Values.rag.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-rag
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rag
+spec:
+  replicas: {{ .Values.rag.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "enterprise-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rag
+  template:
+    metadata:
+      labels:
+        {{- include "enterprise-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rag
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: rag
+          image: "{{ .Values.rag.image.repository }}:{{ .Values.rag.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8001
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-config
+            - secretRef:
+                name: {{ .Release.Name }}-secrets
+          resources:
+            {{- toYaml .Values.rag.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-rag
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "enterprise-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rag
+spec:
+  type: {{ .Values.rag.service.type }}
+  selector:
+    {{- include "enterprise-agent.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rag
+  ports:
+    - port: {{ .Values.rag.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+{{- end }}

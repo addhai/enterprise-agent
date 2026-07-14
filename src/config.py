@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """全局配置，从 .env 和环境变量读取"""
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # OpenAI-compatible (阿里云百炼)
     openai_api_key: str = ""
@@ -21,6 +21,33 @@ class Settings(BaseSettings):
     # Chroma
     chroma_persist_dir: str = "./chroma_data"
     chroma_collection_name: str = "knowledge_base"
+
+    # Milvus
+    milvus_host: str = "localhost"
+    milvus_port: int = 19530
+    milvus_collection_name: str = "knowledge_chunks"
+    vector_store_backend: str = "chroma"        # "chroma" | "milvus" | "auto" | "remote"
+
+    # MinIO / S3
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket_docs: str = "agent-docs"       # 文档存储桶
+    minio_bucket_logs: str = "agent-logs"       # 日志归档桶
+    minio_bucket_models: str = "agent-models"   # 模型权重桶
+    minio_use_ssl: bool = False
+
+    # RabbitMQ
+    rabbitmq_url: str = "amqp://agent:agent@localhost:5672"
+    rabbitmq_exchange: str = "agent.tasks"
+    rabbitmq_inference_queue: str = "agent.inference.queue"
+    rabbitmq_persist_queue: str = "memory.persist.queue"
+    rabbitmq_index_queue: str = "rag.index.queue"
+    rabbitmq_notify_queue: str = "notify.push.queue"
+
+    # RAG Service (远程调用)
+    rag_service_url: str = "http://localhost:8001"
+    rag_service_timeout: float = 10.0           # HTTP 调用超时 (秒)
 
     # Retrieval
     chunk_size: int = 512
