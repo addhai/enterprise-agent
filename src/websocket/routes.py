@@ -112,6 +112,48 @@ async def websocket_chat(websocket: WebSocket):
                 })
                 continue
 
+            # --- 用户主动请求转人工 ---
+            if msg_type == "human_escalation":
+                incoming_session = msg.get("session_id")
+                reason = msg.get("reason", "user_requested")
+                target_session_id = incoming_session or session_id
+
+                current_state = session_mgr.get_session(target_session_id)
+                if current_state and current_state.mode != SessionMode.HUMAN_CHAT:
+                    # 更新会话状态
+                    session_mgr.update_mode(target_session_id, SessionMode.WAITING_HUMAN)
+
+                    # 构建转接通知
+                    transfer_notice = build_transfer_notice(
+                        session_id=target_session_id,
+                        reason=f"用户主动请求转人工（{reason}）",
+                    )
+                    await websocket.send_json(transfer_notice)
+
+                    # 构建转接上下文
+                    messages_state = current_state.state.get("messages", []) if hasattr(current_state, 'state') else []
+                    handoff_ctx = build_handoff_context(
+                        session_id=target_session_id,
+                        summary=f"用户主动请求转人工: {reason}",
+                        conversation=[
+                            {"role": "user" if isinstance(m, HumanMessage) else "assistant",
+                             "content": (m.content if hasattr(m, "content") else str(m))[:500]}
+                            for m in messages_state
+                        ],
+                        user_profile={"user_id": user_id, "plan": user_plan},
+                        attempted_solutions=["AI 对话"],
+                    )
+                    await websocket.send_json(handoff_ctx)
+
+                    # 触发转接分发
+                    dispatcher = get_dispatcher()
+                    await dispatcher.handle_escalation(
+                        target_session_id,
+                        {"needs_human": True, "intent": "user_requested", "messages": messages_state},
+                        messages_state,
+                    )
+                continue
+
             # --- 聊天消息 ---
             if msg_type == TYPE_CLIENT_CHAT:
                 user_text = msg.get("message", "").strip()
@@ -175,33 +217,41 @@ async def websocket_chat(websocket: WebSocket):
                         "timestamp": time.time(),
                     })
 
-                # 检查是否已经在人工模式
+                # 检查会话状态
                 current_state = session_mgr.get_session(session_id)
-                if current_state and current_state.mode == SessionMode.HUMAN_CHAT:
-                    # 人工模式：用户发的消息转发给坐席
-                    dispatcher = get_dispatcher()
-                    transfer_id = dispatcher.get_session_transfer(session_id)
-                    if transfer_id:
-                        record = dispatcher.get_transfer_record(transfer_id)
-                        if record and record.assigned_agent:
-                            await websocket.send_json({
-                                "type": "message_received",
-                                "status": "forwarded_to_agent",
-                                "session_id": session_id,
-                                "timestamp": time.time(),
-                            })
-                            agent_ws = session_mgr.get_agent(record.assigned_agent)
-                            if agent_ws:
-                                await agent_ws.send_json({
-                                    "type": TYPE_AGENT_CHAT_MESSAGE,
+                if current_state:
+                    # 等待人工转接中：用户发消息，提示请稍候
+                    if current_state.mode == SessionMode.WAITING_HUMAN:
+                        await websocket.send_json({
+                            "type": "info",
+                            "session_id": session_id,
+                            "text": "🔄 正在为您转接人工客服，请稍候...",
+                            "timestamp": time.time(),
+                        })
+                        continue
+                    
+                    # 人工对话模式：用户发的消息转发给坐席
+                    if current_state.mode == SessionMode.HUMAN_CHAT:
+                        dispatcher = get_dispatcher()
+                        transfer_id = dispatcher.get_session_transfer(session_id)
+                        if transfer_id:
+                            record = dispatcher.get_transfer_record(transfer_id)
+                            if record and record.assigned_agent:
+                                await websocket.send_json({
+                                    "type": "message_received",
+                                    "status": "forwarded_to_agent",
                                     "session_id": session_id,
-                                    "user_message": user_text,
                                     "timestamp": time.time(),
                                 })
-                            continue
-
-                    # 坐席直接回复（不在人工模式下也允许）
-                    # 这里不做处理，坐席回复通过 agent_reply 推送
+                                agent_ws = session_mgr.get_agent(record.assigned_agent)
+                                if agent_ws:
+                                    await agent_ws.send_json({
+                                        "type": TYPE_AGENT_CHAT_MESSAGE,
+                                        "session_id": session_id,
+                                        "user_message": user_text,
+                                        "timestamp": time.time(),
+                                    })
+                                continue
 
                 # 处理 AI 对话
                 await _handle_ai_chat(
@@ -240,6 +290,8 @@ async def _handle_ai_chat(
     from src.api.routes import AgentState, HumanMessage
     from src.api.dependencies import get_workflow
 
+    start_time = time.time()
+
     # 1. 发送"正在思考"
     await websocket.send_json(build_typing_indicator(
         session_id, is_typing=True, status="正在理解您的问题...",
@@ -254,8 +306,8 @@ async def _handle_ai_chat(
             audio_base64=audio_base64,
         )
 
-        # 先展示图片识别结果给用户看
-        if display_text != message and image_base64:
+        # 先展示图片/语音识别结果给用户看
+        if display_text != message and (image_base64 or audio_base64):
             await websocket.send_json(build_streaming_chunk(
                 session_id, text=display_text, delta=display_text,
             ))
@@ -267,6 +319,12 @@ async def _handle_ai_chat(
         app = get_workflow()
 
         # 3. 构建 AgentState
+        # 从会话状态中读取上一轮的失败次数
+        session_state = session_mgr.get_session(session_id)
+        prev_failed_attempts = 0
+        if session_state:
+            prev_failed_attempts = getattr(session_state, 'failed_attempts', 0)
+        
         state = AgentState(
             messages=[HumanMessage(content=multimodal_content)],
             intent=None,
@@ -286,6 +344,8 @@ async def _handle_ai_chat(
             memory_context="",
             quality_score=None,
             access_filtered=0,
+            failed_attempts=prev_failed_attempts,
+            suggest_human=False,
         )
 
         # 4. 执行工作流（异步 offload，避免阻塞事件循环）
@@ -305,14 +365,43 @@ async def _handle_ai_chat(
         needs_human = result.get("needs_human", False)
         intent = result.get("intent", "unknown")
         quality_score = result.get("quality_score")
+        suggest_human = result.get("suggest_human", False)
+        failed_attempts = result.get("failed_attempts", 0)
+
+        # 保存失败次数和建议转人工状态到会话状态
+        if session_state:
+            session_state.failed_attempts = failed_attempts
+            session_state.suggest_human = suggest_human
 
         if final_response:
-            # 清理：彻底过滤掉 Agent 内部的 Thought/Action/Observation/Final Answer 片段
+            # 清理：彻底过滤掉 Agent 内部的 ReAct 格式标记
             import re
-            # 先移除 Thought: ... 和 Final Answer: ... 及其前面的内容
-            cleaned = re.sub(r'Thought:[^F]*(?=Final Answer:)', '', final_response, flags=re.DOTALL | re.IGNORECASE)
-            cleaned = re.sub(r'Final Answer:\s*', '', cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r'(Action:|Action Input:|Observation:).*?(?=\n\n|$)', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+            
+            # 方法1：查找 Final Answer: 的位置，只保留其后的内容
+            final_answer_match = re.search(r'Final Answer:\s*', final_response, flags=re.IGNORECASE)
+            if final_answer_match:
+                cleaned = final_response[final_answer_match.end():]
+            else:
+                # 方法2：如果没有 Final Answer，查找最后一个内部标记之后的内容
+                # 匹配所有 ReAct 标记：Question:, Thought:, Action:, Action Input:, Observation:
+                react_markers = ['Question:', 'Thought:', 'Action:', 'Action Input:', 'Observation:', 'Final Answer:']
+                last_pos = 0
+                for marker in react_markers:
+                    matches = list(re.finditer(re.escape(marker), final_response, flags=re.IGNORECASE))
+                    if matches:
+                        last_match = matches[-1]
+                        # 取标记后面的内容（跳过标记本身）
+                        marker_end = last_match.end()
+                        candidate = final_response[marker_end:].strip()
+                        # 如果这段内容看起来是真正的回答（不以其他标记开头），则使用它
+                        if candidate and not any(candidate.startswith(m) for m in react_markers):
+                            cleaned = candidate
+                            last_pos = marker_end
+                            break
+                else:
+                    # 方法3：直接删除所有内部标记及其内容
+                    cleaned = re.sub(r'(Question:|Thought:|Action:|Action Input:|Observation:).*?(?=\n\n|\n|$)', '', final_response, flags=re.DOTALL | re.IGNORECASE)
+            
             cleaned = cleaned.strip()
             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
             if cleaned:
@@ -320,7 +409,9 @@ async def _handle_ai_chat(
 
             # 流式推送：按句号/换行分段，每段推送一次（豆包风格）
             # 先按段落拆分，再按句号拆分
+            suggest_human = result.get("suggest_human", False)
             paragraphs = final_response.split('\n')
+            all_chunks = []
             for para in paragraphs:
                 if not para.strip():
                     continue
@@ -330,18 +421,22 @@ async def _handle_ai_chat(
                 for p in parts:
                     buf += p
                     if re.match(r'[。！？]$', p):
-                        await websocket.send_json(build_streaming_chunk(
-                            session_id, text=buf.strip(), delta=buf.strip(),
-                        ))
+                        all_chunks.append(buf.strip())
                         buf = ""
                 if buf.strip():
-                    await websocket.send_json(build_streaming_chunk(
-                        session_id, text=buf.strip(), delta=buf.strip(),
-                    ))
+                    all_chunks.append(buf.strip())
+            
+            # 发送所有分段，最后一段带上 suggest_human
+            for i, chunk in enumerate(all_chunks):
+                is_last = (i == len(all_chunks) - 1)
+                await websocket.send_json(build_streaming_chunk(
+                    session_id, text=chunk, delta=chunk,
+                    suggest_human=suggest_human if is_last else False,
+                ))
 
             # 完成标记
             await websocket.send_json(build_streaming_chunk(
-                session_id, text="", done=True,
+                session_id, text="", done=True, suggest_human=suggest_human,
             ))
 
         # 7. 如果需要转人工
@@ -385,6 +480,29 @@ async def _handle_ai_chat(
                 "text": f"[注：本次检索有 {access_filtered} 条结果因权限不足被过滤]",
                 "timestamp": time.time(),
             })
+
+        # 9. 记录业务指标
+        try:
+            from src.evaluation.tracker import get_evaluation_tracker
+            tracker = get_evaluation_tracker()
+            end_time = time.time()
+            latency_ms = (end_time - (start_time if 'start_time' in locals() else end_time)) * 1000
+            quality_score = result.get("quality_score")
+            intent = result.get("intent", "unknown")
+            turn_count = result.get("turn_count", 1)
+            resolved = not needs_human and quality_score is not None and quality_score > 0.3
+            tracker.record_chat(
+                session_id=session_id,
+                intent=intent,
+                latency_ms=latency_ms,
+                quality_score=quality_score,
+                needs_human=needs_human,
+                suggest_human=suggest_human,
+                turn_count=turn_count,
+                resolved=resolved,
+            )
+        except Exception as e:
+            logger.warning("Failed to record metrics: %s", e)
 
     except Exception as e:
         logger.exception("Error processing chat: session=%s", session_id)

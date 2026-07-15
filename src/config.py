@@ -105,5 +105,70 @@ class Settings(BaseSettings):
     # False: 仅存 chapter_path + heading_level + heading_text（默认，节省存储）
     # True: 额外存储 outline 完整树 JSON（支持按章节路由，增加存储开销）
 
+    # ---- 外部 MCP 集成服务配置 ----
+
+    # PostgreSQL MCP
+    mcp_pg_enabled: bool = False
+    mcp_pg_host: str = "localhost"
+    mcp_pg_port: int = 5432
+    mcp_pg_database: str = "agent"
+    mcp_pg_user: str = "postgres"
+    mcp_pg_password: str = ""
+    mcp_pg_read_only: bool = True              # 只读模式（禁止 DROP/DELETE 等危险操作）
+
+    # 钉钉 MCP
+    mcp_dingtalk_enabled: bool = False
+    mcp_dingtalk_app_key: str = ""
+    mcp_dingtalk_app_secret: str = ""
+    mcp_dingtalk_agent_id: str = ""
+
+    # GitHub MCP
+    mcp_github_enabled: bool = False
+    mcp_github_token: str = ""
+    mcp_github_default_owner: str = ""         # 默认仓库所有者
+    mcp_github_default_repo: str = ""          # 默认仓库名
+
+    # Email MCP
+    mcp_email_enabled: bool = False
+    mcp_email_smtp_host: str = "smtp.example.com"
+    mcp_email_smtp_port: int = 587
+    mcp_email_smtp_ssl: bool = False
+    mcp_email_imap_host: str = "imap.example.com"
+    mcp_email_imap_port: int = 993
+    mcp_email_imap_ssl: bool = True
+    mcp_email_username: str = ""
+    mcp_email_password: str = ""
+    mcp_email_from_addr: str = ""              # 发件人地址
+
+    # Calendar MCP
+    mcp_calendar_enabled: bool = False
+    mcp_calendar_provider: str = "ical"        # ical / google / outlook
+    mcp_calendar_ical_url: str = ""            # iCal 订阅地址
+    mcp_calendar_timezone: str = "Asia/Shanghai"
+
+    # 文件系统 MCP
+    mcp_fs_enabled: bool = False
+    mcp_fs_root_dir: str = "./fs_mount"        # 允许访问的根目录（沙箱）
+    mcp_fs_allow_write: bool = False           # 是否允许写入操作
+
+    # Slack MCP
+    mcp_slack_enabled: bool = False
+    mcp_slack_token: str = ""                  # Slack API Token
+
+
+    # ---- A2A 专家 Agent 配置 ----
+    a2a_perf_expert_url: str = "http://localhost:9002"       # 性能诊断专家 Agent
+    a2a_perf_expert_enabled: bool = True
+    a2a_security_expert_url: str = "http://localhost:9003"   # 安全审计专家 Agent
+    a2a_security_expert_enabled: bool = True
+    a2a_orchestrator_url: str = "http://localhost:9000"      # Orchestrator Agent
+    a2a_orchestrator_enabled: bool = True
+    a2a_expert_timeout: int = 30                              # A2A 委托超时秒数
+
+    # ---- 外部 MCP 消费配置（客服 Agent 作为 Client）----
+    mcp_client_github_url: str = ""                           # GitHub MCP Server URL (如 http://localhost:9000/mcp)
+    mcp_client_slack_url: str = ""                            # Slack MCP Server URL
+    mcp_client_timeout: int = 30                              # MCP Client 超时秒数
+
 
 settings = Settings()

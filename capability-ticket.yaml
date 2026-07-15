@@ -1,0 +1,194 @@
+name: capability.mcp.enterprise
+version: 2.0.0
+title: Enterprise MCP Capabilities
+description: |
+  企业级 MCP 能力清单：通过 Model Context Protocol 暴露的全部工具能力，
+  包含工单管理、账单订阅、用户管理、SSO 配置、API Key 管理、审计日志、知识库管理。
+owner:
+  team: enterprise-agent
+  contact: dev-oncall@example.com
+contract:
+  api:
+    type: mcp
+    endpoint: http://localhost:9000/mcp
+    protocol: Model Context Protocol (MCP) over HTTP
+    altEndpoints:
+      - http://localhost:9005/mcp        # ticket-only
+      - http://localhost:9010/mcp        # admin-only
+      - http://localhost:9011/mcp        # billing-only
+  capabilities:
+    - name: ticket-management
+      description: 工单全生命周期管理
+      tools:
+        - name: ticket_create
+          description: 创建工单（支持幂等）
+          roles: [any]
+        - name: ticket_query
+          description: 查询工单详情
+          roles: [owner, admin]
+        - name: ticket_list
+          description: 列出工单（支持过滤）
+          roles: [owner, admin]
+        - name: ticket_update
+          description: 更新工单字段
+          roles: [admin, support_agent]
+        - name: ticket_close
+          description: 关闭工单并记录解决方案
+          roles: [admin, support_agent]
+        - name: ticket_add_comment
+          description: 追加评论/跟进记录
+          roles: [owner, admin, support_agent]
+
+    - name: billing-subscription
+      description: 账单与订阅管理（对接 capability.payment.deduction）
+      tools:
+        - name: billing_query_subscription
+          description: 查询订阅信息
+          roles: [any]
+        - name: billing_change_plan
+          description: 变更订阅计划
+          roles: [admin, billing_manager]
+        - name: billing_refund
+          description: 发起退款申请
+          roles: [admin, billing_manager]
+        - name: billing_list_transactions
+          description: 列出交易记录
+          roles: [any]
+        - name: billing_deduct
+          description: 执行扣款（幂等）
+          roles: [admin, billing_manager]
+
+    - name: user-management
+      description: 用户账号管理
+      tools:
+        - name: user_get_profile
+          description: 查询用户信息
+          roles: [self, admin]
+        - name: user_reset_password
+          description: 重置用户密码
+          roles: [admin]
+        - name: user_disable_account
+          description: 禁用用户账号
+          roles: [admin]
+        - name: user_list
+          description: 列出租户内用户
+          roles: [admin]
+        - name: user_update_profile
+          description: 更新用户资料
+          roles: [admin]
+
+    - name: sso-configuration
+      description: SSO 单点登录配置（SAML/OIDC）
+      tools:
+        - name: sso_configure
+          description: 配置 SSO 提供商
+          roles: [admin]
+        - name: sso_list_providers
+          description: 列出 SSO 提供商
+          roles: [any]
+        - name: sso_test_connection
+          description: 测试 SSO 连接
+          roles: [admin]
+        - name: sso_enable
+          description: 启用 SSO 配置
+          roles: [admin]
+        - name: sso_disable
+          description: 禁用 SSO 配置
+          roles: [admin]
+
+    - name: api-key-management
+      description: API Key 生命周期管理
+      tools:
+        - name: api_key_generate
+          description: 生成 API Key
+          roles: [admin]
+        - name: api_key_revoke
+          description: 吊销 API Key
+          roles: [admin]
+        - name: api_key_list
+          description: 列出 API Key
+          roles: [admin]
+        - name: api_key_get
+          description: 查询 API Key 详情
+          roles: [admin]
+        - name: api_key_rotate
+          description: 轮换 API Key
+          roles: [admin]
+
+    - name: audit-logging
+      description: 审计日志查询与导出
+      tools:
+        - name: audit_query_logs
+          description: 查询审计日志
+          roles: [admin]
+        - name: audit_export_report
+          description: 导出审计报告
+          roles: [admin]
+        - name: audit_search_by_user
+          description: 按用户查询日志
+          roles: [admin]
+        - name: audit_get_log_details
+          description: 获取日志详情
+          roles: [admin]
+
+    - name: knowledge-base
+      description: RAG 知识库管理
+      tools:
+        - name: kb_ingest_document
+          description: 导入文档到知识库
+          roles: [admin]
+        - name: kb_rebuild_index
+          description: 重建知识库索引
+          roles: [admin]
+        - name: kb_list_items
+          description: 列出知识库文档
+          roles: [admin]
+        - name: kb_delete_item
+          description: 删除知识库文档
+          roles: [admin]
+        - name: kb_search
+          description: 搜索知识库
+          roles: [any]
+
+  idempotency:
+    strategy: store-result
+    appliesTo: [ticket_create, billing_deduct]
+  auth:
+    scheme: role-based
+    description: |
+      MCP 调用者通过 user_id + tenant_id + roles 注入身份上下文。
+      tenant_id 由后端强制注入，LLM 无法跨租户越权。
+  rateLimit:
+    requestsPerSecond: 50
+    burst: 100
+  sla:
+    p95_latency_ms: 100
+    availability: 99.9
+metrics:
+  - name: mcp_tool_calls_total
+    type: counter
+    labels: [tool_name, tenant_id, status]
+  - name: mcp_tool_latency_ms
+    type: histogram
+    labels: [tool_name]
+  - name: mcp_permission_denied_total
+    type: counter
+    labels: [tool_name, reason]
+tests:
+  contractTests:
+    - name: tool_discovery
+      description: MCP 客户端应能发现全部 38 个工具
+    - name: cross_tenant_isolation
+      description: 不同租户数据互不可见
+    - name: idempotency_ticket_create
+      description: 相同 idempotency_key 重复调用返回同一工单
+    - name: role_based_access
+      description: 无权限角色调用受保护工具应被拒绝
+deploy:
+  blueGreenSupported: true
+  canaryPercent: 10
+notes:
+  docs: src/mcp_tools/
+  changelog: CHANGELOG.md
+  relatedContracts:
+    - capability.payment.deduction

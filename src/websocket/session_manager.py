@@ -58,6 +58,10 @@ class SessionState:
     heartbeat_timeout: float = 30.0
     # WebSocket 连接引用（用于坐席回复推送）
     _websocket_ref: Any = None
+    # 连续无法回答的次数（用于判断是否建议转人工）
+    failed_attempts: int = 0
+    # 是否建议转人工（供前端显示按钮）
+    suggest_human: bool = False
 
 
 class WebSocketSessionManager:

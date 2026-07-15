@@ -91,6 +91,7 @@ def build_streaming_chunk(
     text: str,
     done: bool = False,
     delta: Optional[str] = None,
+    suggest_human: bool = False,
 ) -> Dict[str, Any]:
     """构建流式输出片段"""
     return build_server_message(
@@ -99,6 +100,7 @@ def build_streaming_chunk(
         text=text,
         done=done,
         delta=delta or text,
+        suggest_human=suggest_human,
     )
 
 

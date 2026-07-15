@@ -323,9 +323,10 @@ interface ChatMessage {
   timestamp: number
   image?: string
   audio?: string
+  suggestHuman?: boolean
 }
 
-const WS_URL = 'ws://127.0.0.1:8000/ws/chat'
+const WS_URL = '/ws/chat'
 
 const QUICK_QUESTIONS = [
   { icon: '🔐', text: '如何重置密码？' },
@@ -380,12 +381,31 @@ function FloatingChatWidget() {
             setMessages(prev => {
               const last = prev[prev.length - 1]
               if (last && last.role === 'assistant') {
+                const newContent = last.content + data.delta
+                const shouldShowButton = data.suggest_human || 
+                  newContent.includes('点击下方按钮转接人工客服') ||
+                  newContent.includes('转接人工客服')
                 const updated = [...prev]
-                updated[updated.length - 1] = { ...last, content: last.content + data.delta }
+                updated[updated.length - 1] = { 
+                  ...last, 
+                  content: newContent,
+                  suggestHuman: shouldShowButton ? true : last.suggestHuman,
+                }
                 return updated
               }
               return [...prev, { id: crypto.randomUUID(), role: 'assistant', content: data.delta, timestamp: Date.now() }]
             })
+          } else if (data.done) {
+            if (data.suggest_human) {
+              setMessages(prev => {
+                const updated = [...prev]
+                const lastIdx = updated.length - 1
+                if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+                  updated[lastIdx] = { ...updated[lastIdx], suggestHuman: true }
+                }
+                return updated
+              })
+            }
           }
         } else if (data.type === 'transfer_notice') {
           setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '🔄 ' + (data.message || '正在转接人工客服...'), timestamp: Date.now() }])
@@ -397,6 +417,7 @@ function FloatingChatWidget() {
           setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '✅ 消息已发送给人工客服', timestamp: Date.now() }])
         } else if (data.type === 'info') {
           setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: 'ℹ️ ' + (data.text || ''), timestamp: Date.now() }])
+          setIsTyping(false)
         } else if (data.type === 'error') {
           setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '❌ ' + (data.error_message || '发生错误'), timestamp: Date.now() }])
           setIsTyping(false)
@@ -434,6 +455,21 @@ function FloatingChatWidget() {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
+  }
+
+  const handleHumanEscalate = (_msgId: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    wsRef.current.send(JSON.stringify({
+      type: 'human_escalation',
+      session_id: sessionId,
+      reason: 'user_requested',
+    }))
+    setMessages(prev => [...prev, {
+      id: crypto.randomUUID(),
+      role: 'system',
+      content: '🔄 正在为您转接人工客服...',
+      timestamp: Date.now(),
+    }])
   }
 
   const handleQuickQuestion = (text: string) => { setInput(text); setTimeout(() => sendMessage(), 100) }
@@ -541,6 +577,11 @@ function FloatingChatWidget() {
                     {msg.image && <div className="chat-msg-image"><img src={msg.image} alt="" /></div>}
                     {msg.audio && <div className="chat-msg-audio"><audio controls src={msg.audio} /></div>}
                     {msg.content && <p className="chat-msg-text">{msg.content}</p>}
+                    {msg.role === 'assistant' && msg.suggestHuman && (
+                      <button className="human-escalate-btn" onClick={() => handleHumanEscalate(msg.id)}>
+                        🔧 转接人工客服
+                      </button>
+                    )}
                     <span className="chat-msg-time">{formatTime(msg.timestamp)}</span>
                   </div>
                   {msg.role === 'user' && (

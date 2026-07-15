@@ -16,7 +16,7 @@ from src.rag.vision_engines import VisionEngineRegistry
 logger = logging.getLogger(__name__)
 
 
-@register_vision_engine("qwen")
+@VisionEngineRegistry.register_vision("qwen")
 class QwenVisionEngine(BaseVisionEngine):
     """阿里百炼 Qwen-VL 视觉理解引擎
 

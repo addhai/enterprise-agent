@@ -45,13 +45,23 @@ async def get_all_metrics():
 async def get_business_metrics():
     """业务指标"""
     if get_evaluation_tracker is None:
-        return {"error": "not available"}
+        return {
+            "total_requests": 0,
+            "resolved": 0,
+            "unresolved": 0,
+            "resolution_rate": 0,
+            "escalation_rate": 0,
+            "avg_turns": 0,
+        }
     tracker = get_evaluation_tracker()
     stats = tracker.stats()
     return {
         "total_requests": stats.get("total_requests", 0),
+        "resolved": stats.get("resolved", 0),
+        "unresolved": stats.get("unresolved", 0),
+        "resolution_rate": stats.get("resolution_rate", 0),
         "escalation_rate": stats.get("escalation_rate", 0),
-        "avg_latency_ms": stats.get("avg_latency_ms", 0),
+        "avg_turns": stats.get("avg_turns", 0),
     }
 
 

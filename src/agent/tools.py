@@ -9,26 +9,73 @@ logger = logging.getLogger(__name__)
 
 
 # 简单的内存 FAQ 存储（用于 search_faq 工具）
-_FAQ_STORE = {
-    "reset password": "To reset your password: Go to Login > Forgot Password. Enter your email. Check your inbox for a reset link valid for 30 minutes.",
-    "change plan": "To change your plan: Go to Settings > Billing > Change Plan. Upgrade takes effect immediately. Downgrade takes effect at the end of the billing cycle.",
-    "cancel subscription": "To cancel: Go to Settings > Billing > Cancel Subscription. You retain access until the end of the billing period.",
-    "api key": "To get an API Key: Go to Console > Developer Settings > API Keys > Generate New Key. Copy immediately — it won't be shown again.",
-    "403 error": "403 errors mean access denied. Common causes: 1) Invalid/expired API Key, 2) Domain not whitelisted, 3) CORS configuration missing.",
-    "sso": "CloudSync supports SSO via Okta, Azure AD, Google Workspace, and custom SAML 2.0. Go to Settings > SSO to configure.",
-    "encryption": "CloudSync encrypts data in transit (TLS 1.3) and at rest (AES-256). Enterprise plans include customer-managed encryption keys.",
-    "two factor": "Enable 2FA at Settings > Security > Two-Factor Authentication. Choose authenticator app or SMS.",
-    "sync not working": "Check: 1) Providers are authenticated, 2) Available storage, 3) The files are not locked by another process.",
-    "pricing": "Plans: Free (5GB, 2 providers), Pro ($15/mo, 100GB, 5 providers), Enterprise ($50/user/mo, unlimited).",
-}
+_FAQ_STORE = [
+    {
+        "keywords": ["你好", "您好", "hello", "hi", "嗨", "在吗", "在不"],
+        "answer": "你好！我是智能客服小助手，有什么可以帮您的？",
+    },
+    {
+        "keywords": ["谢谢", "感谢", "thank you", "thanks", "多谢"],
+        "answer": "不客气！如果还有其他问题，随时问我哦～",
+    },
+    {
+        "keywords": ["再见", "拜拜", "bye", "goodbye", "88"],
+        "answer": "再见！祝您生活愉快，有问题随时回来找我～",
+    },
+    {
+        "keywords": ["reset password", "forgot password", "密码重置", "忘记密码", "重置密码"],
+        "answer": "重置密码：登录页面点击「忘记密码」，输入邮箱，查收重置链接（有效期30分钟）。",
+    },
+    {
+        "keywords": ["change plan", "upgrade", "降级", "升级", "变更套餐", "切换方案"],
+        "answer": "变更方案：进入「设置」>「账单」>「变更方案」。升级立即生效，降级在账单周期结束时生效。",
+    },
+    {
+        "keywords": ["cancel subscription", "取消订阅", "退订"],
+        "answer": "取消订阅：进入「设置」>「账单」>「取消订阅」。取消后仍可使用至账单周期结束。",
+    },
+    {
+        "keywords": ["api key", "apikey", "API密钥", "生成密钥"],
+        "answer": "获取 API Key：进入「控制台」>「开发者设置」>「API Keys」>「生成新密钥」。请立即复制，密钥只显示一次。",
+    },
+    {
+        "keywords": ["403 error", "403", "权限拒绝", "拒绝访问"],
+        "answer": "403 错误表示访问被拒绝。常见原因：1) API Key 无效或已过期 2) 域名未加入白名单 3) CORS 配置缺失。",
+    },
+    {
+        "keywords": ["sso", "单点登录", "Okta", "Azure AD", "Google Workspace"],
+        "answer": "CloudSync 支持 SSO 单点登录，包括 Okta、Azure AD、Google Workspace 和自定义 SAML 2.0。进入「设置」>「SSO」配置。",
+    },
+    {
+        "keywords": ["encryption", "加密", "数据安全", "TLS", "AES"],
+        "answer": "CloudSync 对数据进行端到端加密：传输中使用 TLS 1.3，存储时使用 AES-256。企业版支持客户托管加密密钥。",
+    },
+    {
+        "keywords": ["two factor", "2fa", "双因素认证", "二次验证"],
+        "answer": "启用双因素认证：进入「设置」>「安全」>「双因素认证」。选择认证器应用或短信，输入验证码确认。",
+    },
+    {
+        "keywords": ["sync not working", "同步失败", "同步不工作", "同步问题"],
+        "answer": "同步问题排查：1) 检查连接的服务提供商是否已认证 2) 确认有可用存储空间 3) 文件没有被其他进程锁定。",
+    },
+    {
+        "keywords": ["pricing", "定价", "价格", "套餐"],
+        "answer": "定价方案：免费版（5GB，2个提供商）、专业版（15元/月，100GB，5个提供商）、企业版（50元/用户/月，无限）。",
+    },
+    {
+        "keywords": ["支持哪些LLM", "大模型", "模型", "llm", "LLM", "Qwen", "千问", "模型支持"],
+        "answer": "目前支持阿里云千问系列模型，包括：qwen-plus（主力对话模型）、qwen-max（复杂推理）、qwen-vl-plus（图片识别）、text-embedding-v4（向量嵌入）。语音识别使用 whisper-large-v3 模型。后续将接入更多大模型供应商。",
+    },
+]
 
 
 def _faq_search(query: str) -> Optional[str]:
-    """简单的 FAQ 关键词匹配"""
+    """简单的 FAQ 关键词匹配（支持中英文）"""
     query_lower = query.lower()
-    for keyword, answer in _FAQ_STORE.items():
-        if keyword in query_lower:
-            return answer
+    for item in _FAQ_STORE:
+        for keyword in item["keywords"]:
+            if keyword.lower() in query_lower:
+                return item["answer"]
     return None
 
 
@@ -799,4 +846,86 @@ def create_tools(
 
         return f"[Escalated to Human] 已为您转接人工客服。转接原因：{reason}。请稍候，客服专员将很快为您服务。"
 
-    return [search_knowledge_base, search_faq, escalate_to_human]
+    tools = [search_knowledge_base, search_faq, escalate_to_human]
+
+    # 专家 Agent 委托工具（A2A）— 性能诊断 + 安全审计
+    try:
+        from src.protocols.a2a_server import create_expert_delegation_tools
+        expert_tools = create_expert_delegation_tools()
+        tools.extend(expert_tools)
+    except (ImportError, NameError) as e:
+        logger.warning("Expert delegation tools not available: %s", e)
+
+    # 外部 MCP 消费工具 — 客服 Agent 作为 Client 调用外部 MCP Server（GitHub/Slack）
+    try:
+        from src.protocols.mcp_client import create_mcp_client, call_external_mcp_tool
+        from src.config import settings
+        from src.mcp_tools.common import format_result
+
+        @tool
+        def call_external_github_tool(tool_name: str, arguments: str = "") -> str:
+            """调用外部 GitHub MCP Server 上的工具。
+
+            何时使用：需要查询 GitHub 仓库信息、Issue、PR、代码内容时。
+            外部 MCP Server URL 在配置中设置（mcp_client_github_url）。
+
+            Args:
+                tool_name: 外部工具名称，如 github_get_repo, github_list_issues, github_create_issue
+                arguments: 工具参数（JSON 字符串），如 {"owner": "cloudsync", "repo": "core"}
+            """
+            if not settings.mcp_client_github_url:
+                return format_result("配置错误", "外部 GitHub MCP URL 未配置，请设置 mcp_client_github_url")
+
+            import json
+            try:
+                args = json.loads(arguments) if arguments else {}
+            except json.JSONDecodeError:
+                return format_result("参数错误", "arguments 必须是有效的 JSON 字符串")
+
+            result = call_external_mcp_tool(
+                settings.mcp_client_github_url,
+                tool_name,
+                args,
+                timeout=settings.mcp_client_timeout,
+            )
+
+            if result:
+                return f"[外部 GitHub MCP 工具结果]\n{result}"
+            return "[调用失败] 无法调用外部 GitHub MCP 工具，请检查服务是否可用。"
+
+        @tool
+        def call_external_slack_tool(tool_name: str, arguments: str = "") -> str:
+            """调用外部 Slack MCP Server 上的工具。
+
+            何时使用：需要发送 Slack 消息、查询频道、搜索消息时。
+            外部 MCP Server URL 在配置中设置（mcp_client_slack_url）。
+
+            Args:
+                tool_name: 外部工具名称，如 slack_send_message, slack_list_channels, slack_search_messages
+                arguments: 工具参数（JSON 字符串），如 {"channel": "#general", "text": "Hello"}
+            """
+            if not settings.mcp_client_slack_url:
+                return format_result("配置错误", "外部 Slack MCP URL 未配置，请设置 mcp_client_slack_url")
+
+            import json
+            try:
+                args = json.loads(arguments) if arguments else {}
+            except json.JSONDecodeError:
+                return format_result("参数错误", "arguments 必须是有效的 JSON 字符串")
+
+            result = call_external_mcp_tool(
+                settings.mcp_client_slack_url,
+                tool_name,
+                args,
+                timeout=settings.mcp_client_timeout,
+            )
+
+            if result:
+                return f"[外部 Slack MCP 工具结果]\n{result}"
+            return "[调用失败] 无法调用外部 Slack MCP 工具，请检查服务是否可用。"
+
+        tools.extend([call_external_github_tool, call_external_slack_tool])
+    except (ImportError, NameError) as e:
+        logger.warning("External MCP client tools not available: %s", e)
+
+    return tools

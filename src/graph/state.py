@@ -65,3 +65,9 @@ class AgentState(TypedDict):
 
     # 攻击类型（仅在被拦截时）
     injection_type: Optional[str]
+
+    # 连续无法回答的次数（用于判断是否建议转人工）
+    failed_attempts: int
+
+    # 是否建议转人工（供前端显示按钮，用户点击后才真正转人工）
+    suggest_human: bool

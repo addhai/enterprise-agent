@@ -162,8 +162,8 @@ def build_handoff_context(
     profile["access_levels"] = access_levels
 
     # 4. 转接原因
-    last_message = messages[-1].content if messages else ""
-    if hasattr(messages[-1], "content"):
+    last_message = ""
+    if messages and hasattr(messages[-1], "content"):
         last_message = messages[-1].content
 
     needs_human = state.get("needs_human", False)
