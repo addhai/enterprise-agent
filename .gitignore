@@ -13,3 +13,9 @@ chk_rf2/
 chroma_e2e_test/
 test_chroma/
 test_chroma_full/
+node_modules/
+logs/
+__pycache__/
+*.pyc
+.pytest_cache/
+static/
