@@ -332,59 +332,6 @@ class PermissionChecker:
             logger.warning("Authority refresh failed: %s", e)
             return None
 
-    def check(self, tool_name: str, resource_scope: Optional[str] = None) -> bool:
-        """检查用户是否有权限调用此工具
-
-        缓存策略：
-            1. 只读工具 → 用缓存快照（快）
-            2. 敏感工具 → 先查缓存，缓存命中且未过期 → 用缓存
-                            缓存未命中或过期 → 调权威数据源
-        """
-        # 规则 1: 只读工具（搜索/FAQ）对所有用户开放
-        if tool_name in ("search_knowledge_base", "search_faq"):
-            return True
-
-        # 规则 2: 转人工需要确认身份
-        if tool_name == "escalate_to_human":
-            # 敏感操作 → 强制查权威数据源
-            if self._authority_source:
-                fresh = self._refresh_authority()
-                if fresh:
-                    self.roles = fresh.get("roles", [])
-                    self.plan = fresh.get("plan", "free")
-                    self.access_levels = fresh.get("access_levels", ["public"])
-
-            if not self.user_id or self.user_id == "anonymous":
-                self._audit("ESCALATE_DENIED", tool_name, "anonymous user")
-                return False
-            return True
-
-        # 规则 3: 受限工具（未来扩展）
-        restricted_tools = {
-            "manage_billing": ["admin", "billing_manager"],
-            "manage_users": ["admin"],
-            "manage_sso": ["admin"],
-        }
-        if tool_name in restricted_tools:
-            # 敏感操作 → 强制查权威数据源
-            if self._authority_source:
-                fresh = self._refresh_authority()
-                if fresh:
-                    self.roles = fresh.get("roles", [])
-                    self.plan = fresh.get("plan", "free")
-                    self.access_levels = fresh.get("access_levels", ["public"])
-
-            required_roles = restricted_tools[tool_name]
-            if not any(r in self.roles for r in required_roles):
-                self._audit("TOOL_DENIED", tool_name, f"missing roles: {required_roles}")
-                return False
-
-        # 规则 4: 资源级权限
-        if resource_scope:
-            return self._check_resource_permission(resource_scope)
-
-        return True
-
     def validate_params(
         self, tool_name: str, params: dict
     ) -> tuple[bool, str]:

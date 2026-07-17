@@ -12,7 +12,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 from src.websocket.session_manager import get_session_manager, SessionMode
 from src.config import settings
-from src.api.rbac import require_permissions, Permission
+from src.api.rbac import require_roles, Role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
@@ -145,11 +145,11 @@ async def delete_user_session(
 
 @router.get("/admin/sessions")
 async def get_admin_sessions(
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.AGENT_WORKSPACE))
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取所有用户的会话列表（管理员版）
     
-    需要 admin/agent 权限
+    需要 admin/agent 角色
     """
     session_mgr = get_session_manager()
     sessions = session_mgr._sessions.values()
@@ -162,12 +162,12 @@ async def get_admin_sessions(
 @router.get("/admin/sessions/{session_id}")
 async def get_admin_session_detail(
     session_id: str = Path(..., description="会话 ID"),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.AGENT_WORKSPACE)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取会话详情（管理员版）
     
     包含会话基本信息和完整的历史消息
-    需要 admin/agent 权限
+    需要 admin/agent 角色
     """
     session_mgr = get_session_manager()
     session = session_mgr.get_session(session_id)
@@ -179,10 +179,11 @@ async def get_admin_session_detail(
 
 @router.get("/admin/channels")
 async def get_channels(
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.CHANNEL_VIEW))
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """获取已启用的渠道列表
     
+    需要 admin 角色
     web 渠道始终启用，feishu 渠道根据配置决定
     """
     channels = [
@@ -212,11 +213,12 @@ async def get_channels(
 
 @router.get("/admin/handoff/queue")
 async def get_handoff_queue(
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.AGENT_WORKSPACE))
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取转接人工客服队列
     
     返回所有等待人工接入的会话，按等待时间排序
+    需要 admin/agent 角色
     """
     session_mgr = get_session_manager()
     all_sessions = list(session_mgr._sessions.values())
@@ -252,11 +254,12 @@ async def get_handoff_queue(
 async def accept_handoff(
     session_id: str = Path(..., description="会话 ID"),
     agent_id: str = Body(default="admin", embed=True),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.AGENT_WORKSPACE)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """人工坐席接入会话
 
     坐席点击接入后，会话状态从 waiting_human 变为 human_chat
+    需要 admin/agent 角色
     """
     session_mgr = get_session_manager()
     session = session_mgr.get_session(session_id)
@@ -293,11 +296,12 @@ async def agent_reply(
     session_id: str = Path(..., description="会话 ID"),
     message: str = Body(..., embed=True),
     agent_id: str = Body(default="admin", embed=True),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.AGENT_WORKSPACE)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """人工坐席发送回复消息
 
     将人工客服的回复发送给用户，并记录到对话历史中
+    需要 admin/agent 角色
     """
     session_mgr = get_session_manager()
     session = session_mgr.get_session(session_id)
@@ -342,11 +346,12 @@ async def agent_reply(
 async def close_handoff(
     session_id: str = Path(..., description="会话 ID"),
     agent_id: str = Body(default="admin", embed=True),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.AGENT_WORKSPACE)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """结束人工服务，将会话转回 AI 或关闭
 
     人工客服结束服务后，可选择转回 AI 或结束会话
+    需要 admin/agent 角色
     """
     session_mgr = get_session_manager()
     session = session_mgr.get_session(session_id)

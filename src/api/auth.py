@@ -1,7 +1,7 @@
 """
 用户认证 API — 注册、登录、获取当前用户信息
 
-使用内存存储用户数据（简单起见，用 dict），password 用 hash
+使用内存存储用户数据（简单起见，用 dict），password 用 bcrypt 哈希
 token 用简单的随机字符串 + 用户信息映射
 """
 import os
@@ -13,6 +13,9 @@ import logging
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Header, Depends
 from pydantic import BaseModel, Field
+
+# bcrypt 用于安全的密码哈希（替代不安全的 SHA-256）
+import bcrypt
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -52,10 +55,49 @@ def _init_default_admin():
         logger.info("Default admin account created: username=admin password=admin123")
 
 
-def _hash_password(password: str) -> str:
-    """密码哈希（使用 SHA-256 + salt）"""
+def hash_password(password: str) -> str:
+    """使用bcrypt哈希密码"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """验证密码（优先bcrypt，兼容旧版SHA-256哈希）
+
+    兼容逻辑：如果bcrypt验证失败，尝试旧版SHA-256验证，
+    用于平滑迁移已存在的SHA-256用户数据。
+    """
+    # 优先尝试 bcrypt 验证
+    try:
+        if bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8')):
+            return True
+    except Exception:
+        # hashed_password 不是合法的 bcrypt 哈希（可能是旧版 SHA-256），继续尝试兼容验证
+        pass
+    # 兼容旧版 SHA-256 哈希验证
+    if _legacy_sha256_verify(plain_password, hashed_password):
+        return True
+    return False
+
+
+def _legacy_sha256_hash(password: str) -> str:
+    """旧版 SHA-256 哈希（仅用于兼容已存在的用户数据，不再用于新密码）"""
     salt = "enterprise-agent-salt-2024"
     return hashlib.sha256((salt + password).encode()).hexdigest()
+
+
+def _legacy_sha256_verify(plain_password: str, hashed_password: str) -> bool:
+    """旧版 SHA-256 验证"""
+    return _legacy_sha256_hash(plain_password) == hashed_password
+
+
+def _needs_upgrade(hashed_password: str) -> bool:
+    """判断密码哈希是否需要升级为bcrypt（即仍是旧版SHA-256）"""
+    return not hashed_password.startswith("$2")
+
+
+def _hash_password(password: str) -> str:
+    """密码哈希（兼容旧调用入口，内部使用bcrypt）"""
+    return hash_password(password)
 
 
 def _generate_token() -> str:
@@ -214,9 +256,14 @@ async def login(request: LoginRequest):
     if not user:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    # 验证密码
-    if user["password_hash"] != _hash_password(password):
+    # 验证密码（支持bcrypt，兼容旧版SHA-256）
+    if not verify_password(password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    # 自动升级：将旧版SHA-256哈希升级为bcrypt
+    if _needs_upgrade(user["password_hash"]):
+        user["password_hash"] = hash_password(password)
+        logger.info("Password hash upgraded to bcrypt for user: %s", user["user_id"])
 
     # 检查用户状态
     if user.get("status") == UserStatus.SUSPENDED.value:

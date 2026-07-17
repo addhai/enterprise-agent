@@ -1,4 +1,4 @@
-﻿"""知识库管理 MCP 工具 — ingest_document / rebuild_index / list_kb_items / delete_kb_item"""
+"""知识库管理 MCP 工具 — ingest_document / rebuild_index / list_kb_items / delete_kb_item"""
 import logging
 from enum import Enum
 from typing import Callable, List, Optional
@@ -181,10 +181,63 @@ def create_kb_tools(
         if not checker.check("kb_search"):
             return format_result("权限不足", "您没有权限搜索知识库")
 
-        lines = [f"[搜索结果] 关于 '{query}' 的匹配文档:"]
-        lines.append("  • KB-ABCD12 | SSO 配置指南 | 相似度: 0.92")
-        lines.append("  • KB-EFGH34 | API 接入文档 | 相似度: 0.85")
-        lines.append("  • KB-IJKL56 | 常见问题解答 | 相似度: 0.78")
+        # 延迟导入，避免在 RAG 依赖缺失时整个模块加载失败
+        try:
+            from src.rag.retriever import HybridRetriever
+        except ImportError as e:
+            logger.warning("HybridRetriever 导入失败: %s", e)
+            return format_result(
+                "服务不可用",
+                "知识库检索器未安装，无法执行搜索。请联系管理员或转人工客服。",
+            )
+
+        # 优先复用全局 retriever 单例（向量库已初始化），否则尝试新建
+        retriever = None
+        try:
+            from src.api.dependencies import get_retriever
+            retriever = get_retriever()
+        except Exception as e:
+            logger.debug("全局 retriever 不可用，尝试新建: %s", e)
+            try:
+                retriever = HybridRetriever()
+            except Exception as e:
+                logger.warning("HybridRetriever 初始化失败: %s", e)
+                retriever = None
+
+        if retriever is None:
+            return format_result(
+                "服务不可用",
+                "知识库检索器暂未初始化（向量库可能未就绪），请稍后重试或转人工客服。",
+            )
+
+        # 真正执行混合检索（向量 + BM25 + RRF）
+        try:
+            results = retriever.search_with_scores(
+                query,
+                top_k=max(1, min(top_k, 20)),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                user_access_levels=checker.access_levels,
+            )
+        except Exception as e:
+            logger.exception("知识库检索失败: %s", e)
+            return format_result("搜索失败", f"检索过程中发生错误: {e}")
+
+        if not results:
+            return format_result(
+                "搜索结果",
+                f"未找到关于 '{query}' 的相关文档。建议换个关键词或转人工客服。",
+            )
+
+        # 格式化真实检索结果
+        lines = [f"[搜索结果] 关于 '{query}' 的匹配文档（共 {len(results)} 条）:"]
+        for doc, score in results:
+            meta = doc.metadata or {}
+            source = meta.get("source") or meta.get("doc_id") or "unknown"
+            preview = (doc.page_content or "")[:80].replace("\n", " ")
+            lines.append(
+                f"  • {source} | 相似度: {float(score):.2f} | {preview}"
+            )
 
         return "\n".join(lines)
 

@@ -5,12 +5,13 @@
     - admin: 管理员，可查看全部数据、分配工单、管理知识库
     - agent: 客服，处理分配给自己的会话/工单
     - viewer: 只读，仅查看仪表盘和数据
+    - supervisor: 主管，可查看仪表盘和只读数据
 """
 import os
 import logging
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from fastapi import APIRouter, HTTPException, Header, Depends, Body
+from fastapi import APIRouter, HTTPException, Header, Depends, Body, status
 from pydantic import BaseModel, Field
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -162,6 +163,39 @@ def require_role(*roles: UserRole):
             raise HTTPException(status_code=403, detail="当前角色无权限执行此操作")
         return current_user
     return checker
+
+
+# ====================================================================
+# 简化角色控制（基于 Role 枚举，用于关键 API 端点角色校验）
+# ====================================================================
+
+class Role(str, Enum):
+    """简化角色枚举（用于关键 API 端点的角色校验）"""
+    ADMIN = "admin"            # 管理员
+    AGENT = "agent"            # 客服人员
+    VIEWER = "viewer"          # 只读用户
+    SUPERVISOR = "supervisor"  # 主管
+
+
+def require_roles(*roles: Role):
+    """角色依赖检查装饰器
+
+    校验当前用户角色是否在允许的角色列表中。
+    super_admin 视为最高权限，自动通过所有角色校验（向后兼容）。
+    """
+    def role_checker(current_user: Dict[str, Any] = Depends(get_current_user)):
+        user_role = current_user.get("role")
+        # super_admin 为系统最高权限，直接通过所有角色校验
+        if user_role == UserRole.SUPER_ADMIN.value:
+            return current_user
+        allowed = [r.value for r in roles]
+        if user_role not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"需要以下角色之一: {allowed}"
+            )
+        return current_user
+    return role_checker
 
 
 # 常用权限依赖

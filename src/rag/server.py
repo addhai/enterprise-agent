@@ -127,9 +127,87 @@ async def search(req: SearchRequest):
 
 @app.post("/index")
 async def index_document(req: IndexRequest):
-    """索引单个文档（同步）"""
-    # TODO: 实际索引逻辑 — Phase 2
-    return {"status": "queued", "doc_id": req.doc_id}
+    """索引单个文档（同步）
+
+    流程：接收文档内容 → 调用 embedder 生成向量 → 写入向量库
+    后端优先级：Milvus（与 /search 一致） → Chroma（降级）
+    """
+    import time
+    import uuid as _uuid
+    from langchain_core.documents import Document
+
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="text 不能为空")
+
+    start = time.time()
+
+    # 构造 Document，并把请求字段写入 metadata，便于后续过滤
+    chunk_id = f"{req.doc_id}:chunk:{int(start)}:{_uuid.uuid4().hex[:6]}"
+    metadata = dict(req.metadata or {})
+    metadata.update({
+        "doc_id": req.doc_id,
+        "tenant_id": req.tenant_id,
+        "access_level": req.access_level,
+        "chunk_id": chunk_id,
+        "chunk_index": 0,
+        "indexed_at": int(start),
+        "source": metadata.get("source", req.doc_id),
+    })
+    document = Document(page_content=req.text, metadata=metadata)
+
+    # ---- 优先 Milvus ----
+    try:
+        from src.rag.milvus_store import get_milvus_store
+
+        store = get_milvus_store()
+        inserted = store.insert([document], tenant_id=req.tenant_id or "default")
+        latency_ms = (time.time() - start) * 1000
+        logger.info(
+            "Indexed via Milvus: doc_id=%s, chunks=%d, latency=%.1fms",
+            req.doc_id, inserted, latency_ms,
+        )
+        return {
+            "status": "indexed",
+            "doc_id": req.doc_id,
+            "chunk_id": chunk_id,
+            "chunks_inserted": inserted,
+            "backend": "milvus",
+            "latency_ms": round(latency_ms, 2),
+        }
+    except Exception as milvus_err:
+        logger.warning(
+            "Milvus 索引失败 (%s)，尝试 Chroma 降级", milvus_err,
+        )
+
+    # ---- 降级到 Chroma ----
+    try:
+        from src.rag.vector_store import VectorStoreManager
+
+        vs = VectorStoreManager()
+        ids = vs.add_documents([document])
+        latency_ms = (time.time() - start) * 1000
+        chunk_count = len(ids) if ids else 1
+        logger.info(
+            "Indexed via Chroma: doc_id=%s, chunks=%d, latency=%.1fms",
+            req.doc_id, chunk_count, latency_ms,
+        )
+        return {
+            "status": "indexed",
+            "doc_id": req.doc_id,
+            "chunk_id": chunk_id,
+            "chunks_inserted": chunk_count,
+            "backend": "chroma",
+            "latency_ms": round(latency_ms, 2),
+        }
+    except Exception as chroma_err:
+        logger.exception("Chroma 索引也失败: %s", chroma_err)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"索引失败：Milvus 与 Chroma 均不可用。"
+                f"最近错误: {str(chroma_err)[:200]}"
+            ),
+        )
 
 
 @app.get("/stats")

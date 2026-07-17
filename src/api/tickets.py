@@ -24,7 +24,7 @@ from src.ticket.models import (
     Comment,
 )
 from src.ticket.store import get_default_store
-from src.api.rbac import get_current_user, require_permissions, Permission
+from src.api.rbac import require_roles, Role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tickets"])
@@ -77,7 +77,7 @@ async def list_tickets(
     user_id: Optional[str] = Query(None, description="客户ID筛选"),
     search: Optional[str] = Query(None, description="标题/描述搜索"),
     limit: int = Query(50, ge=1, le=200),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_VIEW)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取工单列表"""
     store = get_default_store()
@@ -116,7 +116,7 @@ async def list_tickets(
 
 @router.get("/tickets/stats")
 async def get_ticket_stats(
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_VIEW)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取工单统计"""
     store = get_default_store()
@@ -153,7 +153,7 @@ async def get_ticket_stats(
 @router.get("/tickets/{ticket_id}")
 async def get_ticket_detail(
     ticket_id: str,
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_VIEW)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取工单详情"""
     store = get_default_store()
@@ -166,7 +166,7 @@ async def get_ticket_detail(
 @router.post("/tickets")
 async def create_ticket(
     request: CreateTicketRequest,
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_MANAGE)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """创建工单"""
     store = get_default_store()
@@ -202,7 +202,7 @@ async def create_ticket(
 async def update_ticket(
     ticket_id: str,
     request: TicketUpdateRequest,
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_MANAGE)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """更新工单"""
     store = get_default_store()
@@ -232,7 +232,7 @@ async def update_ticket(
 async def assign_ticket(
     ticket_id: str,
     assignee: str = Body(..., embed=True, description="分配对象用户名"),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_ASSIGN)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """分配工单"""
     store = get_default_store()
@@ -265,7 +265,7 @@ async def assign_ticket(
 async def add_ticket_comment(
     ticket_id: str,
     request: AddCommentRequest,
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_MANAGE)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """添加工单评论"""
     store = get_default_store()
@@ -293,7 +293,7 @@ async def add_ticket_comment(
 @router.post("/tickets/{ticket_id}/close")
 async def close_ticket(
     ticket_id: str,
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_ASSIGN)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """关闭工单"""
     store = get_default_store()
@@ -310,7 +310,7 @@ async def close_ticket(
 @router.delete("/tickets/{ticket_id}")
 async def delete_ticket(
     ticket_id: str,
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.TICKET_ASSIGN)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """删除工单（管理员权限）"""
     store = get_default_store()

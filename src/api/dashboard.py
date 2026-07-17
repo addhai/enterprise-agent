@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-from src.api.rbac import require_permissions, Permission
+from src.api.rbac import require_roles, Role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["dashboard"])
@@ -26,7 +26,7 @@ router = APIRouter(tags=["dashboard"])
 
 @router.get("/dashboard/kpi")
 async def get_dashboard_kpi(
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.DASHBOARD_VIEW)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT, Role.VIEWER, Role.SUPERVISOR)),
 ):
     """获取仪表盘核心 KPI"""
     now = time.time()
@@ -132,7 +132,7 @@ async def get_dashboard_kpi(
 
 @router.get("/dashboard/realtime")
 async def get_realtime_activity(
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.DASHBOARD_VIEW)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT, Role.VIEWER, Role.SUPERVISOR)),
 ):
     """获取实时活动（最近会话、等待接入队列）"""
     try:
@@ -182,7 +182,7 @@ async def get_realtime_activity(
 @router.get("/dashboard/agent-performance")
 async def get_agent_performance(
     days: int = 7,
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.DASHBOARD_VIEW)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT, Role.VIEWER, Role.SUPERVISOR)),
 ):
     """获取客服绩效排行"""
     cutoff = time.time() - days * 24 * 3600
@@ -235,7 +235,7 @@ async def get_agent_performance(
 @router.get("/dashboard/intent-distribution")
 async def get_intent_distribution(
     days: int = 7,
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.DASHBOARD_VIEW)),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT, Role.VIEWER, Role.SUPERVISOR)),
 ):
     """获取用户意图分布"""
     cutoff = time.time() - days * 24 * 3600

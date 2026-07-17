@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, createContext, useContext } from 'react'
 import './App.css'
 import AdminDashboard from './components/AdminDashboard'
 
@@ -12,6 +12,15 @@ interface User {
   email?: string
   role?: string
 }
+
+// ============================================================
+// 主题上下文 — 浅色/深色模式切换
+// ============================================================
+
+const ThemeContext = createContext<{
+  theme: 'light' | 'dark'
+  toggleTheme: () => void
+}>({ theme: 'light', toggleTheme: () => {} })
 
 
 
@@ -37,6 +46,8 @@ function Navigation({
   const [activeSection, setActiveSection] = useState('hero')
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef<HTMLLIElement>(null)
+  // 从主题上下文获取当前主题和切换函数
+  const { theme, toggleTheme } = useContext(ThemeContext)
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -62,6 +73,17 @@ function Navigation({
         <li><a href="#capabilities" className={activeSection === 'capabilities' ? 'active' : ''} onClick={() => setActiveSection('capabilities')}>能力</a></li>
         <li><a href="#architecture" className={activeSection === 'architecture' ? 'active' : ''} onClick={() => setActiveSection('architecture')}>架构</a></li>
         <li><a href="#details" className={activeSection === 'details' ? 'active' : ''} onClick={() => setActiveSection('details')}>技术细节</a></li>
+        {/* 主题切换按钮：浅色模式显示月亮，深色模式显示太阳 */}
+        <li>
+          <button
+            className="theme-toggle-btn"
+            onClick={toggleTheme}
+            title={theme === 'light' ? '切换到深色模式' : '切换到浅色模式'}
+            aria-label="切换主题"
+          >
+            {theme === 'light' ? '🌙' : '☀️'}
+          </button>
+        </li>
         <li><button className="nav-admin-btn" onClick={(e) => { e.preventDefault(); onAdminClick() }}>管理后台</button></li>
         {user ? (
           <li className="nav-user-menu" ref={userMenuRef}>
@@ -598,6 +620,51 @@ function ProfileModal({
 }) {
   const getInitials = (name: string) => name.charAt(0).toUpperCase()
 
+  // 个人中心统计：从 /api/v1/dashboard/kpi 拉取真实数据
+  const [stats, setStats] = useState<{
+    totalSessions: number | null
+    monthlyConversations: number | null
+    avgTurns: number | null
+  }>({ totalSessions: null, monthlyConversations: null, avgTurns: null })
+  const [statsLoading, setStatsLoading] = useState(false)
+
+  useEffect(() => {
+    if (!isOpen || !user) return
+    const token = localStorage.getItem('token')
+    if (!token) return
+
+    setStatsLoading(true)
+    fetch('/api/v1/dashboard/kpi', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const sessions = data?.sessions
+        if (sessions) {
+          setStats({
+            totalSessions: typeof sessions.total === 'number' ? sessions.total : 0,
+            // 仪表盘目前仅提供 active_today，作为近期对话量展示
+            monthlyConversations:
+              typeof sessions.active_today === 'number' ? sessions.active_today : 0,
+            avgTurns: typeof sessions.avg_turns === 'number' ? sessions.avg_turns : 0,
+          })
+        } else {
+          setStats({ totalSessions: 0, monthlyConversations: 0, avgTurns: 0 })
+        }
+      })
+      .catch(() => {
+        // 权限不足或网络异常时回退到 0，避免一直显示 "--"
+        setStats({ totalSessions: 0, monthlyConversations: 0, avgTurns: 0 })
+      })
+      .finally(() => setStatsLoading(false))
+  }, [isOpen, user])
+
+  const formatStat = (v: number | null): string => {
+    if (v === null) return '--'
+    if (!Number.isInteger(v)) return v.toFixed(2)
+    return String(v)
+  }
+
   if (!isOpen || !user) return null
 
   return (
@@ -619,15 +686,21 @@ function ProfileModal({
 
           <div className="profile-stats">
             <div className="profile-stat-item">
-              <div className="profile-stat-value">--</div>
+              <div className="profile-stat-value">
+                {statsLoading ? '...' : formatStat(stats.totalSessions)}
+              </div>
               <div className="profile-stat-label">会话总数</div>
             </div>
             <div className="profile-stat-item">
-              <div className="profile-stat-value">--</div>
+              <div className="profile-stat-value">
+                {statsLoading ? '...' : formatStat(stats.monthlyConversations)}
+              </div>
               <div className="profile-stat-label">本月对话</div>
             </div>
             <div className="profile-stat-item">
-              <div className="profile-stat-value">--</div>
+              <div className="profile-stat-value">
+                {statsLoading ? '...' : formatStat(stats.avgTurns)}
+              </div>
               <div className="profile-stat-label">平均轮次</div>
             </div>
           </div>
@@ -1149,6 +1222,20 @@ function App() {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
 
+  // 主题状态：从 localStorage 读取，默认浅色模式
+  const [theme, setTheme] = useState<'light' | 'dark'>(
+    () => (localStorage.getItem('theme') as 'light' | 'dark') || 'light'
+  )
+
+  // 主题副作用：切换 document 的 dark 类并持久化到 localStorage
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  // 主题切换函数
+  const toggleTheme = () => setTheme(prev => (prev === 'light' ? 'dark' : 'light'))
+
   useEffect(() => {
     const savedToken = localStorage.getItem('token')
     const savedUser = localStorage.getItem('user')
@@ -1193,6 +1280,7 @@ function App() {
   }, [])
 
   return (
+    <ThemeContext.Provider value={{ theme, toggleTheme }}>
     <div className="landing-page">
       <Navigation
         onAdminClick={() => setAdminModalOpen(true)}
@@ -1228,6 +1316,7 @@ function App() {
         onLogout={() => { setProfileModalOpen(false); handleLogout() }}
       />
     </div>
+    </ThemeContext.Provider>
   )
 }
 
