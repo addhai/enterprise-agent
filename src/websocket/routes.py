@@ -119,39 +119,57 @@ async def websocket_chat(websocket: WebSocket):
                 target_session_id = incoming_session or session_id
 
                 current_state = session_mgr.get_session(target_session_id)
-                if current_state and current_state.mode != SessionMode.HUMAN_CHAT:
-                    # 更新会话状态
-                    session_mgr.update_mode(target_session_id, SessionMode.WAITING_HUMAN)
+                if current_state:
+                    # 幂等检查：如果已经在转接队列中或已转接，直接返回提示
+                    if current_state.mode in (SessionMode.WAITING_HUMAN, SessionMode.HUMAN_CHAT, SessionMode.ESCALATED):
+                        await websocket.send_json({
+                            "type": "info",
+                            "session_id": target_session_id,
+                            "text": "您已在转接队列中，请耐心等待",
+                            "timestamp": time.time(),
+                        })
+                        continue
 
-                    # 构建转接通知
-                    transfer_notice = build_transfer_notice(
-                        session_id=target_session_id,
-                        reason=f"用户主动请求转人工（{reason}）",
-                    )
-                    await websocket.send_json(transfer_notice)
+                    if current_state.mode != SessionMode.HUMAN_CHAT:
+                        # 更新会话状态
+                        session_mgr.update_mode(target_session_id, SessionMode.WAITING_HUMAN)
 
-                    # 构建转接上下文
-                    messages_state = current_state.state.get("messages", []) if hasattr(current_state, 'state') else []
-                    handoff_ctx = build_handoff_context(
-                        session_id=target_session_id,
-                        summary=f"用户主动请求转人工: {reason}",
-                        conversation=[
-                            {"role": "user" if isinstance(m, HumanMessage) else "assistant",
-                             "content": (m.content if hasattr(m, "content") else str(m))[:500]}
-                            for m in messages_state
-                        ],
-                        user_profile={"user_id": user_id, "plan": user_plan},
-                        attempted_solutions=["AI 对话"],
-                    )
-                    await websocket.send_json(handoff_ctx)
+                        # 构建转接通知
+                        transfer_notice = build_transfer_notice(
+                            session_id=target_session_id,
+                            reason=f"用户主动请求转人工（{reason}）",
+                        )
+                        await websocket.send_json(transfer_notice)
 
-                    # 触发转接分发
-                    dispatcher = get_dispatcher()
-                    await dispatcher.handle_escalation(
-                        target_session_id,
-                        {"needs_human": True, "intent": "user_requested", "messages": messages_state},
-                        messages_state,
-                    )
+                        # 构建转接上下文
+                        messages_state = current_state.conversation_history
+                        handoff_ctx = build_handoff_context(
+                            session_id=target_session_id,
+                            summary=f"用户主动请求转人工: {reason}",
+                            conversation=[
+                                {"role": m.get("role", "user"),
+                                 "content": m.get("content", "")[:500]}
+                                for m in messages_state
+                            ],
+                            user_profile={"user_id": user_id, "plan": user_plan},
+                            attempted_solutions=["AI 对话"],
+                        )
+                        await websocket.send_json(handoff_ctx)
+
+                        # 触发转接分发
+                        dispatcher = get_dispatcher()
+                        from langchain_core.messages import HumanMessage, AIMessage
+                        msg_objects = []
+                        for m in messages_state:
+                            if m.get("role") == "user":
+                                msg_objects.append(HumanMessage(content=m.get("content", "")))
+                            else:
+                                msg_objects.append(AIMessage(content=m.get("content", "")))
+                        await dispatcher.handle_escalation(
+                            target_session_id,
+                            {"needs_human": True, "intent": "user_requested", "messages": msg_objects},
+                            msg_objects,
+                        )
                 continue
 
             # --- 聊天消息 ---
@@ -287,7 +305,8 @@ async def _handle_ai_chat(
     audio_base64: str = "",
 ):
     """处理用户消息 → 触发 AI 回复 → 流式推送"""
-    from src.api.routes import AgentState, HumanMessage
+    from src.api.routes import AgentState
+    from langchain_core.messages import HumanMessage, AIMessage
     from src.api.dependencies import get_workflow
 
     start_time = time.time()
@@ -319,14 +338,41 @@ async def _handle_ai_chat(
         app = get_workflow()
 
         # 3. 构建 AgentState
-        # 从会话状态中读取上一轮的失败次数
+        # 从会话状态中读取上一轮的失败次数和历史消息
         session_state = session_mgr.get_session(session_id)
         prev_failed_attempts = 0
+        history_messages = []
         if session_state:
             prev_failed_attempts = getattr(session_state, 'failed_attempts', 0)
-        
+            # 从 conversation_history 读取历史消息并转换为 Message 对象
+            conv_history = getattr(session_state, 'conversation_history', [])
+            logger.info(
+                "[ContextMemory] session=%s: 读取到 %d 条历史消息",
+                session_id, len(conv_history)
+            )
+            for i, msg_dict in enumerate(conv_history):
+                role = msg_dict.get("role", "user")
+                content = msg_dict.get("content", "")
+                logger.debug(
+                    "[ContextMemory] session=%s 历史[%d]: role=%s, content=%s",
+                    session_id, i, role, content[:100]
+                )
+                if role == "user":
+                    history_messages.append(HumanMessage(content=content))
+                else:
+                    history_messages.append(AIMessage(content=content))
+        else:
+            logger.warning("[ContextMemory] session=%s: 会话状态不存在", session_id)
+
+        # 历史消息 + 当前消息
+        all_messages = history_messages + [HumanMessage(content=multimodal_content)]
+        logger.info(
+            "[ContextMemory] session=%s: 调用 app.invoke 前消息总数=%d (历史=%d + 当前=1)",
+            session_id, len(all_messages), len(history_messages)
+        )
+
         state = AgentState(
-            messages=[HumanMessage(content=multimodal_content)],
+            messages=all_messages,
             intent=None,
             retrieved_docs=[],
             needs_human=False,
@@ -353,6 +399,13 @@ async def _handle_ai_chat(
         result = await asyncio.to_thread(
             app.invoke, state,
             {"configurable": {"thread_id": session_id}}
+        )
+
+        # 打印调用后的结果消息数量
+        result_messages = result.get("messages", [])
+        logger.info(
+            "[ContextMemory] session=%s: 调用 app.invoke 后结果消息数=%d",
+            session_id, len(result_messages)
         )
 
         # 5. 发送思考完毕
@@ -439,6 +492,24 @@ async def _handle_ai_chat(
                 session_id, text="", done=True, suggest_human=suggest_human,
             ))
 
+        # 6.5 保存对话历史到会话状态
+        if session_state and final_response:
+            # 追加用户消息和 AI 回复到 conversation_history
+            user_msg = {"role": "user", "content": message}
+            ai_msg = {"role": "assistant", "content": final_response}
+            session_state.conversation_history.append(user_msg)
+            session_state.conversation_history.append(ai_msg)
+            # 更新轮次计数
+            session_state.turn_count += 1
+            logger.info(
+                "[ContextMemory] session=%s: 保存对话历史，当前总消息数=%d, turn_count=%d",
+                session_id, len(session_state.conversation_history), session_state.turn_count
+            )
+            logger.debug(
+                "[ContextMemory] session=%s: 新增 user_msg=%s, ai_msg=%s",
+                session_id, message[:100], final_response[:100]
+            )
+
         # 7. 如果需要转人工
         if needs_human:
             # 更新会话状态
@@ -470,6 +541,13 @@ async def _handle_ai_chat(
             # 触发转接分发
             dispatcher = get_dispatcher()
             await dispatcher.handle_escalation(session_id, result, messages)
+
+            # 发送系统通知给人工客服
+            try:
+                from src.api.notifications import add_handoff_notification
+                add_handoff_notification(session_id, user_id, reason=f"AI 无法处理（intent={intent}）")
+            except Exception as e:
+                logger.warning("Failed to send handoff notification: %s", e)
 
         # 8. 如果有权限过滤
         access_filtered = result.get("access_filtered", 0)

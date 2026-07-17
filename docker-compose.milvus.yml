@@ -1,0 +1,84 @@
+# =============================================================================
+# Milvus + MinIO 精简启动文件
+# 仅用于本地开发 — 单独启动 Milvus 向量数据库和 MinIO 对象存储
+#
+# 启动:  docker compose -f docker-compose.milvus.yml up -d
+# 停止:  docker compose -f docker-compose.milvus.yml down
+# 日志:  docker compose -f docker-compose.milvus.yml logs -f
+# 清数据: docker compose -f docker-compose.milvus.yml down -v
+# =============================================================================
+
+services:
+  # Milvus Standalone — 向量数据库
+  milvus-standalone:
+    image: milvusdb/milvus:v2.5.9
+    container_name: agent-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    ports:
+      - "19530:19530"   # gRPC (Python SDK 连接端口)
+      - "9091:9091"     # 健康检查 / Prometheus metrics
+    environment:
+      # 内嵌 etcd，无需额外部署 etcd 容器
+      - ETCD_USE_EMBED=true
+      - ETCD_DATA_DIR=/var/lib/milvus/etcd
+      # 使用 MinIO 作为对象存储
+      - COMMON_STORAGETYPE=minio
+      - MINIO_ADDRESS=minio:9000
+      - MINIO_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - MINIO_BUCKET_NAME=milvus-bucket
+      - MINIO_USE_SSL=false
+      # 清除代理设置（防止宿主机代理影响容器内部通信）
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
+    volumes:
+      - milvus_data:/var/lib/milvus
+    networks:
+      - milvus-net
+    depends_on:
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9091/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s   # Milvus 启动较慢，给足等待时间
+
+  # MinIO — 对象存储 (Milvus 的存储后端)
+  minio:
+    image: minio/minio:latest
+    container_name: agent-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web 管理界面 (浏览器访问 http://localhost:9001)
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    networks:
+      - milvus-net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  milvus_data:
+    name: agent-milvus-data
+  minio_data:
+    name: agent-minio-data
+
+networks:
+  milvus-net:
+    name: milvus-net
+    driver: bridge

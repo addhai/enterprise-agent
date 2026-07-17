@@ -6,6 +6,10 @@ import os
 import sys
 from pathlib import Path
 
+# 限制 OpenBLAS 线程数，避免内存分配失败
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 # 确保运行时 cwd 是项目根目录（PyCharm 直接运行本文件时 cwd 可能不对）
 _project_root = Path(__file__).parent.parent.parent
 os.chdir(_project_root)
@@ -72,6 +76,13 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.warning("WebSocket session manager start failed: %s", e)
 
+        # 注入演示数据
+        try:
+            from src.seed import seed_demo_data
+            seed_demo_data()
+        except Exception as e:
+            logger.warning("Demo data seed failed: %s", e)
+
     @app.on_event("shutdown")
     async def shutdown():
         """应用停止：清理资源"""
@@ -114,20 +125,6 @@ def create_app() -> FastAPI:
     except Exception as e:
         logger.error("Failed to register monitoring router: %s", e)
 
-    # 注册多渠道接入路由
-    try:
-        from src.channels.wechat import router as wechat_router
-        app.include_router(wechat_router, prefix="/api/v1")
-        logger.info("Registered wechat router")
-    except Exception as e:
-        logger.error("Failed to register wechat router: %s", e)
-    try:
-        from src.channels.phone import router as phone_router
-        app.include_router(phone_router, prefix="/api/v1")
-        logger.info("Registered phone router")
-    except Exception as e:
-        logger.error("Failed to register phone router: %s", e)
-
     # 注册 Chatwoot webhook 路由
     try:
         from src.api.chatwoot import router as chatwoot_router
@@ -135,6 +132,70 @@ def create_app() -> FastAPI:
         logger.info("Registered chatwoot router")
     except Exception as e:
         logger.error("Failed to register chatwoot router: %s", e)
+
+    # 注册用户认证路由
+    try:
+        from src.api.auth import router as auth_router
+        app.include_router(auth_router, prefix="/api/v1")
+        logger.info("Registered auth router")
+    except Exception as e:
+        logger.error("Failed to register auth router: %s", e)
+
+    # 注册管理后台路由
+    try:
+        from src.api.admin import router as admin_router
+        app.include_router(admin_router, prefix="/api/v1")
+        logger.info("Registered admin router")
+    except Exception as e:
+        logger.error("Failed to register admin router: %s", e)
+
+    # 注册 RBAC 路由
+    try:
+        from src.api.rbac import router as rbac_router
+        app.include_router(rbac_router, prefix="/api/v1")
+        logger.info("Registered rbac router")
+    except Exception as e:
+        logger.error("Failed to register rbac router: %s", e)
+
+    # 注册客户管理路由
+    try:
+        from src.api.customers import router as customers_router
+        app.include_router(customers_router, prefix="/api/v1")
+        logger.info("Registered customers router")
+    except Exception as e:
+        logger.error("Failed to register customers router: %s", e)
+
+    # 注册工单管理路由
+    try:
+        from src.api.tickets import router as tickets_router
+        app.include_router(tickets_router, prefix="/api/v1")
+        logger.info("Registered tickets router")
+    except Exception as e:
+        logger.error("Failed to register tickets router: %s", e)
+
+    # 注册满意度路由
+    try:
+        from src.api.satisfaction import router as satisfaction_router
+        app.include_router(satisfaction_router, prefix="/api/v1")
+        logger.info("Registered satisfaction router")
+    except Exception as e:
+        logger.error("Failed to register satisfaction router: %s", e)
+
+    # 注册通知中心路由
+    try:
+        from src.api.notifications import router as notifications_router
+        app.include_router(notifications_router, prefix="/api/v1")
+        logger.info("Registered notifications router")
+    except Exception as e:
+        logger.error("Failed to register notifications router: %s", e)
+
+    # 注册仪表盘路由
+    try:
+        from src.api.dashboard import router as dashboard_router
+        app.include_router(dashboard_router, prefix="/api/v1")
+        logger.info("Registered dashboard router")
+    except Exception as e:
+        logger.error("Failed to register dashboard router: %s", e)
 
     # 注册静态文件（必须在所有路由之后，否则会拦截 /api 请求）
     from fastapi.staticfiles import StaticFiles

@@ -85,6 +85,7 @@ def build_mcp_server(
     include_kb: bool = True,
     include_postgres: bool = False,
     include_dingtalk: bool = False,
+    include_feishu: bool = False,
     include_github: bool = False,
     include_email: bool = False,
     include_calendar: bool = False,
@@ -172,6 +173,12 @@ def build_mcp_server(
         from src.mcp_tools.dingtalk import create_dingtalk_tools
 
         tools = create_dingtalk_tools(**context)
+        all_tool_names.extend(_register_tools(server, tools))
+
+    if include_feishu:
+        from src.mcp_tools.feishu import create_feishu_tools
+
+        tools = create_feishu_tools(**context)
         all_tool_names.extend(_register_tools(server, tools))
 
     if include_github:
@@ -301,6 +308,7 @@ if __name__ == "__main__":
     ext_group = parser.add_argument_group("外部服务集成（默认禁用）")
     ext_group.add_argument("--enable-pg", action="store_true", help="启用 PostgreSQL MCP 工具")
     ext_group.add_argument("--enable-dingtalk", action="store_true", help="启用钉钉 MCP 工具")
+    ext_group.add_argument("--enable-feishu", action="store_true", help="启用飞书 MCP 工具")
     ext_group.add_argument("--enable-github", action="store_true", help="启用 GitHub MCP 工具")
     ext_group.add_argument("--enable-email", action="store_true", help="启用 Email MCP 工具")
     ext_group.add_argument("--enable-calendar", action="store_true", help="启用 Calendar MCP 工具")
@@ -341,6 +349,7 @@ if __name__ == "__main__":
             include_kb=not args.no_kb,
             include_postgres=args.enable_pg,
             include_dingtalk=args.enable_dingtalk,
+            include_feishu=args.enable_feishu,
             include_github=args.enable_github,
             include_email=args.enable_email,
             include_calendar=args.enable_calendar,

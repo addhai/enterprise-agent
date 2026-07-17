@@ -162,11 +162,11 @@ class MemoryManager:
         is_escalated: bool = False,
     ) -> None:
         """reply_node 之后调用：持久化长期记忆，记录评估数据"""
-        if not user_id or user_id == "anonymous":
-            return
-
         stm = self.get_short_term(session_id)
         stm.add_message("assistant", final_response)
+
+        if not user_id or user_id == "anonymous":
+            return
 
         # 1. 提取值得长期记忆的对话内容
         self._persist_memories(

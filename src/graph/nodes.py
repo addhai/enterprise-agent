@@ -470,7 +470,7 @@ def router_node(state: AgentState) -> Dict[str, Any]:
 # ======================================================================
 
 def faq_node(state: AgentState) -> Dict[str, Any]:
-    """FAQ 节点：尝试从常见问题库匹配答案"""
+    """FAQ 节点：尝试从常见问题库匹配答案，未匹配时用 LLM + 对话历史回答"""
     messages = state.get("messages", [])
     last_message = messages[-1]
     content = last_message.content if hasattr(last_message, "content") else str(last_message)
@@ -480,7 +480,36 @@ def faq_node(state: AgentState) -> Dict[str, Any]:
     if result:
         return {"faq_match": result, "needs_human": False}
     else:
-        return {"faq_match": None}
+        try:
+            llm = _get_intent_llm()
+            history_text = ""
+            if len(messages) > 1:
+                history_parts = []
+                for msg in messages[:-1]:
+                    if isinstance(msg, HumanMessage):
+                        history_parts.append(f"用户: {msg.content}")
+                    elif isinstance(msg, AIMessage):
+                        history_parts.append(f"客服: {msg.content}")
+                history_text = "\n".join(history_parts)
+
+            system_prompt = (
+                "你是 CloudSync 智能客服助手。请根据对话历史回答用户的问题。\n"
+                "如果是关于产品功能、定价、使用方法等问题，尽量简洁回答。\n"
+                "如果是闲聊或身份确认类问题，根据对话历史友好回应。\n"
+                "如果问题涉及你不知道的技术细节，请诚实说你不确定，建议用户描述具体问题。"
+            )
+
+            user_prompt = f"{system_prompt}\n\n"
+            if history_text:
+                user_prompt += f"对话历史:\n{history_text}\n\n"
+            user_prompt += f"用户当前问题: {content}\n\n请回答:"
+
+            response = llm.invoke(user_prompt)
+            answer = response.content.strip()
+            return {"faq_match": answer, "needs_human": False, "faq_from_llm": True}
+        except Exception as e:
+            logger.warning(f"FAQ fallback LLM failed: {e}")
+            return {"faq_match": None}
 
 
 # ======================================================================
@@ -506,22 +535,31 @@ def rag_node(
     content = last_message.content if hasattr(last_message, "content") else str(last_message)
 
     # ==================================================================
-    # 接入点 2: 通过 MemoryManager 获取对话历史
+    # 接入点 2: 获取对话历史
+    # 优先从 state.messages 中提取（最可靠），MemoryManager 用于长期记忆
     # ==================================================================
     session_id = state.get("session_id", "")
 
-    if memory_manager and session_id:
+    history = _extract_history_manual(messages)
+
+    if memory_manager and session_id and not history:
         try:
             history = memory_manager.on_rag_start(
                 session_id=session_id,
                 user_message=content,
             )
         except Exception:
-            logger.warning("Memory on_rag_start failed, falling back to manual extraction",
+            logger.warning("Memory on_rag_start failed, using manual extraction",
                            exc_info=True)
-            history = _extract_history_manual(messages)
-    else:
-        history = _extract_history_manual(messages)
+
+    if memory_manager and session_id:
+        try:
+            memory_manager.on_rag_start(
+                session_id=session_id,
+                user_message=content,
+            )
+        except Exception:
+            pass
 
     # 构建 Agent（注入长期记忆上下文 + 权限信息）
     agent = CustomerServiceAgent(
@@ -957,8 +995,11 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
 
     # 返回最终结果
     # 如果是拒答式回复，保留 failed_attempts 和 suggest_human；否则重置
+    # 重要：把 AI 回复添加到 messages 中，确保历史对话能被正确读取
+    ai_message = AIMessage(content=final_response)
     if _is_refusal_response(final_response) and not needs_human:
         return {
+            "messages": [ai_message],
             "final_response": final_response,
             "needs_human": needs_human,
             "suggest_human": suggest_human,
@@ -967,6 +1008,7 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         }
     else:
         return {
+            "messages": [ai_message],
             "final_response": final_response,
             "needs_human": needs_human,
             "suggest_human": False,

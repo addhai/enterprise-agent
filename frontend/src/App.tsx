@@ -1,15 +1,56 @@
 import { useState, useRef, useEffect } from 'react'
 import './App.css'
+import AdminDashboard from './components/AdminDashboard'
+
+// ============================================================
+// Types
+// ============================================================
+
+interface User {
+  id: string
+  username: string
+  email?: string
+  role?: string
+}
+
+
 
 // ============================================================
 // Landing Page — Enterprise Agent 官网首页
-// Dark editorial · Grain texture · Circuit architecture
 // ============================================================
 
 /* ---------- Navigation ---------- */
 
-function Navigation() {
+function Navigation({
+  onAdminClick,
+  user,
+  onLoginClick,
+  onLogout,
+  onProfileClick,
+}: {
+  onAdminClick: () => void
+  user: User | null
+  onLoginClick: () => void
+  onLogout: () => void
+  onProfileClick: () => void
+}) {
   const [activeSection, setActiveSection] = useState('hero')
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLLIElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const getInitials = (name: string) => {
+    return name.charAt(0).toUpperCase()
+  }
 
   return (
     <nav className="nav">
@@ -21,7 +62,35 @@ function Navigation() {
         <li><a href="#capabilities" className={activeSection === 'capabilities' ? 'active' : ''} onClick={() => setActiveSection('capabilities')}>能力</a></li>
         <li><a href="#architecture" className={activeSection === 'architecture' ? 'active' : ''} onClick={() => setActiveSection('architecture')}>架构</a></li>
         <li><a href="#details" className={activeSection === 'details' ? 'active' : ''} onClick={() => setActiveSection('details')}>技术细节</a></li>
-        <li><a href="#admin" className="nav-link-admin" onClick={(e) => { e.preventDefault(); document.getElementById('admin')?.scrollIntoView({ behavior: 'smooth' }) }}>管理后台</a></li>
+        <li><button className="nav-admin-btn" onClick={(e) => { e.preventDefault(); onAdminClick() }}>管理后台</button></li>
+        {user ? (
+          <li className="nav-user-menu" ref={userMenuRef}>
+            <button
+              className="nav-user-btn"
+              onClick={() => setUserMenuOpen(!userMenuOpen)}
+            >
+              <span className="nav-user-avatar">{getInitials(user.username)}</span>
+              <span className="nav-user-name">{user.username}</span>
+              <span className="nav-user-arrow">▼</span>
+            </button>
+            {userMenuOpen && (
+              <div className="user-dropdown">
+                <button className="user-dropdown-item" onClick={() => { setUserMenuOpen(false); onProfileClick() }}>
+                  👤 个人中心
+                </button>
+                <button className="user-dropdown-item" onClick={() => { setUserMenuOpen(false); onAdminClick() }}>
+                  💬 我的会话
+                </button>
+                <div className="user-dropdown-divider" />
+                <button className="user-dropdown-item logout" onClick={() => { setUserMenuOpen(false); onLogout() }}>
+                  🚪 退出登录
+                </button>
+              </div>
+            )}
+          </li>
+        ) : (
+          <li><button className="nav-login-btn" onClick={(e) => { e.preventDefault(); onLoginClick() }}>登录/注册</button></li>
+        )}
         <li><a href="#chat" className="nav-cta">申请试用</a></li>
       </ul>
     </nav>
@@ -33,7 +102,6 @@ function Navigation() {
 function HeroSection() {
   return (
     <section className="hero" id="hero">
-      {/* Floating particles */}
       <div className="hero-particles">
         <span className="hero-particle" /><span className="hero-particle" />
         <span className="hero-particle" /><span className="hero-particle" />
@@ -107,8 +175,8 @@ function ArchitectureSection() {
 
         <div className="arch-flow reveal">
           {ARCH_LAYERS.map((layer, i) => (
-            <>
-              <div className="arch-layer reveal" key={layer.number} style={{ transitionDelay: `${i * 80}ms` }}>
+            <div key={layer.number}>
+              <div className="arch-layer reveal" style={{ transitionDelay: `${i * 80}ms` }}>
                 <span className="arch-layer-number">{layer.number}</span>
                 <h3 className="arch-layer-name">{layer.name}</h3>
                 <p className="arch-layer-desc">{layer.desc}</p>
@@ -116,7 +184,7 @@ function ArchitectureSection() {
               {i < ARCH_LAYERS.length - 1 && (
                 <span className="arch-arrow" aria-hidden="true">→</span>
               )}
-            </>
+            </div>
           ))}
         </div>
       </div>
@@ -313,6 +381,285 @@ function Footer() {
 }
 
 // ============================================================
+// Login / Register Modal
+// ============================================================
+
+function AuthModal({
+  isOpen,
+  onClose,
+  onLoginSuccess,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  onLoginSuccess: (user: User, token: string) => void
+}) {
+  const [activeTab, setActiveTab] = useState<'login' | 'register'>('login')
+  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  if (!isOpen) return null
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+
+    try {
+      const endpoint = activeTab === 'login' ? '/api/v1/auth/login' : '/api/v1/auth/register'
+      const body = activeTab === 'login'
+        ? { username, password }
+        : { username, email, password }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.detail || data.message || (activeTab === 'login' ? '登录失败' : '注册失败'))
+      }
+
+      const data = await response.json()
+      const token = data.token || data.access_token || ''
+      const returnedUser = data.user || {}
+      const userData: User = {
+        id: returnedUser.id || returnedUser.user_id || data.user_id || data.id || '',
+        username: returnedUser.username || data.username || username,
+        email: returnedUser.email || data.email || email,
+        role: returnedUser.role || data.role || '',
+      }
+
+      localStorage.setItem('token', token)
+      localStorage.setItem('user', JSON.stringify(userData))
+      onLoginSuccess(userData, token)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '操作失败，请稍后重试')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleAdminLogin = async () => {
+    setError('')
+    setLoading(true)
+    try {
+      const response = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.detail || data.message || '管理员登录失败')
+      }
+      const data = await response.json()
+      const token = data.token || data.access_token || ''
+      const returnedUser = data.user || {}
+      const userData: User = {
+        id: returnedUser.id || returnedUser.user_id || data.user_id || data.id || '',
+        username: returnedUser.username || data.username || 'admin',
+        email: returnedUser.email || data.email || '',
+        role: returnedUser.role || data.role || '',
+      }
+      localStorage.setItem('token', token)
+      localStorage.setItem('user', JSON.stringify(userData))
+      onLoginSuccess(userData, token)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '管理员登录失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDemoLogin = () => {
+    const demoUser: User = { id: 'demo-user', username: 'demo' }
+    const demoToken = 'demo-token'
+    localStorage.setItem('token', demoToken)
+    localStorage.setItem('user', JSON.stringify(demoUser))
+    onLoginSuccess(demoUser, demoToken)
+    onClose()
+  }
+
+  return (
+    <div className="auth-modal-overlay" onClick={onClose}>
+      <div className="auth-modal" onClick={(e) => e.stopPropagation()}>
+        <button className="auth-modal-close" onClick={onClose}>×</button>
+        <div className="auth-modal-content">
+          <h2 className="auth-title">{activeTab === 'login' ? '登录' : '注册'}</h2>
+
+          <div className="auth-tabs">
+            <button
+              className={`auth-tab-btn ${activeTab === 'login' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('login'); setError('') }}
+            >
+              登录
+            </button>
+            <button
+              className={`auth-tab-btn ${activeTab === 'register' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('register'); setError('') }}
+            >
+              注册
+            </button>
+          </div>
+
+          {error && <div className="auth-error">{error}</div>}
+
+          <form className="auth-form" onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label>用户名</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="请输入用户名"
+                required
+              />
+            </div>
+
+            {activeTab === 'register' && (
+              <div className="form-group">
+                <label>邮箱</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="请输入邮箱"
+                  required
+                />
+              </div>
+            )}
+
+            <div className="form-group">
+              <label>密码</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="请输入密码"
+                required
+              />
+            </div>
+
+            {activeTab === 'register' && (
+              <div className="form-group">
+                <label>确认密码</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="请再次输入密码"
+                  required
+                />
+              </div>
+            )}
+
+            <button type="submit" className="auth-submit-btn" disabled={loading}>
+              {loading ? '处理中...' : (activeTab === 'login' ? '登录' : '注册')}
+            </button>
+          </form>
+
+          <div className="auth-demo">
+            <p>或使用演示账号 / 管理员账号体验：</p>
+            <button className="admin-quick-login-btn" onClick={handleAdminLogin} disabled={loading}>
+              管理员快速登录 (admin / admin123)
+            </button>
+            <button className="demo-login-btn" onClick={handleDemoLogin}>
+              快速体验（演示账号）
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+// Profile Modal — 个人中心
+// ============================================================
+
+function ProfileModal({
+  isOpen,
+  onClose,
+  user,
+  onLogout,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  user: User | null
+  onLogout: () => void
+}) {
+  const getInitials = (name: string) => name.charAt(0).toUpperCase()
+
+  if (!isOpen || !user) return null
+
+  return (
+    <div className="profile-modal-overlay" onClick={onClose}>
+      <div className="profile-modal" onClick={(e) => e.stopPropagation()}>
+        <button className="profile-modal-close" onClick={onClose}>×</button>
+        <div className="profile-modal-content">
+          <p className="section-label">User Profile</p>
+          <h2 className="profile-title">个人中心</h2>
+
+          <div className="profile-header">
+            <div className="profile-avatar-large">{getInitials(user.username)}</div>
+            <div className="profile-info">
+              <h3 className="profile-username">{user.username}</h3>
+              <p className="profile-email">{user.email || '未设置邮箱'}</p>
+              <span className="profile-plan">免费版</span>
+            </div>
+          </div>
+
+          <div className="profile-stats">
+            <div className="profile-stat-item">
+              <div className="profile-stat-value">--</div>
+              <div className="profile-stat-label">会话总数</div>
+            </div>
+            <div className="profile-stat-item">
+              <div className="profile-stat-value">--</div>
+              <div className="profile-stat-label">本月对话</div>
+            </div>
+            <div className="profile-stat-item">
+              <div className="profile-stat-value">--</div>
+              <div className="profile-stat-label">平均轮次</div>
+            </div>
+          </div>
+
+          <div className="profile-section">
+            <h4>账号信息</h4>
+            <div className="profile-info-row">
+              <span className="info-label">用户ID</span>
+              <span className="info-value">{user.id}</span>
+            </div>
+            <div className="profile-info-row">
+              <span className="info-label">用户名</span>
+              <span className="info-value">{user.username}</span>
+            </div>
+            <div className="profile-info-row">
+              <span className="info-label">邮箱</span>
+              <span className="info-value">{user.email || '未设置'}</span>
+            </div>
+          </div>
+
+          <div className="profile-actions">
+            <button className="profile-action-btn" onClick={onLogout}>
+              🚪 退出登录
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
 // Chat Widget — Floating
 // ============================================================
 
@@ -326,6 +673,13 @@ interface ChatMessage {
   suggestHuman?: boolean
 }
 
+interface ChatSession {
+  session_id: string
+  last_message: string
+  updated_at: string
+  message_count: number
+}
+
 const WS_URL = '/ws/chat'
 
 const QUICK_QUESTIONS = [
@@ -335,7 +689,7 @@ const QUICK_QUESTIONS = [
   { icon: '📞', text: '联系客服方式' },
 ]
 
-function FloatingChatWidget() {
+function FloatingChatWidget({ user, token }: { user: User | null; token: string | null }) {
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
@@ -346,6 +700,11 @@ function FloatingChatWidget() {
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [audioPreview, setAudioPreview] = useState<string | null>(null)
   const [isRecording, setIsRecording] = useState(false)
+  const [humanEscalated, setHumanEscalated] = useState(false)
+  const [userId, setUserId] = useState('')
+  const [showSessionList, setShowSessionList] = useState(false)
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -355,10 +714,28 @@ function FloatingChatWidget() {
   const audioChunksRef = useRef<Blob[]>([])
 
   useEffect(() => {
+    if (user) {
+      setUserId(user.id)
+    } else {
+      let uid = localStorage.getItem('user_id')
+      if (!uid) {
+        uid = 'user_' + Math.random().toString(36).substring(2, 15)
+        localStorage.setItem('user_id', uid)
+      }
+      setUserId(uid)
+    }
+
+    const sid = localStorage.getItem('session_id') || ''
+    if (sid) setSessionId(sid)
+  }, [user])
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isTyping])
 
   useEffect(() => {
+    if (!userId) return
+
     const ws = new WebSocket(WS_URL)
     wsRef.current = ws
 
@@ -366,6 +743,16 @@ function FloatingChatWidget() {
       setConnected(true)
       setConnecting(false)
       inputRef.current?.focus()
+
+      const savedSessionId = localStorage.getItem('session_id')
+      if (savedSessionId) {
+        ws.send(JSON.stringify({
+          type: 'resume_session',
+          session_id: savedSessionId,
+          user_id: userId,
+          token: token || undefined,
+        }))
+      }
     }
 
     ws.onmessage = (event) => {
@@ -374,6 +761,7 @@ function FloatingChatWidget() {
 
         if (data.type === 'session_ready') {
           setSessionId(data.session_id)
+          localStorage.setItem('session_id', data.session_id)
         } else if (data.type === 'typing_indicator') {
           setIsTyping(data.is_typing || false)
         } else if (data.type === 'streaming_chunk') {
@@ -408,13 +796,26 @@ function FloatingChatWidget() {
             }
           }
         } else if (data.type === 'transfer_notice') {
-          setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '🔄 ' + (data.message || '正在转接人工客服...'), timestamp: Date.now() }])
+          if (!humanEscalated) setHumanEscalated(true)
+          setMessages(prev => {
+            const alreadyHas = prev.some(m => m.role === 'system' && m.content.includes('正在转接人工客服'))
+            if (alreadyHas) return prev
+            return [...prev, { id: crypto.randomUUID(), role: 'system', content: '🔄 ' + (data.message || '正在转接人工客服...'), timestamp: Date.now() }]
+          })
           setIsTyping(false)
         } else if (data.type === 'handoff_context') {
-          setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '📋 转接上下文已记录', timestamp: Date.now() }])
+          setMessages(prev => {
+            const alreadyHas = prev.some(m => m.role === 'system' && m.content.includes('转接上下文已记录'))
+            if (alreadyHas) return prev
+            return [...prev, { id: crypto.randomUUID(), role: 'system', content: '📋 转接上下文已记录', timestamp: Date.now() }]
+          })
           setIsTyping(false)
         } else if (data.type === 'message_received') {
-          setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '✅ 消息已发送给人工客服', timestamp: Date.now() }])
+          setMessages(prev => {
+            const alreadyHas = prev.some(m => m.role === 'system' && m.content.includes('消息已发送给人工客服'))
+            if (alreadyHas) return prev
+            return [...prev, { id: crypto.randomUUID(), role: 'system', content: '✅ 消息已发送给人工客服', timestamp: Date.now() }]
+          })
         } else if (data.type === 'info') {
           setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: 'ℹ️ ' + (data.text || ''), timestamp: Date.now() }])
           setIsTyping(false)
@@ -428,7 +829,64 @@ function FloatingChatWidget() {
     ws.onclose = () => { setConnected(false); setConnecting(false) }
     ws.onerror = () => { setConnecting(false); setConnected(false); setMessages([]) }
     return () => ws.close()
-  }, [])
+  }, [userId, token])
+
+  const fetchSessions = async () => {
+    if (!user || !token) return
+    setSessionsLoading(true)
+    try {
+      const response = await fetch('/api/v1/sessions', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setSessions(data.sessions || data || [])
+      }
+    } catch {
+      setSessions([])
+    } finally {
+      setSessionsLoading(false)
+    }
+  }
+
+  const loadSession = async (sid: string) => {
+    if (!token) return
+    try {
+      const response = await fetch(`/api/v1/sessions/${sid}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+      if (response.ok) {
+        const data = await response.json()
+        const msgs: ChatMessage[] = (data.messages || []).map((m: any, idx: number) => ({
+          id: String(idx),
+          role: m.role as 'user' | 'assistant' | 'system',
+          content: m.content,
+          timestamp: new Date(m.timestamp).getTime(),
+        }))
+        setMessages(msgs)
+        setSessionId(sid)
+        localStorage.setItem('session_id', sid)
+      }
+    } catch {
+      console.error('Failed to load session')
+    }
+    setShowSessionList(false)
+  }
+
+  const createNewSession = () => {
+    setMessages([])
+    setSessionId('')
+    localStorage.removeItem('session_id')
+    setHumanEscalated(false)
+    setShowSessionList(false)
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'new_session',
+        user_id: userId,
+        token: token || undefined,
+      }))
+    }
+  }
 
   const sendMessage = () => {
     const text = input.trim()
@@ -445,6 +903,8 @@ function FloatingChatWidget() {
     wsRef.current.send(JSON.stringify({
       type: 'chat_message', message: text || '[图片消息]',
       session_id: sessionId,
+      user_id: userId,
+      token: token || undefined,
       image_base64: imagePreview,
       audio_base64: audioPreview,
     }))
@@ -458,10 +918,13 @@ function FloatingChatWidget() {
   }
 
   const handleHumanEscalate = (_msgId: string) => {
+    if (humanEscalated) return
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    setHumanEscalated(true)
     wsRef.current.send(JSON.stringify({
       type: 'human_escalation',
       session_id: sessionId,
+      user_id: userId,
       reason: 'user_requested',
     }))
     setMessages(prev => [...prev, {
@@ -506,7 +969,8 @@ function FloatingChatWidget() {
 
   const formatTime = (ts: number) => new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
-  // Bot SVG icon component
+  const getInitials = (name: string) => name.charAt(0).toUpperCase()
+
   const BotIcon = ({ color = '#0B0F19' }: { color?: string }) => (
     <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="7" width="18" height="13" rx="3" />
@@ -518,9 +982,15 @@ function FloatingChatWidget() {
     </svg>
   )
 
+  const handleToggleSessionList = () => {
+    if (!showSessionList && user) {
+      fetchSessions()
+    }
+    setShowSessionList(!showSessionList)
+  }
+
   return (
     <>
-      {/* 悬浮按钮 */}
       <button className="floating-chat-btn" onClick={() => setIsOpen(!isOpen)} title="打开聊天">
         {isOpen ? (
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -533,12 +1003,16 @@ function FloatingChatWidget() {
         )}
       </button>
 
-      {/* 聊天面板 */}
       {isOpen && (
         <section id="chat-widget" className="chat-widget floating">
           <div className="chat-panel">
             <div className="chat-header">
               <div className="chat-header-left">
+                {user && (
+                  <button className="chat-sessions-btn" onClick={handleToggleSessionList} title="会话列表">
+                    ☰
+                  </button>
+                )}
                 <span className="chat-bot-icon">
                   <BotIcon color="#0B0F19" />
                 </span>
@@ -551,6 +1025,32 @@ function FloatingChatWidget() {
               </div>
               <button className="chat-close-btn" onClick={() => setIsOpen(false)}>×</button>
             </div>
+
+            {showSessionList && user && (
+              <div className="chat-session-list">
+                <div className="session-list-header">
+                  <span>我的会话</span>
+                  <button className="new-session-btn" onClick={createNewSession}>+ 新会话</button>
+                </div>
+                {sessionsLoading && <div className="session-list-loading">加载中...</div>}
+                {!sessionsLoading && sessions.length === 0 && (
+                  <div className="session-list-empty">暂无会话</div>
+                )}
+                {!sessionsLoading && sessions.map((s) => (
+                  <div
+                    key={s.session_id}
+                    className={`session-list-item ${s.session_id === sessionId ? 'active' : ''}`}
+                    onClick={() => loadSession(s.session_id)}
+                  >
+                    <div className="session-item-preview">{s.last_message || '新会话'}</div>
+                    <div className="session-item-meta">
+                      <span>{new Date(s.updated_at).toLocaleDateString('zh-CN')}</span>
+                      <span>{s.message_count} 条消息</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="chat-messages">
               {messages.length === 0 && !connecting && (
@@ -578,15 +1078,19 @@ function FloatingChatWidget() {
                     {msg.audio && <div className="chat-msg-audio"><audio controls src={msg.audio} /></div>}
                     {msg.content && <p className="chat-msg-text">{msg.content}</p>}
                     {msg.role === 'assistant' && msg.suggestHuman && (
-                      <button className="human-escalate-btn" onClick={() => handleHumanEscalate(msg.id)}>
-                        🔧 转接人工客服
+                      <button 
+                        className="human-escalate-btn" 
+                        onClick={() => handleHumanEscalate(msg.id)}
+                        disabled={humanEscalated}
+                      >
+                        {humanEscalated ? '✅ 已申请转接' : '🔧 转接人工客服'}
                       </button>
                     )}
                     <span className="chat-msg-time">{formatTime(msg.timestamp)}</span>
                   </div>
                   {msg.role === 'user' && (
                     <span className="chat-msg-avatar" title="你">
-                      <span className="initials">你</span>
+                      <span className="initials">{user ? getInitials(user.username) : '你'}</span>
                     </span>
                   )}
                 </div>
@@ -634,106 +1138,43 @@ function FloatingChatWidget() {
   )
 }
 
-// ============================================================
-// Admin Dashboard
-// ============================================================
-
-interface MetricData {
-  total_requests: number
-  resolved: number
-  unresolved: number
-  resolution_rate: number
-  escalation_rate: number
-  avg_turns: number
-}
-
-function AdminDashboard() {
-  const [activeTab, setActiveTab] = useState<'metrics' | 'channels' | 'sessions'>('metrics')
-  const [businessMetrics, setBusinessMetrics] = useState<MetricData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    fetch('/api/v1/metrics/business')
-      .then(r => {
-        if (!r.ok) throw new Error('API not available')
-        return r.json()
-      })
-      .then(setBusinessMetrics)
-      .catch(() => setError('后端指标服务未运行，请先启动后端'))
-      .finally(() => setLoading(false))
-  }, [])
-
-  const StatCard = ({ label, value, color }: { label: string; value: string; color: string }) => (
-    <div className="stat-card">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value" style={{ color }}>{value}</div>
-    </div>
-  )
-
-  if (loading) return <div className="admin-loading">加载中...</div>
-  if (error) return <div className="admin-error">{error}</div>
-
-  return (
-    <section id="admin" className="admin-section">
-      <div className="container">
-        <p className="section-label">Admin Dashboard</p>
-        <h2 className="admin-title">管理后台</h2>
-
-        <div className="admin-tabs">
-          <button className={`tab-btn ${activeTab === 'metrics' ? 'active' : ''}`} onClick={() => setActiveTab('metrics')}>📊 监控指标</button>
-          <button className={`tab-btn ${activeTab === 'channels' ? 'active' : ''}`} onClick={() => setActiveTab('channels')}>🔌 渠道管理</button>
-          <button className={`tab-btn ${activeTab === 'sessions' ? 'active' : ''}`} onClick={() => setActiveTab('sessions')}>💬 会话管理</button>
-        </div>
-
-        {activeTab === 'metrics' && businessMetrics && (
-          <div className="metrics-grid">
-            <StatCard label="总请求数" value={String(businessMetrics.total_requests || 0)} color="#667eea" />
-            <StatCard label="已解决" value={String(businessMetrics.resolved || 0)} color="#4ade80" />
-            <StatCard label="未解决" value={String(businessMetrics.unresolved || 0)} color="#f87171" />
-            <StatCard label="解决率" value={`${((businessMetrics.resolution_rate || 0) * 100).toFixed(1)}%`} color="#667eea" />
-            <StatCard label="转人工率" value={`${((businessMetrics.escalation_rate || 0) * 100).toFixed(1)}%`} color="#fbbf24" />
-            <StatCard label="平均轮数" value={((businessMetrics.avg_turns || 0).toFixed(1))} color="#a78bfa" />
-          </div>
-        )}
-
-        {activeTab === 'channels' && (
-          <div className="channel-grid">
-            {[
-              { name: 'Web 直连', status: 'active' as const, icon: '🌐', desc: '浏览器 WebSocket 直连' },
-              { name: '微信公众号', status: 'inactive' as const, icon: '💬', desc: '需要配置微信服务器地址' },
-              { name: '电话热线', status: 'inactive' as const, icon: '📞', desc: 'Twilio 集成，需配置 API Key' },
-              { name: 'Chatwoot', status: 'inactive' as const, icon: '🪺', desc: '需要部署 Chatwoot 实例' },
-            ].map(ch => (
-              <div className="channel-card" key={ch.name}>
-                <span className="channel-icon">{ch.icon}</span>
-                <div className="channel-info">
-                  <h4>{ch.name}</h4>
-                  <p>{ch.desc}</p>
-                </div>
-                <span className={`channel-badge ${ch.status}`}>{ch.status === 'active' ? '已启用' : '未配置'}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {activeTab === 'sessions' && (
-          <div className="sessions-placeholder">
-            <p>会话管理功能开发中...</p>
-            <p className="hint">可通过 <code>/api/v1/metrics/all</code> 查看实时数据</p>
-          </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
 /* ============================================================
    Main App
    ============================================================ */
 
 function App() {
-  // Scroll reveal observer
+  const [adminModalOpen, setAdminModalOpen] = useState(false)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [user, setUser] = useState<User | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem('token')
+    const savedUser = localStorage.getItem('user')
+    if (savedToken && savedUser) {
+      try {
+        setUser(JSON.parse(savedUser))
+        setToken(savedToken)
+      } catch {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+      }
+    }
+  }, [])
+
+  const handleLoginSuccess = (u: User, t: string) => {
+    setUser(u)
+    setToken(t)
+  }
+
+  const handleLogout = () => {
+    setUser(null)
+    setToken(null)
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+  }
+
   useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
@@ -753,16 +1194,39 @@ function App() {
 
   return (
     <div className="landing-page">
-      <Navigation />
+      <Navigation
+        onAdminClick={() => setAdminModalOpen(true)}
+        user={user}
+        onLoginClick={() => setAuthModalOpen(true)}
+        onLogout={handleLogout}
+        onProfileClick={() => setProfileModalOpen(true)}
+      />
       <HeroSection />
       <ArchitectureSection />
       <CapabilitiesSection />
       <MetricsSection />
       <TechDetailsSection />
       <CTASection />
-      <AdminDashboard />
       <Footer />
-      <FloatingChatWidget />
+      <FloatingChatWidget user={user} token={token} />
+      <AdminDashboard
+        isOpen={adminModalOpen}
+        onClose={() => setAdminModalOpen(false)}
+        user={user}
+        token={token}
+        onLoginClick={() => setAuthModalOpen(true)}
+      />
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onLoginSuccess={handleLoginSuccess}
+      />
+      <ProfileModal
+        isOpen={profileModalOpen}
+        onClose={() => setProfileModalOpen(false)}
+        user={user}
+        onLogout={() => { setProfileModalOpen(false); handleLogout() }}
+      />
     </div>
   )
 }

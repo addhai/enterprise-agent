@@ -116,11 +116,16 @@ class Settings(BaseSettings):
     mcp_pg_password: str = ""
     mcp_pg_read_only: bool = True              # 只读模式（禁止 DROP/DELETE 等危险操作）
 
-    # 钉钉 MCP
+    # 钉钉 MCP (已弃用，建议使用飞书)
     mcp_dingtalk_enabled: bool = False
     mcp_dingtalk_app_key: str = ""
     mcp_dingtalk_app_secret: str = ""
     mcp_dingtalk_agent_id: str = ""
+
+    # 飞书 MCP
+    mcp_feishu_enabled: bool = False
+    mcp_feishu_app_id: str = ""
+    mcp_feishu_app_secret: str = ""
 
     # GitHub MCP
     mcp_github_enabled: bool = False
@@ -154,6 +159,8 @@ class Settings(BaseSettings):
     # Slack MCP
     mcp_slack_enabled: bool = False
     mcp_slack_token: str = ""                  # Slack API Token
+
+
 
 
     # ---- A2A 专家 Agent 配置 ----

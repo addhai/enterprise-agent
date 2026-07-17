@@ -99,4 +99,4 @@ class TicketListFilter(BaseModel):
     category: Optional[TicketCategory] = None
     priority: Optional[TicketPriority] = None
     assignee: Optional[str] = None
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int = Field(default=20, ge=1, le=10000)

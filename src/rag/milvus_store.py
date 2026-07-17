@@ -10,6 +10,10 @@ Milvus 向量存储适配器 — 替代 Chroma
 from __future__ import annotations
 
 import logging
+import os
+# 限制 OpenBLAS 线程数，避免内存分配失败
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 from typing import Any, Dict, List, Optional
 
 from pymilvus import (
@@ -48,13 +52,13 @@ class MilvusVectorStore:
 
     def __init__(
         self,
-        host: str = "milvus-standalone",
-        port: int = 19530,
-        collection_name: str = COLLECTION_NAME,
+        host: str = None,
+        port: int = None,
+        collection_name: str = None,
     ):
-        self.host = host
-        self.port = port
-        self.collection_name = collection_name
+        self.host = host or settings.milvus_host
+        self.port = port or settings.milvus_port
+        self.collection_name = collection_name or settings.milvus_collection_name
         self._embedder: Optional[Embedder] = None
         self._collection: Optional[Collection] = None
         self._connected = False
