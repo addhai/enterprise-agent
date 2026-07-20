@@ -1,4 +1,4 @@
-﻿"""API Key 管理 MCP 工具 — generate_api_key / revoke_api_key / list_api_keys"""
+"""API Key 管理 MCP 工具 — generate_api_key / revoke_api_key / list_api_keys"""
 import logging
 from enum import Enum
 from typing import Callable, List, Optional
@@ -14,6 +14,7 @@ from src.mcp_tools.common import (
     generate_id,
     require_admin,
 )
+from src.mcp_tools.audit import record_audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,13 @@ def create_api_key_tools(
         _api_key_store.save(tenant_id, api_key.id, api_key)
 
         logger.info("API Key generated: id=%s name=%s", api_key.id, name)
+        record_audit_log(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="key_generate",
+            resource=f"api_key:{api_key.id}",
+            details={"name": name, "expires_at": expires_at or "永久"},
+        )
         return format_result("API Key 已生成", "", {
             "key_id": api_key.id,
             "key": key_value,
@@ -127,6 +135,13 @@ def create_api_key_tools(
         _api_key_store.save(tenant_id, key_id, api_key)
 
         logger.info("API Key revoked: id=%s reason=%s", key_id, reason)
+        record_audit_log(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="key_revoke",
+            resource=f"api_key:{key_id}",
+            details={"reason": reason or "未提供", "name": api_key.name},
+        )
         return format_result("API Key 已吊销", "", {"key_id": key_id, "reason": reason or "无"})
 
     @tool

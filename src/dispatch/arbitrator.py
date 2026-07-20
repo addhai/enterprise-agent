@@ -121,19 +121,62 @@ class Arbitrator:
                 injection_type=None,
                 failed_attempts=0,
                 suggest_human=False,
+                # HITL 字段
+                awaiting_human=False,
+                human_handoff_context=None,
+                human_response=None,
+                human_agent_id=None,
+                human_handled=False,
             )
+
+            thread_config = {"configurable": {"thread_id": session_id}}
 
             # 优先使用异步接口；工作流可能为同步 Runnable，没有 ainvoke 时回退 invoke
             if hasattr(workflow, "ainvoke"):
-                result = await workflow.ainvoke(
-                    state,
-                    config={"configurable": {"thread_id": session_id}},
-                )
+                result = await workflow.ainvoke(state, config=thread_config)
             else:
-                result = workflow.invoke(
-                    state,
-                    config={"configurable": {"thread_id": session_id}},
+                result = workflow.invoke(state, config=thread_config)
+
+            # ===== HITL 检测：检查工作流是否被 interrupt() 暂停 =====
+            # 当 human_node 触发 interrupt() 时，ainvoke 会返回当前状态
+            # 此时 workflow.get_state(config).next 非空，表示还有节点待执行
+            is_interrupted = False
+            interrupt_value = None
+            if hasattr(workflow, "get_state"):
+                try:
+                    state_snapshot = workflow.get_state(thread_config)
+                    if state_snapshot and state_snapshot.next:
+                        # 工作流被中断
+                        is_interrupted = True
+                        # 从 tasks 中提取 interrupt 信息
+                        for task in (state_snapshot.tasks or []):
+                            if hasattr(task, "interrupts") and task.interrupts:
+                                interrupt_value = task.interrupts[0].value
+                                break
+                except Exception as inspect_err:
+                    logger.warning("检查 HITL 中断状态失败: %s", inspect_err)
+
+            if is_interrupted:
+                # 工作流被暂停，记录到 HITL 管理器，等待人工介入
+                from src.graph.hitl_manager import get_hitl_manager
+                hitl = get_hitl_manager()
+                await hitl.add_pending(
+                    thread_id=session_id,
+                    interrupt_value=interrupt_value or {},
+                    session_id=session_id,
+                    user_id=sender_id,
                 )
+
+                return {
+                    "reply": "正在为您转接人工客服，请稍候...",
+                    "source": "default",
+                    "needs_human": True,
+                    "awaiting_human": True,
+                    "session_id": session_id,
+                    "thread_id": session_id,
+                    "channel": message.get("channel", "unknown"),
+                    "interrupt_value": interrupt_value,
+                }
 
             reply = result.get("final_response", "") if isinstance(result, dict) else ""
             needs_human = bool(result.get("needs_human", False)) if isinstance(result, dict) else False

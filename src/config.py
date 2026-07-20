@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     openai_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embedding_model: str = "text-embedding-v4"
     embedding_dimensions: int = 1024  # text-embedding-v4 默认 1024 维
+    embedding_provider: str = "openai"  # openai/dashscope/local
     llm_model: str = "qwen-plus"
     llm_complex_model: str = "qwen-max"
 
@@ -160,8 +161,25 @@ class Settings(BaseSettings):
     mcp_slack_enabled: bool = False
     mcp_slack_token: str = ""                  # Slack API Token
 
+    # Chatwoot 渠道配置
+    channel_chatwoot_enabled: bool = False
+    channel_chatwoot_base_url: str = ""       # Chatwoot API 地址，如 https://app.chatwoot.com/api/v1
+    channel_chatwoot_api_token: str = ""      # Chatwoot Agent Bot Token 或 User Token
+    channel_chatwoot_account_id: str = "1"    # Account ID
+    channel_chatwoot_inbox_id: str = "1"      # Inbox ID
+    channel_chatwoot_webhook_token: str = ""  # Webhook 验证 Token（与 Chatwoot 端配置一致）
 
+    # 飞书渠道配置
+    channel_feishu_enabled: bool = False
+    channel_feishu_app_id: str = ""
+    channel_feishu_app_secret: str = ""
 
+    # ---- 告警通知配置（Agent offline 触发）----
+    # 复用 mcp_feishu_* 凭证发送消息；告警开关独立
+    alert_feishu_enabled: bool = False                # 总开关：是否在 Agent offline 时发飞书告警
+    alert_feishu_receive_id: str = ""                 # 接收者 ID（open_id / chat_id / user_id / email）
+    alert_feishu_receive_id_type: str = "open_id"     # 接收者 ID 类型
+    alert_feishu_title_prefix: str = "[EA 告警]"      # 消息标题前缀
 
     # ---- A2A 专家 Agent 配置 ----
     a2a_perf_expert_url: str = "http://localhost:9002"       # 性能诊断专家 Agent

@@ -1,4 +1,4 @@
-﻿"""账单与订阅 MCP 工具 — 对接 capability-contract.yaml 中的支付扣款能力"""
+"""账单与订阅 MCP 工具 — 对接 capability-contract.yaml 中的支付扣款能力"""
 import logging
 from enum import Enum
 from typing import Callable, List, Optional
@@ -14,6 +14,7 @@ from src.mcp_tools.common import (
     generate_id,
     require_admin_or_manager,
 )
+from src.mcp_tools.audit import record_audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,13 @@ def create_billing_tools(
 
         _billing_store.save(tenant_id, tenant_id, sub)
         logger.info("Subscription changed: tenant=%s plan=%s", tenant_id, new_plan)
+        record_audit_log(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="update",
+            resource=f"subscription:{tenant_id}",
+            details={"new_plan": sub.plan, "monthly_cost": sub.monthly_cost},
+        )
         return format_result("计划已变更", "", {"plan": sub.plan, "monthly_cost": f"{sub.monthly_cost} CNY"})
 
     @tool
@@ -195,6 +203,13 @@ def create_billing_tools(
         _refund_store.save(tenant_id, refund.id, refund)
 
         logger.info("Refund requested: id=%s amount=%.2f", refund.id, amount)
+        record_audit_log(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="refund",
+            resource=f"transaction:{transaction_id}",
+            details={"refund_id": refund.id, "amount": amount, "reason": reason},
+        )
         return format_result("退款申请已提交", "", {
             "refund_id": refund.id,
             "amount": f"{amount} CNY",

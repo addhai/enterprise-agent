@@ -1,4 +1,4 @@
-﻿"""用户管理 MCP 工具 — get_user_profile / reset_password / disable_account"""
+"""用户管理 MCP 工具 — get_user_profile / reset_password / disable_account"""
 import logging
 from enum import Enum
 from typing import Callable, List, Optional
@@ -14,6 +14,7 @@ from src.mcp_tools.common import (
     generate_id,
     require_admin,
 )
+from src.mcp_tools.audit import record_audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,13 @@ def create_user_tools(
             return format_result("未找到", f"用户 {target_user_id} 不存在")
 
         logger.info("Password reset: user=%s by=%s reason=%s", target_user_id, user_id, reason)
+        record_audit_log(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="update",
+            resource=f"user:{target_user_id}:password",
+            details={"reason": reason or "未提供", "target_email": user.email},
+        )
         return format_result("密码已重置", "", {
             "user_id": target_user_id,
             "email": user.email,
@@ -143,6 +151,13 @@ def create_user_tools(
         _user_store.save(tenant_id, target_user_id, user)
 
         logger.info("Account disabled: user=%s by=%s reason=%s", target_user_id, user_id, reason)
+        record_audit_log(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="delete",
+            resource=f"user:{target_user_id}:status",
+            details={"reason": reason, "target_email": user.email},
+        )
         return format_result("账号已禁用", "", {"user_id": target_user_id, "reason": reason})
 
     @tool

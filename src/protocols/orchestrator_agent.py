@@ -49,6 +49,35 @@ class Orchestrator:
     def __init__(self):
         from src.protocols.agent_registry import registry
         self.registry = registry
+        # 延迟获取 HealthChecker 单例（含 CircuitBreaker）
+        # 首次调用 route_request / delegate_to_agent 时才解析，避免循环导入
+        self._health_checker = None
+
+    @property
+    def health_checker(self):
+        """延迟获取 HealthChecker 单例"""
+        if self._health_checker is None:
+            try:
+                from src.protocols.health_checker import get_health_checker
+                self._health_checker = get_health_checker()
+            except Exception as e:
+                logger.warning("HealthChecker unavailable, fallback to no-circuit mode: %s", e)
+                self._health_checker = None
+        return self._health_checker
+
+    def _is_available(self, agent_id: str) -> bool:
+        """检查 Agent 是否可调用：在线 + 熔断器未断开"""
+        entry = self.registry.get(agent_id)
+        if not entry or entry.status != "online":
+            return False
+        cb = self.health_checker.circuit_breaker if self.health_checker else None
+        if cb and not cb.can_call(agent_id):
+            logger.info(
+                "Agent %s skipped (circuit %s)",
+                agent_id, cb.state(agent_id),
+            )
+            return False
+        return True
 
     async def route_request(self, query: str) -> dict:
         """智能路由请求到合适的 Agent
@@ -89,19 +118,19 @@ class Orchestrator:
         is_security_query = any(kw in query_lower for kw in security_keywords)
         if is_security_query:
             sec_entry = self.registry.get("security_expert")
-            if sec_entry and sec_entry.status == "online":
+            if sec_entry and self._is_available("security_expert"):
                 matched_agents.append(("security_expert", "high", sec_entry))
 
         # 匹配性能专家（当安全查询中包含 api key 时，不重复匹配 api）
         is_perf_query = any(kw in query_lower for kw in perf_keywords)
         if is_perf_query:
             perf_entry = self.registry.get("performance_expert")
-            if perf_entry and perf_entry.status == "online":
+            if perf_entry and self._is_available("performance_expert"):
                 matched_agents.append(("performance_expert", "high", perf_entry))
 
         # 匹配客服（兜底或客服特定查询）
         cs_entry = self.registry.get("customer_service")
-        if cs_entry and cs_entry.status == "online":
+        if cs_entry and self._is_available("customer_service"):
             if not matched_agents or any(kw in query_lower for kw in cs_keywords):
                 matched_agents.append(("customer_service", "medium", cs_entry))
 
@@ -127,6 +156,10 @@ class Orchestrator:
     async def delegate_to_agent(self, agent_id: str, query: str) -> Optional[str]:
         """委托请求到指定 Agent
 
+        在调用前后更新熔断器：
+        - 成功（返回非空字符串）→ record_success
+        - 失败（抛异常 / 返回 None / 返回空串）→ record_failure
+
         Args:
             agent_id: 目标 Agent ID
             query: 用户查询
@@ -139,33 +172,105 @@ class Orchestrator:
             logger.error("Agent not found: %s", agent_id)
             return None
 
-        if entry.status != "online":
-            logger.error("Agent offline: %s", agent_id)
+        # 二次检查熔断器状态（防止并发期间状态变化）
+        if not self._is_available(agent_id):
+            logger.warning("Agent %s not available (offline or circuit open)", agent_id)
             return None
+
+        cb = self.health_checker.circuit_breaker if self.health_checker else None
 
         try:
             if _A2A_AVAILABLE:
-                return await self._delegate_via_a2a(entry.url, query)
+                result = await self._delegate_via_a2a(entry.url, query)
             else:
-                return await self._delegate_local(agent_id, query)
+                result = await self._delegate_local(agent_id, query)
+
+            # 空结果也视为失败（专家没响应）
+            if not result or not result.strip():
+                if cb:
+                    cb.record_failure(agent_id, "empty_response")
+                logger.warning("Agent %s returned empty response", agent_id)
+                return None
+
+            # 成功 → 重置熔断器
+            if cb:
+                cb.record_success(agent_id)
+            return result
+
         except Exception as e:
+            # 失败 → 累计失败次数
+            if cb:
+                cb.record_failure(agent_id, str(e)[:100])
             logger.error("Failed to delegate to %s: %s", agent_id, e)
             return None
 
     async def _delegate_via_a2a(self, url: str, query: str) -> Optional[str]:
-        """通过 A2A 协议委托"""
+        """通过 A2A 协议委托
+
+        带显式超时 + 指数退避重试：
+        - 超时：a2a_expert_timeout（默认 30s）
+        - 重试：最多 3 次，间隔 0.5s → 1s → 2s
+        - 重试条件：网络异常 / 超时（业务错误不重试）
+        """
         from src.protocols.a2a_server import _make_text_message
         from uuid import uuid4
+        import asyncio as _asyncio
 
-        client = a2a.Client(url)
-        context_id = str(uuid4())
-        task_id = str(uuid4())
+        # 读取超时配置（a2a_server 中已有 a2a_expert_timeout，这里复用）
+        try:
+            from src.config import settings
+            timeout_seconds = getattr(settings, "a2a_expert_timeout", 30)
+        except Exception:
+            timeout_seconds = 30
 
-        message = _make_text_message(query, context_id, task_id)
-        response = await client.send_message(message)
+        max_retries = 3
+        backoff_seconds = 0.5
 
-        if response and response.parts:
-            return "\n".join(p.text for p in response.parts if p.text)
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                client = a2a.Client(url, timeout=timeout_seconds)
+                context_id = str(uuid4())
+                task_id = str(uuid4())
+
+                message = _make_text_message(query, context_id, task_id)
+                # send_message 本身是 async，外层用 asyncio.wait_for 兜底超时
+                response = await _asyncio.wait_for(
+                    client.send_message(message),
+                    timeout=timeout_seconds,
+                )
+
+                if response and response.parts:
+                    return "\n".join(p.text for p in response.parts if p.text)
+                return None
+
+            except _asyncio.TimeoutError:
+                last_error = f"timeout after {timeout_seconds}s"
+                logger.warning(
+                    "A2A delegate timeout (attempt %d/%d) url=%s",
+                    attempt, max_retries, url,
+                )
+            except Exception as e:
+                last_error = str(e)[:100]
+                # 业务错误（如 4xx）不重试，仅网络/超时重试
+                err_str = str(e).lower()
+                if any(x in err_str for x in ["400", "401", "403", "404", "validation"]):
+                    logger.error("A2A delegate business error (no retry): %s", e)
+                    return None
+                logger.warning(
+                    "A2A delegate error (attempt %d/%d) url=%s: %s",
+                    attempt, max_retries, url, e,
+                )
+
+            # 还有重试机会则等待
+            if attempt < max_retries:
+                await _asyncio.sleep(backoff_seconds)
+                backoff_seconds *= 2  # 指数退避
+
+        logger.error(
+            "A2A delegate failed after %d retries (url=%s): %s",
+            max_retries, url, last_error,
+        )
         return None
 
     async def _delegate_local(self, agent_id: str, query: str) -> Optional[str]:

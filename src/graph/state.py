@@ -1,4 +1,4 @@
-from typing import Annotated, Any, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
@@ -71,3 +71,19 @@ class AgentState(TypedDict):
 
     # 是否建议转人工（供前端显示按钮，用户点击后才真正转人工）
     suggest_human: bool
+
+    # ===== HITL (Human-in-the-loop) 相关字段 =====
+    # 是否正在等待人工介入
+    awaiting_human: bool
+
+    # 人工转接上下文（推送给人工客服的完整信息）
+    human_handoff_context: Optional[Dict[str, Any]]
+
+    # 人工客服的回复
+    human_response: Optional[str]
+
+    # 处理该任务的人工客服 ID
+    human_agent_id: Optional[str]
+
+    # 是否已由人工处理完成
+    human_handled: bool

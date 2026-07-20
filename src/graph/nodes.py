@@ -691,22 +691,80 @@ def rag_node(
 # ======================================================================
 
 def human_node(state: AgentState) -> Dict[str, Any]:
-    """人工转接节点：准备转人工上下文"""
+    """人工转接节点（HITL）：使用 interrupt() 暂停工作流，等待人工客服介入
+
+    工作流在此节点暂停，把完整上下文推送给人工客服。
+    人工客服审核后通过 Command(resume=...) 恢复工作流，
+    本节点拿到人工的回复后继续执行后续节点（reply → END）。
+
+    如果人工未响应（超时/离线），由调用方（arbitrator）返回兜底回复。
+    """
+    from langgraph.types import interrupt
+
     messages = state.get("messages", [])
     last_message = messages[-1] if messages else None
-    user_message = last_message.content[:200] if last_message else ""
-    
+    user_message = last_message.content[:500] if last_message else ""
+
     # 生成简洁的转接原因
     reason = _generate_handoff_reason(user_message)
-    
-    return {
-        "needs_human": True,
-        "final_response": (
-            f"已为您转接人工客服，请稍候～\n\n"
-            f"我们的客服专员将很快为您服务。"
-        ),
-        "handoff_reason": reason,
+
+    # 准备推送给人工客服的完整上下文
+    retrieved_docs = state.get("retrieved_docs") or []
+    handoff_context = {
+        "user_id": state.get("user_id"),
+        "session_id": state.get("session_id"),
+        "tenant_id": state.get("tenant_id"),
+        "user_message": user_message,
+        "conversation_history": [
+            {"role": _msg_role_name(m), "content": getattr(m, "content", "")[:300]}
+            for m in messages[-10:]  # 最近 10 条对话
+        ],
+        "reason": reason,
+        "ai_suggested_response": state.get("final_response", ""),
+        "retrieved_docs": [
+            {
+                "text": getattr(d, "page_content", str(d))[:200],
+                "score": getattr(d, "score", 0),
+            }
+            for d in retrieved_docs
+        ][:3],  # 最多 3 个相关文档
+        "intent": state.get("intent"),
+        "turn_count": state.get("turn_count", 0),
     }
+
+    # 暂停工作流，等待人工恢复
+    human_input = interrupt({
+        "type": "human_handoff",
+        "context": handoff_context,
+        "question": "请提供人工回复，或编辑 AI 的建议回复后提交",
+    })
+
+    # 工作流恢复后，从 human_input 取回人工回复
+    human_response = (human_input or {}).get("response", "")
+    human_agent_id = (human_input or {}).get("agent_id")
+
+    return {
+        "needs_human": False,  # 人工已介入，不再标记需要转人工
+        "awaiting_human": False,
+        "final_response": human_response or "已由人工客服为您处理。",
+        "human_response": human_response,
+        "human_agent_id": human_agent_id,
+        "handoff_reason": reason,
+        "human_handoff_context": handoff_context,
+        "human_handled": True,
+    }
+
+
+def _msg_role_name(message) -> str:
+    """从 LangChain message 对象提取角色名"""
+    msg_type = getattr(message, "type", "") or ""
+    if msg_type == "human":
+        return "user"
+    if msg_type == "ai":
+        return "assistant"
+    if msg_type == "system":
+        return "system"
+    return msg_type or "unknown"
 
 
 def _generate_handoff_reason(user_message: str) -> str:
@@ -751,7 +809,7 @@ def reflect_node(state: AgentState) -> Dict[str, Any]:
         return {}
 
     reflect_llm = ChatOpenAI(
-        model=settings.llm_model,
+        model=settings.llm_complex_model,
         api_key=settings.openai_api_key,
         base_url=settings.openai_api_base,
         temperature=0.0,
@@ -771,6 +829,22 @@ def reflect_node(state: AgentState) -> Dict[str, Any]:
     try:
         result = reflect_llm.invoke(reflect_prompt)
         reflection_output = result.content.strip()
+        # 上报 token 用量（reflect 用 complex model）
+        try:
+            meta = getattr(result, "response_metadata", None) or {}
+            token_usage = meta.get("token_usage") or meta.get("usage") or {}
+            prompt = token_usage.get("prompt_tokens") or token_usage.get("input_tokens", 0)
+            completion = token_usage.get("completion_tokens") or token_usage.get("output_tokens", 0)
+            if prompt or completion:
+                from src.api.metrics import record_llm_tokens
+                record_llm_tokens(
+                    model=settings.llm_complex_model,
+                    prompt_tokens=int(prompt),
+                    completion_tokens=int(completion),
+                    tenant_id=state.get("tenant_id", "default"),
+                )
+        except Exception:
+            pass
     except Exception:
         return {"has_reflected": True}
 

@@ -392,14 +392,65 @@ async def _handle_ai_chat(
             access_filtered=0,
             failed_attempts=prev_failed_attempts,
             suggest_human=False,
+            # HITL 字段
+            awaiting_human=False,
+            human_handoff_context=None,
+            human_response=None,
+            human_agent_id=None,
+            human_handled=False,
         )
 
         # 4. 执行工作流（异步 offload，避免阻塞事件循环）
         import asyncio
+        thread_config = {"configurable": {"thread_id": session_id}}
         result = await asyncio.to_thread(
-            app.invoke, state,
-            {"configurable": {"thread_id": session_id}}
+            app.invoke, state, thread_config,
         )
+
+        # ===== HITL 检测：检查工作流是否被 interrupt() 暂停 =====
+        is_interrupted = False
+        interrupt_value = None
+        try:
+            state_snapshot = app.get_state(thread_config)
+            if state_snapshot and state_snapshot.next:
+                is_interrupted = True
+                for task in (state_snapshot.tasks or []):
+                    if hasattr(task, "interrupts") and task.interrupts:
+                        interrupt_value = task.interrupts[0].value
+                        break
+        except Exception as hitl_err:
+            logger.warning("[HITL] 检查中断状态失败: %s", hitl_err)
+
+        if is_interrupted:
+            # 工作流被暂停 → 记录到 HITL 管理器，等待人工介入
+            from src.graph.hitl_manager import get_hitl_manager
+            hitl = get_hitl_manager()
+            await hitl.add_pending(
+                thread_id=session_id,
+                interrupt_value=interrupt_value or {},
+                session_id=session_id,
+                user_id=user_id,
+            )
+            logger.info("[HITL] 工作流暂停，等待人工介入: session=%s", session_id)
+
+            # 推送"正在转接"消息给用户
+            await websocket.send_json(build_typing_indicator(session_id, is_typing=False))
+            await websocket.send_json(build_streaming_chunk(
+                session_id,
+                text="正在为您转接人工客服，请稍候...",
+                delta="正在为您转接人工客服，请稍候...",
+            ))
+            # 完成标记（带 HITL 元信息，前端可据此显示"等待人工"状态）
+            await websocket.send_json({
+                **build_streaming_chunk(session_id, text="", done=True),
+                "needs_human": True,
+                "awaiting_human": True,
+                "thread_id": session_id,
+            })
+
+            # 更新会话状态为"等待人工"
+            session_mgr.update_mode(session_id, SessionMode.WAITING_HUMAN)
+            return  # 工作流暂停，直接返回，等待人工恢复
 
         # 打印调用后的结果消息数量
         result_messages = result.get("messages", [])

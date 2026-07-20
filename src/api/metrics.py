@@ -64,6 +64,43 @@ def gauge_dec(name: str, value: float = 1, labels: dict = None):
     _gauges[k] = _gauges.get(k, 0) - value
 
 
+# ---- LLM Token 用量记录 ----
+# 三类标签：model / type(prompt|completion) / tenant_id
+# 输出示例：llm_tokens_total{model="qwen-plus",type="prompt",tenant="t1"} 12345
+
+def record_llm_tokens(
+    model: str,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    tenant_id: str = "default",
+):
+    """记录一次 LLM 调用的 token 消耗
+
+    Args:
+        model: 模型名（如 qwen-plus / qwen-max）
+        prompt_tokens: 输入 token 数
+        completion_tokens: 输出 token 数
+        tenant_id: 租户 ID（用于按租户统计成本）
+    """
+    if prompt_tokens > 0:
+        counter_inc(
+            "llm_tokens_total",
+            {"model": model, "type": "prompt", "tenant": tenant_id},
+            prompt_tokens,
+        )
+    if completion_tokens > 0:
+        counter_inc(
+            "llm_tokens_total",
+            {"model": model, "type": "completion", "tenant": tenant_id},
+            completion_tokens,
+        )
+    # 总调用次数 +1
+    counter_inc(
+        "llm_calls_total",
+        {"model": model, "tenant": tenant_id},
+    )
+
+
 # ---- Metrics 端点 ----
 
 def render_metrics() -> str:

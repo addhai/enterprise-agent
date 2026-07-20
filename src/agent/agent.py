@@ -78,11 +78,32 @@ class CustomerServiceAgent:
             output_messages = result.get("messages", [])
             if output_messages:
                 last = output_messages[-1]
+                # 上报 token 用量（从 response_metadata 提取）
+                self._report_token_usage(last)
                 if hasattr(last, "content"):
                     return last.content
             return "抱歉，我暂时无法处理您的请求。"
         except Exception as e:
             return f"处理您的请求时出现错误。正在为您转接人工客服。[{str(e)[:100]}]"
+
+    def _report_token_usage(self, message) -> None:
+        """从 AIMessage.response_metadata 提取 token 用量并上报 metrics"""
+        try:
+            meta = getattr(message, "response_metadata", None) or {}
+            token_usage = meta.get("token_usage") or meta.get("usage") or {}
+            prompt = token_usage.get("prompt_tokens") or token_usage.get("input_tokens", 0)
+            completion = token_usage.get("completion_tokens") or token_usage.get("output_tokens", 0)
+            if prompt or completion:
+                from src.api.metrics import record_llm_tokens
+                record_llm_tokens(
+                    model=settings.llm_model,
+                    prompt_tokens=int(prompt),
+                    completion_tokens=int(completion),
+                    tenant_id=self.tenant_id or "default",
+                )
+        except Exception:
+            # 上报失败不影响主流程
+            pass
 
     def run_with_trace(self, user_message: str, chat_history: list = None) -> dict:
         """处理消息并返回完整结果（含中间步骤）"""

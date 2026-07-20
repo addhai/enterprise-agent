@@ -54,6 +54,40 @@ def _init_default_admin():
         }
         logger.info("Default admin account created: username=admin password=admin123")
 
+    agent_id = "agent-default"
+    if agent_id not in _users:
+        now = time.time()
+        _users[agent_id] = {
+            "user_id": agent_id,
+            "username": "agent",
+            "password_hash": _hash_password("agent123"),
+            "avatar": "A",
+            "created_at": now,
+            "role": UserRole.AGENT.value,
+            "status": UserStatus.ACTIVE.value,
+            "is_admin": False,
+            "email": "agent@enterprise.local",
+            "department": "客服部",
+        }
+        logger.info("Default agent account created: username=agent password=agent123")
+
+    viewer_id = "viewer-default"
+    if viewer_id not in _users:
+        now = time.time()
+        _users[viewer_id] = {
+            "user_id": viewer_id,
+            "username": "viewer",
+            "password_hash": _hash_password("viewer123"),
+            "avatar": "V",
+            "created_at": now,
+            "role": UserRole.VIEWER.value,
+            "status": UserStatus.ACTIVE.value,
+            "is_admin": False,
+            "email": "viewer@enterprise.local",
+            "department": "市场部",
+        }
+        logger.info("Default viewer account created: username=viewer password=viewer123")
+
 
 def hash_password(password: str) -> str:
     """使用bcrypt哈希密码"""

@@ -140,6 +140,10 @@ def create_workflow(retriever=None, memory_manager=None):
     # Reply node ends
     workflow.add_edge("reply", END)
 
-    # Compile
-    app = workflow.compile()
+    # Compile with checkpointer — HITL 必需
+    # MemorySaver 保存每个 thread_id 的状态，支持 interrupt() 暂停 + Command(resume=) 恢复
+    # 生产环境可替换为 PostgresSaver 实现持久化
+    from langgraph.checkpoint.memory import MemorySaver
+    checkpointer = MemorySaver()
+    app = workflow.compile(checkpointer=checkpointer)
     return app

@@ -2,6 +2,7 @@ from typing import Callable, List, Optional
 import logging
 import re
 import time
+import asyncio
 from langchain_core.tools import tool
 from src.rag.retriever import HybridRetriever
 
@@ -77,6 +78,90 @@ def _faq_search(query: str) -> Optional[str]:
             if keyword.lower() in query_lower:
                 return item["answer"]
     return None
+
+
+# ---------------------------------------------------------------------------
+# 工具调用重试与并行执行
+# ---------------------------------------------------------------------------
+
+def retry_tool(max_retries: int = 3, delay: float = 0.5, backoff: float = 2.0):
+    """工具调用重试装饰器 — 网络异常时自动重试
+
+    Args:
+        max_retries: 最大重试次数
+        delay: 初始延迟（秒）
+        backoff: 指数退避系数
+
+    使用方式：
+        @retry_tool(max_retries=3)
+        def search_knowledge_base(query):
+            ...
+    """
+
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            last_error = None
+            current_delay = delay
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e).lower()
+                    if any(x in error_str for x in ["timeout", "connection", "503", "504"]):
+                        logger.warning(
+                            "Tool %s failed (attempt %d/%d): %s",
+                            func.__name__, attempt, max_retries, e,
+                        )
+                        if attempt < max_retries:
+                            time.sleep(current_delay)
+                            current_delay *= backoff
+                    else:
+                        logger.error("Tool %s failed (no retry): %s", func.__name__, e)
+                        raise
+            logger.error("Tool %s failed after %d retries: %s", func.__name__, max_retries, last_error)
+            raise last_error
+
+        return wrapper
+
+    return decorator
+
+
+async def parallel_tool_call(tool_calls: List[dict], timeout: float = 30.0) -> List[dict]:
+    """并行执行多个工具调用
+
+    Args:
+        tool_calls: 工具调用列表，格式: [{"tool": callable, "args": {...}}]
+        timeout: 总超时时间（秒）
+
+    Returns:
+        结果列表，按调用顺序排列，失败项为 {"success": False, "error": "..."}
+
+    使用方式：
+        results = await parallel_tool_call([
+            {"tool": search_faq, "args": {"query": "怎么退款"}},
+            {"tool": search_knowledge_base, "args": {"query": "怎么退款"}},
+        ])
+    """
+
+    async def _call_tool(call_spec):
+        try:
+            result = call_spec["tool"](**call_spec["args"])
+            return {"success": True, "result": result}
+        except Exception as e:
+            return {"success": False, "error": str(e)[:200]}
+
+    tasks = [_call_tool(c) for c in tool_calls]
+    done, pending = await asyncio.wait(tasks, timeout=timeout)
+    for t in pending:
+        t.cancel()
+    results = []
+    for task in done:
+        try:
+            results.append(task.result())
+        except asyncio.CancelledError:
+            results.append({"success": False, "error": "timeout"})
+    return results
 
 
 # ---------------------------------------------------------------------------

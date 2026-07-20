@@ -181,30 +181,229 @@ async def get_admin_session_detail(
 async def get_channels(
     current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
-    """获取已启用的渠道列表
+    """获取渠道列表及配置
     
     需要 admin 角色
-    web 渠道始终启用，feishu 渠道根据配置决定
+    返回所有支持的渠道及其配置信息（敏感字段脱敏）
     """
     channels = [
         {
             "name": "web",
             "enabled": True,
             "description": "Web 端聊天窗口",
-        }
-    ]
-
-    if settings.mcp_feishu_enabled:
-        channels.append({
+            "config": {},
+        },
+        {
             "name": "feishu",
-            "enabled": True,
+            "enabled": settings.channel_feishu_enabled,
             "description": "飞书渠道",
-        })
+            "config": {
+                "app_id": settings.channel_feishu_app_id,
+                "app_secret_configured": bool(settings.channel_feishu_app_secret),
+            },
+        },
+        {
+            "name": "chatwoot",
+            "enabled": settings.channel_chatwoot_enabled,
+            "description": "Chatwoot 客服平台",
+            "config": {
+                "base_url": settings.channel_chatwoot_base_url,
+                "api_token_configured": bool(settings.channel_chatwoot_api_token),
+                "account_id": settings.channel_chatwoot_account_id,
+                "inbox_id": settings.channel_chatwoot_inbox_id,
+                "webhook_token_configured": bool(settings.channel_chatwoot_webhook_token),
+                "webhook_url": "/api/v1/chatwoot/webhook",
+            },
+        },
+    ]
 
     return {
         "total": len(channels),
         "channels": channels,
     }
+
+
+@router.get("/admin/channels/{channel_name}/config")
+async def get_channel_config(
+    channel_name: str,
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+):
+    """获取指定渠道的完整配置（包含敏感字段）
+    
+    需要 admin 角色
+    仅返回当前配置值（token 等敏感信息仅返回是否已配置，不返回原值）
+    """
+    if channel_name == "chatwoot":
+        return {
+            "name": "chatwoot",
+            "enabled": settings.channel_chatwoot_enabled,
+            "config": {
+                "base_url": settings.channel_chatwoot_base_url,
+                "api_token_configured": bool(settings.channel_chatwoot_api_token),
+                "account_id": settings.channel_chatwoot_account_id,
+                "inbox_id": settings.channel_chatwoot_inbox_id,
+                "webhook_token_configured": bool(settings.channel_chatwoot_webhook_token),
+                "webhook_url": "/api/v1/chatwoot/webhook",
+            },
+        }
+    elif channel_name == "feishu":
+        return {
+            "name": "feishu",
+            "enabled": settings.channel_feishu_enabled,
+            "config": {
+                "app_id": settings.channel_feishu_app_id,
+                "app_secret_configured": bool(settings.channel_feishu_app_secret),
+            },
+        }
+    elif channel_name == "web":
+        return {
+            "name": "web",
+            "enabled": True,
+            "config": {},
+        }
+    raise HTTPException(status_code=404, detail=f"不支持的渠道: {channel_name}")
+
+
+@router.put("/admin/channels/{channel_name}/config")
+async def update_channel_config(
+    channel_name: str,
+    config_data: Dict[str, Any] = Body(...),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+):
+    """更新渠道配置
+    
+    需要 admin 角色
+    支持启用/禁用渠道，更新配置参数
+    """
+    import httpx
+    
+    if channel_name == "chatwoot":
+        if "enabled" in config_data:
+            settings.channel_chatwoot_enabled = bool(config_data["enabled"])
+        if "base_url" in config_data:
+            settings.channel_chatwoot_base_url = str(config_data["base_url"]).rstrip("/")
+        if "api_token" in config_data and config_data["api_token"]:
+            settings.channel_chatwoot_api_token = str(config_data["api_token"])
+        if "account_id" in config_data:
+            settings.channel_chatwoot_account_id = str(config_data["account_id"])
+        if "inbox_id" in config_data:
+            settings.channel_chatwoot_inbox_id = str(config_data["inbox_id"])
+        if "webhook_token" in config_data and config_data["webhook_token"]:
+            settings.channel_chatwoot_webhook_token = str(config_data["webhook_token"])
+        
+        return {
+            "success": True,
+            "name": "chatwoot",
+            "enabled": settings.channel_chatwoot_enabled,
+            "config": {
+                "base_url": settings.channel_chatwoot_base_url,
+                "api_token_configured": bool(settings.channel_chatwoot_api_token),
+                "account_id": settings.channel_chatwoot_account_id,
+                "inbox_id": settings.channel_chatwoot_inbox_id,
+                "webhook_token_configured": bool(settings.channel_chatwoot_webhook_token),
+            },
+        }
+    elif channel_name == "feishu":
+        if "enabled" in config_data:
+            settings.channel_feishu_enabled = bool(config_data["enabled"])
+        if "app_id" in config_data:
+            settings.channel_feishu_app_id = str(config_data["app_id"])
+        if "app_secret" in config_data and config_data["app_secret"]:
+            settings.channel_feishu_app_secret = str(config_data["app_secret"])
+        
+        return {
+            "success": True,
+            "name": "feishu",
+            "enabled": settings.channel_feishu_enabled,
+            "config": {
+                "app_id": settings.channel_feishu_app_id,
+                "app_secret_configured": bool(settings.channel_feishu_app_secret),
+            },
+        }
+    
+    raise HTTPException(status_code=404, detail=f"不支持的渠道: {channel_name}")
+
+
+@router.post("/admin/channels/{channel_name}/test")
+async def test_channel_connection(
+    channel_name: str,
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+):
+    """测试渠道连接
+    
+    需要 admin 角色
+    测试 Chatwoot API 是否能正常连通
+    """
+    import httpx
+    
+    if channel_name == "chatwoot":
+        if not settings.channel_chatwoot_base_url or not settings.channel_chatwoot_api_token:
+            raise HTTPException(status_code=400, detail="请先配置 Chatwoot Base URL 和 API Token")
+        
+        try:
+            url = f"{settings.channel_chatwoot_base_url}/accounts/{settings.channel_chatwoot_account_id}/conversations"
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={"api_access_token": settings.channel_chatwoot_api_token},
+                    params={"status": "open", "page": 1},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return {
+                        "success": True,
+                        "message": "Chatwoot 连接成功",
+                        "details": {
+                            "status_code": resp.status_code,
+                            "open_conversations": len(data.get("payload", [])),
+                        },
+                    }
+                elif resp.status_code == 401:
+                    return {
+                        "success": False,
+                        "message": "API Token 无效，请检查 Token 是否正确",
+                        "details": {"status_code": resp.status_code},
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": f"连接失败 (HTTP {resp.status_code})",
+                        "details": {"status_code": resp.status_code, "response": resp.text[:200]},
+                    }
+        except httpx.ConnectError as e:
+            return {
+                "success": False,
+                "message": f"无法连接到 Chatwoot 服务器: {str(e)}",
+                "details": {"error": str(e)},
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"测试失败: {str(e)}",
+                "details": {"error": str(e)},
+            }
+    elif channel_name == "feishu":
+        if not settings.channel_feishu_app_id or not settings.channel_feishu_app_secret:
+            raise HTTPException(status_code=400, detail="请先配置飞书 App ID 和 App Secret")
+        
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(
+                    "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                    json={
+                        "app_id": settings.channel_feishu_app_id,
+                        "app_secret": settings.channel_feishu_app_secret,
+                    },
+                )
+                data = resp.json()
+                if data.get("code") == 0:
+                    return {"success": True, "message": "飞书连接成功", "details": {"tenant_token_obtained": True}}
+                else:
+                    return {"success": False, "message": f"飞书连接失败: {data.get('msg', '未知错误')}", "details": data}
+        except Exception as e:
+            return {"success": False, "message": f"测试失败: {str(e)}", "details": {"error": str(e)}}
+    
+    raise HTTPException(status_code=404, detail=f"不支持的渠道: {channel_name}")
 
 
 # ====================================================================

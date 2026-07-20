@@ -76,6 +76,23 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.warning("WebSocket session manager start failed: %s", e)
 
+        # 注册默认 Agent 到注册中心（供健康检查 / Orchestrator 路由使用）
+        try:
+            from src.protocols.agent_registry import register_default_agents
+            register_default_agents()
+            logger.info("Default agents registered to registry")
+        except Exception as e:
+            logger.warning("Register default agents failed: %s", e)
+
+        # 启动 Agent 健康检查器
+        try:
+            from src.protocols.health_checker import get_health_checker
+            checker = get_health_checker()
+            await checker.start()
+            logger.info("Agent health checker started")
+        except Exception as e:
+            logger.warning("Health checker start failed: %s", e)
+
         # 注入演示数据
         try:
             from src.seed import seed_demo_data
@@ -87,6 +104,16 @@ def create_app() -> FastAPI:
     async def shutdown():
         """应用停止：清理资源"""
         logger.info("App shutting down — cleaning up resources...")
+
+        # 停止 Agent 健康检查器
+        try:
+            from src.protocols.health_checker import get_health_checker
+            checker = get_health_checker()
+            await checker.stop()
+            logger.info("Agent health checker stopped")
+        except Exception as e:
+            logger.warning("Health checker stop failed: %s", e)
+
         try:
             from src.api.dependencies import cleanup_resources
             cleanup_resources()
@@ -196,6 +223,22 @@ def create_app() -> FastAPI:
         logger.info("Registered dashboard router")
     except Exception as e:
         logger.error("Failed to register dashboard router: %s", e)
+
+    # 注册 HITL (Human-in-the-loop) 路由
+    try:
+        from src.api.hitl import router as hitl_router
+        app.include_router(hitl_router, prefix="/api/v1")
+        logger.info("Registered HITL router")
+    except Exception as e:
+        logger.error("Failed to register HITL router: %s", e)
+
+    # 注册 Agent 健康检查路由
+    try:
+        from src.api.health import router as health_router
+        app.include_router(health_router, prefix="/api/v1")
+        logger.info("Registered health router")
+    except Exception as e:
+        logger.error("Failed to register health router: %s", e)
 
     # 注册静态文件（必须在所有路由之后，否则会拦截 /api 请求）
     from fastapi.staticfiles import StaticFiles
