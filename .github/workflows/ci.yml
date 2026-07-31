@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  python-test:
+    name: Tests + Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+
+      - name: Run tests with coverage
+        run: |
+          # 注意：GitHub 上只提交了本次质量改造涉及的少量测试，
+          # 覆盖率数字会偏低，属正常。完整覆盖率门禁在贵司 GitLab CI 中生效。
+          pytest tests/ -v --cov=src --cov-report=term --cov-report=xml --cov-fail-under=0
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  python-security:
+    name: SAST Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SAST tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit semgrep
+
+      - name: Bandit (medium+, blocking)
+        run: |
+          # 中高危漏洞阻断合并；已知安全项已在 bandit.yaml 中说明
+          bandit -c bandit.yaml -r src/ --severity-level medium -f txt
+
+      - name: Semgrep (ERROR, advisory on GitHub)
+        run: |
+          # GitHub 上仅作参考（避免网络/规则同步导致误红）；
+          # 真正阻断在贵司 GitLab CI 的 python-security 阶段。
+          semgrep scan --config auto --severity ERROR --error --json -o semgrep-report.json src/ || true
