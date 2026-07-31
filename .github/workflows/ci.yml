@@ -25,9 +25,19 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          # 注意：GitHub 上只提交了本次质量改造涉及的少量测试，
-          # 覆盖率数字会偏低，属正常。完整覆盖率门禁在贵司 GitLab CI 中生效。
-          pytest tests/ -v --cov=src --cov-report=term --cov-report=xml --cov-fail-under=0
+          # GitHub 公开仓库无 API Key，只跑确定性测试（FakeLLM / mock）。
+          # 需要真实 LLM/RAG/DB 的集成测试标记了 @pytest.mark.integration，
+          # 在此环境自动跳过（见 pyproject.toml 注册的 integration marker）。
+          # 覆盖率门槛暂设 0（GitHub 上仅提交少量新测试，数字偏低属正常）；
+          # 真正覆盖率门禁在贵司 GitLab CI（有完整测试套件）中生效。
+          pytest tests/ -v --cov=src --cov-report=term --cov-report=xml \
+            -m "not integration" \
+            --ignore=tests/test_graph \
+            --ignore=tests/test_rag \
+            --ignore=tests/test_api \
+            --ignore=tests/test_memory \
+            --cov-fail-under=0 \
+            -W "ignore::DeprecationWarning"
 
       - name: Upload coverage report
         if: always()
