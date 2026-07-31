@@ -254,7 +254,8 @@ def should_sample(user_id: str = "") -> bool:
     if user_id:
         # 基于 user_id hash 的一致性抽样
         import hashlib
-        hash_val = int(hashlib.md5(user_id.encode()).hexdigest()[:8], 16)
+        # usedforsecurity=False：此处仅为一致性抽样分桶，非密码学用途
+        hash_val = int(hashlib.md5(user_id.encode(), usedforsecurity=False).hexdigest()[:8], 16)
         return (hash_val % 10000) / 10000.0 < rate
 
     # 无 user_id 时纯随机

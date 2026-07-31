@@ -134,7 +134,8 @@ def _simhash_fingerprint(text: str, fingerprint_bits: int = 64, ngram_size: int 
 
     for token in tokens:
         # 对每个 token 计算 SHA-1 哈希
-        h = hashlib.sha1(token.encode("utf-8")).digest()
+        # usedforsecurity=False：内容去重指纹，非密码学用途
+        h = hashlib.sha1(token.encode("utf-8"), usedforsecurity=False).digest()
         # 将哈希值映射为 fingerprint_bits 维向量
         h_int = int.from_bytes(h, byteorder="big")
         for i in range(fingerprint_bits):

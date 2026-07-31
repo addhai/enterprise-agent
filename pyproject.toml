@@ -1,0 +1,86 @@
+# =============================================================================
+# Enterprise Agent — Python 工程配置
+# 统一承载 ruff( lint/format ) 与 pytest( 测试/覆盖率 ) 配置，
+# 让 `make lint` / `make test` / CI 读取同一份真相，避免配置漂移。
+# =============================================================================
+
+[tool.ruff]
+# 行宽对齐 black 默认值，团队统一
+line-length = 88
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# 选型说明（资深开发把关）：
+#   E/F  : pycodestyle + pyflakes，基础正确性（必开）
+#   I    : isort，import 顺序，review 时减少噪音
+#   B    : bugbear，捕捉常见 bug（如可变默认参数、宽 except）
+#   C4   : flake8-comprehensions，更优写法
+#   UP   : pyupgrade，自动提示新语法
+#   SIM  : flake8-simplify，简化冗长写法
+#   ASYNC: 异步用法正确性（本项目大量 asyncio）
+#   S    : bandit 规则子集，安全敏感（密钥/SQL 拼接等）
+#   PERF : 性能反模式
+select = ["E", "F", "I", "B", "C4", "UP", "SIM", "ASYNC", "S", "PERF"]
+ignore = [
+    "S101",   # 测试中允许 assert
+    "B008",   # FastAPI 依赖注入 decorators 误报
+    "S105",   # 硬编码密码常量（测试/示例场景）
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试目录：放宽部分规则，专注可读性
+"tests/**" = ["S", "B"]
+# 迁移/脚本：允许 print 与宽泛写法
+"scripts/**" = ["T201", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# 禁止可变默认参数（最常见的"看起来能用实则埋雷"）
+extend-immutable-calls = ["fastapi.params.Depends", "pydantic.Field"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+# 关键：把覆盖率门槛固化进 pytest，本地 `make test` 与 CI 行为一致
+addopts = [
+    "-q",
+    "--cov=src",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+    # 失败门槛：当前为"起步基线"，请先 `make test-cov` 测出真实覆盖率后，
+    # 在测试重构阶段(Phase 2)逐步上调至 80%（改动方案目标）。
+    # 直接设为 80 会在未达标时阻断 CI —— 这是门禁的本意，但需先校准基线。
+    "--cov-fail-under=35",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# 本项目 async 测试较多，自动识别 async 测试，避免漏标 @pytest.mark.asyncio
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "integration: 真实 LLM/外部依赖端到端测试；默认跳过，需 RUN_INTEGRATION_TESTS=1 且配置 API Key 才运行",
+]
+
+[tool.coverage.run]
+branch = true
+omit = [
+    "src/protocols/*",   # 协议适配层接入点，单独覆盖
+    "src/seed.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+# 显式声明目标，配合 --cov-fail-under 作为单一真相
+fail_under = 35
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "def __repr__",
+]

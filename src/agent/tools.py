@@ -3,6 +3,7 @@ import logging
 import re
 import time
 import asyncio
+import inspect
 from langchain_core.tools import tool
 from src.rag.retriever import HybridRetriever
 
@@ -127,8 +128,58 @@ def retry_tool(max_retries: int = 3, delay: float = 0.5, backoff: float = 2.0):
     return decorator
 
 
+def retry_async(
+    max_retries: int = 3,
+    delay: float = 0.5,
+    backoff: float = 2.0,
+):
+    """异步版工具调用重试装饰器 —— 与 `retry_tool` 对称，但用 `await` + `asyncio.sleep`。
+
+    关键差异（资深开发把关）：
+        - 异步路径**绝不**使用同步 `time.sleep`（会阻塞事件循环，拖垮整个服务）。
+        - 只对可重试错误（超时 / 连接 / 5xx）退避，其余错误立即抛出（fail fast）。
+        - 通过 `inspect.iscoroutinefunction` 自动识别协程，避免误用。
+
+    使用方式：
+        @retry_async(max_retries=3)
+        async def call_external_api(query):
+            ...
+    """
+
+    def decorator(func):
+        if not inspect.iscoroutinefunction(func):
+            raise TypeError(f"retry_async 只能装饰 async 函数：{func.__name__}")
+
+        async def wrapper(*args, **kwargs):
+            last_error: Optional[BaseException] = None
+            current_delay = delay
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:  # noqa: BLE001 - 统一判断是否可重试
+                    last_error = e
+                    error_str = str(e).lower()
+                    if any(x in error_str for x in ["timeout", "connection", "503", "504"]):
+                        logger.warning(
+                            "Async tool %s failed (attempt %d/%d): %s",
+                            func.__name__, attempt, max_retries, e,
+                        )
+                        if attempt < max_retries:
+                            await asyncio.sleep(current_delay)
+                            current_delay *= backoff
+                    else:
+                        logger.error("Async tool %s failed (no retry): %s", func.__name__, e)
+                        raise
+            logger.error("Async tool %s failed after %d retries: %s", func.__name__, max_retries, last_error)
+            raise last_error
+
+        return wrapper
+
+    return decorator
+
+
 async def parallel_tool_call(tool_calls: List[dict], timeout: float = 30.0) -> List[dict]:
-    """并行执行多个工具调用
+    """并行执行多个工具调用（同步/异步工具均支持）
 
     Args:
         tool_calls: 工具调用列表，格式: [{"tool": callable, "args": {...}}]
@@ -147,8 +198,11 @@ async def parallel_tool_call(tool_calls: List[dict], timeout: float = 30.0) -> L
     async def _call_tool(call_spec):
         try:
             result = call_spec["tool"](**call_spec["args"])
+            # 若工具是异步函数，result 是协程，必须 await，否则会漏执行
+            if inspect.isawaitable(result):
+                result = await result
             return {"success": True, "result": result}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - 并行任务隔离：单点失败不影响整体
             return {"success": False, "error": str(e)[:200]}
 
     tasks = [_call_tool(c) for c in tool_calls]

@@ -85,8 +85,13 @@ python-test:
   before_script:
     - pip install -r requirements.txt
     - pip install pytest pytest-cov pytest-asyncio
+    # 配置一致性校验：确保 pyproject.toml 中的覆盖率门槛被 CI 读取，
+    # 防止本地与 CI 行为漂移（资深开发把关：门禁单一真相）。
+    - echo "coverage fail_under = $(grep -A1 'tool.coverage.report' pyproject.toml >/dev/null && python -c "import tomllib,sys; c=tomllib.load(open('pyproject.toml','rb')); print(c['tool']['coverage']['report']['fail_under'])")"
   script:
-    - pytest tests/ -v --cov=src --cov-report=term --cov-report=xml --junitxml=report.xml
+    # --cov-fail-under 由 pyproject.toml 的 [tool.pytest.ini_options].addopts 统一注入，
+    # 此处显式声明以保证可读性与审计。覆盖率不达标将直接失败、阻断合并。
+    - pytest tests/ -v --cov=src --cov-report=term --cov-report=xml --cov-fail-under=35 --junitxml=report.xml
   artifacts:
     reports:
       coverage_report:
@@ -117,14 +122,19 @@ python-security:
   before_script:
     - pip install bandit semgrep
   script:
-    - bandit -r src/ -f json -o bandit-report.json
-    - semgrep scan --config auto --error --json -o semgrep-report.json src/ 2>/dev/null || true
+    # 门禁：仅 MEDIUM 及以上、且未被 bandit.yaml 显式 skip 的告警会触发失败（阻断合并）。
+    # 已处理的告警：B324(md5/sha1) 改用 usedforsecurity=False；B608(参数化SQL)/B310(受信任URL)
+    # 经核实为误报并带理由抑制；B104 因容器化部署全局 skip（见 bandit.yaml）。
+    - bandit -c bandit.yaml -r src/ -f json -o bandit-report.json --severity-level medium
+    # semgrep 第二阶段门禁：仅阻断 ERROR 级（高置信高危）findings，避免中低危首跑淹没；
+    # 首次合并后请 triage 存量 ERROR 告警，确认无碍后可收紧到 WARNING（去掉 --severity ERROR）。
+    - semgrep scan --config auto --severity ERROR --error --json -o semgrep-report.json src/ 2>/dev/null
   artifacts:
     paths:
       - bandit-report.json
       - semgrep-report.json
     when: always
-  allow_failure: true   # SAST 告警不阻断（初期），后续收紧
+  allow_failure: false   # SAST 门禁已收紧：中高危告警阻断合并（见 bandit.yaml）
 
 container-scan:
   stage: sast

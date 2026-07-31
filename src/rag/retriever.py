@@ -80,8 +80,43 @@ class HybridRetriever:
         self.bm25_retriever: BM25Retriever = None
         self._all_documents: List[Document] = []
 
-        logger.info("HybridRetriever initialized: backend=%s, rag_url=%s",
-                     self.backend, self.rag_service_url if self.backend == "remote" else "N/A")
+        # 多知识库权重映射（对齐阿里云百炼，范围 0.5~2，默认 1.0）
+        self._kb_weights_map: Dict[str, float] = self._parse_kb_weights(
+            settings.kb_weights
+        )
+
+        # 重排序器（懒加载，对齐阿里云百炼 + RAGFlow）
+        self._reranker = None
+        self._rerank_enabled = settings.rerank_enabled
+        self._rerank_top_n = settings.rerank_top_n
+
+        logger.info("HybridRetriever initialized: backend=%s, rag_url=%s, rerank=%s",
+                     self.backend,
+                     self.rag_service_url if self.backend == "remote" else "N/A",
+                     self._rerank_enabled)
+
+    @staticmethod
+    def _parse_kb_weights(raw: str) -> Dict[str, float]:
+        """解析 kb_weights 配置（JSON 字符串 → dict）
+
+        示例: '{"kb_a": 1.0, "kb_b": 1.5}' → {"kb_a": 1.0, "kb_b": 1.5}
+        权重范围限制在 0.5~2.0，超出则截断。空字符串返回空 dict。
+        """
+        if not raw or not raw.strip():
+            return {}
+        try:
+            import json
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return {}
+            # 截断到 0.5~2.0 范围（对齐阿里云）
+            return {
+                str(k): max(0.5, min(2.0, float(v)))
+                for k, v in data.items()
+            }
+        except (ValueError, TypeError):
+            logger.warning("Invalid kb_weights config, ignored: %s", raw)
+            return {}
 
     # ------------------------------------------------------------------
     # Milvus 懒加载 + 降级
@@ -222,6 +257,12 @@ class HybridRetriever:
             standard_merged, sentence_results, top_k
         )
 
+        # ===== 重排序（对齐阿里云百炼 + RAGFlow）=====
+        # 在 RRF 融合后、权限过滤前，用 reranker 对候选结果二次排序
+        # 可显著提升 top-k 的精确度（预期提升 10-20%）
+        if self._rerank_enabled and final:
+            final = self._rerank(query, final)
+
         # ===== 权限过滤（二次过滤） =====
         before_count = len(final)
         final = self._filter_by_permission(
@@ -252,20 +293,26 @@ class HybridRetriever:
         Milvus:  pymilvus 直连 (多租户 + 标量过滤)
         Remote:  HTTP 调用 rag-service
         Auto:    Milvus 优先，不可用时 Chroma 降级
+
+        所有后端返回结果均经过相似度阈值过滤（对齐阿里云百炼）。
         """
         # ---- Remote 模式 ----
         if self._use_remote:
-            return self._remote_vector_search(query, top_k, filter_by)
+            return self._filter_by_similarity(
+                self._remote_vector_search(query, top_k, filter_by)
+            )
 
         # ---- Milvus 模式 ----
         if self._use_milvus:
-            return self._milvus_vector_search(query, top_k, filter_by)
+            return self._filter_by_similarity(
+                self._milvus_vector_search(query, top_k, filter_by)
+            )
 
         # ---- Chroma 模式 (默认/降级) ----
         results = self.vector_store.search_with_scores(query, top_k)
         if filter_by:
             results = self._apply_filter(results, filter_by)
-        return results
+        return self._filter_by_similarity(results)
 
     def _milvus_vector_search(
         self, query: str, top_k: int, filter_by: Optional[dict]
@@ -322,7 +369,7 @@ class HybridRetriever:
                 data=data,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=settings.rag_service_timeout) as resp:
+            with urllib.request.urlopen(req, timeout=settings.rag_service_timeout) as resp:  # nosec B310  # URL 来自受信任配置(settings.rag_service_url)
                 body = json.loads(resp.read().decode("utf-8"))
 
             results = []
@@ -367,7 +414,7 @@ class HybridRetriever:
         results = self.sentence_store.search_with_scores(query, top_k * 2)
         if filter_by:
             results = self._apply_filter(results, filter_by)
-        return results
+        return self._filter_by_similarity(results)
 
     def _apply_filter(
         self,
@@ -386,6 +433,30 @@ class HybridRetriever:
                 filtered.append((doc, score))
         return filtered
 
+    def _filter_by_similarity(
+        self,
+        results: List[Tuple[Document, float]],
+    ) -> List[Tuple[Document, float]]:
+        """相似度阈值过滤（对齐阿里云百炼 AI 助理）
+
+        仅保留语义相似度 >= kb_similarity_threshold 的结果。
+        阈值范围 0.01~1，默认 0.2。设为 0 则不过滤。
+        注意：score 来自各后端的相似度分数（0-1，越大越相似）：
+            - Chroma: similarity_search_with_relevance_scores
+            - Milvus: 内积/cosine 相似度
+            - Remote: 上游 RAG Service 返回的相似度
+        """
+        threshold = settings.kb_similarity_threshold
+        if threshold <= 0 or not results:
+            return results
+        filtered = [(doc, score) for doc, score in results if score >= threshold]
+        if len(filtered) < len(results):
+            logger.debug(
+                "Similarity filter: %d → %d (threshold=%.2f)",
+                len(results), len(filtered), threshold,
+            )
+        return filtered
+
     # ------------------------------------------------------------------
     # 融合逻辑
     # ------------------------------------------------------------------
@@ -397,22 +468,116 @@ class HybridRetriever:
         top_k: int,
         k: int = 60,
     ) -> List[Tuple[Document, float]]:
-        """Reciprocal Rank Fusion — 合并两组检索结果"""
+        """Reciprocal Rank Fusion — 合并两组检索结果
+
+        多知识库权重（对齐阿里云百炼）：当文档 metadata 含 kb_id 且
+        kb_weights 配置了对应权重时，RRF 分数按权重调整（范围 0.5~2）。
+        相同 RRF 分数时，权重高的知识库结果优先返回。
+        """
         scores = {}
         doc_map = {}
 
         for rank, (doc, _) in enumerate(vector_results):
             doc_id = doc.page_content[:100]
-            scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
+            weight = self._get_kb_weight(doc)
+            scores[doc_id] = scores.get(doc_id, 0) + weight * 1.0 / (k + rank + 1)
             doc_map[doc_id] = doc
 
         for rank, (doc, _) in enumerate(bm25_results):
             doc_id = doc.page_content[:100]
-            scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
+            weight = self._get_kb_weight(doc)
+            scores[doc_id] = scores.get(doc_id, 0) + weight * 1.0 / (k + rank + 1)
             doc_map[doc_id] = doc
 
         sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
         return [(doc_map[doc_id], scores[doc_id]) for doc_id in sorted_ids[:top_k]]
+
+    def _get_kb_weight(self, doc: Document) -> float:
+        """获取文档所属知识库的权重（对齐阿里云百炼多知识库权重）
+
+        文档 metadata 中的 kb_id 用于匹配权重配置。
+        未配置权重的知识库默认权重 1.0。
+        """
+        if not self._kb_weights_map:
+            return 1.0
+        kb_id = doc.metadata.get("kb_id", "")
+        if not kb_id:
+            return 1.0
+        return self._kb_weights_map.get(kb_id, 1.0)
+
+    # ------------------------------------------------------------------
+    # 重排序（对齐阿里云百炼 + RAGFlow）
+    # ------------------------------------------------------------------
+
+    @property
+    def reranker(self):
+        """懒加载重排序器
+
+        根据 settings.rerank_provider 创建对应的 Reranker 实例：
+            - dashscope: 阿里云百炼 gte-rerank（推荐）
+            - local_bge: 本地 BGE-reranker
+            - llm: LLM 降级方案
+        """
+        if self._reranker is not None:
+            return self._reranker
+        if not self._rerank_enabled:
+            return None
+        try:
+            from src.rag.reranker import create_reranker
+            self._reranker = create_reranker(
+                provider=settings.rerank_provider,
+                model_name=settings.rerank_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+            )
+            logger.info(
+                "Reranker initialized: provider=%s, model=%s",
+                settings.rerank_provider, settings.rerank_model,
+            )
+        except Exception as e:
+            logger.warning(
+                "Reranker init failed (%s: %s), rerank disabled",
+                settings.rerank_provider, e,
+            )
+            self._rerank_enabled = False
+            self._reranker = None
+        return self._reranker
+
+    def _rerank(
+        self,
+        query: str,
+        candidates: List[Tuple[Document, float]],
+    ) -> List[Tuple[Document, float]]:
+        """对候选结果重排序
+
+        在 RRF 融合后调用 reranker 对 top 候选二次打分排序。
+        失败时降级为原始顺序（不影响主流程）。
+
+        Args:
+            query: 查询文本
+            candidates: RRF 融合后的候选结果
+
+        Returns:
+            重排序后的结果（最多 rerank_top_n 个）
+        """
+        reranker = self.reranker
+        if reranker is None:
+            return candidates
+
+        try:
+            reranked = reranker.rerank(
+                query=query,
+                documents=candidates,
+                top_n=self._rerank_top_n,
+            )
+            # 在 metadata 中标记经过重排序
+            for doc, score in reranked:
+                doc.metadata["reranked"] = True
+                doc.metadata["rerank_score"] = score
+            return reranked
+        except Exception as e:
+            logger.warning("Rerank failed, using original order: %s", e)
+            return candidates
 
     def _merge_standard_and_sentence(
         self,
