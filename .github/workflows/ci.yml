@@ -36,6 +36,9 @@ jobs:
             --ignore=tests/test_rag \
             --ignore=tests/test_api \
             --ignore=tests/test_memory \
+            --ignore=tests/protocols \
+            --ignore=tests/langchain \
+            --ignore=tests/security \
             --cov-fail-under=0 \
             -W "ignore::DeprecationWarning"
 

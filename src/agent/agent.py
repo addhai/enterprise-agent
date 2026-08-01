@@ -88,8 +88,10 @@ class CustomerServiceAgent:
         history = chat_history or []
 
         # 按 context_rounds 截断（对齐阿里云百炼携带上下文轮数）
-        if settings.context_rounds > 0:
-            history = history[-settings.context_rounds:]
+        # getattr 防御：旧版 config.py 可能无此字段，默认 10 轮
+        _ctx_rounds = getattr(settings, "context_rounds", 10)
+        if _ctx_rounds > 0:
+            history = history[-_ctx_rounds:]
 
         # 将历史消息转换为 langchain 消息格式
         messages = []
