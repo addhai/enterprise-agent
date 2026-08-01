@@ -10,6 +10,20 @@ import pytest
 
 from src.agent.fake_llm import FakeLLMClient
 
+# ---- 收集时忽略：这些目录的 conftest 会导入不存在的模块或需要真实服务，
+#      必须在 pytest 发现阶段就跳过，否则 import 就崩了（exit code 4）。
+collect_ignore_glob = [
+    "test_graph/*",
+    "test_rag/*",
+    "test_api/*",
+    "test_memory/*",
+    "test_protocols/*",
+    "test_langchain/*",
+    "security/*",
+    "test_integrations/*",
+    "test_websocket/*",
+]
+
 
 @pytest.fixture
 def fake_llm_client():
