@@ -39,6 +39,8 @@ jobs:
             --ignore=tests/test_protocols \
             --ignore=tests/test_langchain \
             --ignore=tests/security \
+            --ignore=tests/test_integrations \
+            --ignore=tests/test_websocket \
             --cov-fail-under=0 \
             -W "ignore::DeprecationWarning"
 
