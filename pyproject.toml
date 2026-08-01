@@ -66,6 +66,20 @@ filterwarnings = [
 markers = [
     "integration: 真实 LLM/外部依赖端到端测试；默认跳过，需 RUN_INTEGRATION_TESTS=1 且配置 API Key 才运行",
 ]
+# 收集时忽略：这些目录的 conftest 会导入不存在的模块或需要真实服务。
+# 放在 pyproject.toml（而非 conftest.py）是因为 pytest 读取此配置的时间点
+# 早于任何 conftest 的加载，能真正避免 import 崩溃（exit code 4）。
+collect_ignore = [
+    "tests/test_graph",
+    "tests/test_rag",
+    "tests/test_api",
+    "tests/test_memory",
+    "tests/test_protocols",
+    "tests/test_langchain",
+    "tests/security",
+    "tests/test_integrations",
+    "tests/test_websocket",
+]
 
 [tool.coverage.run]
 branch = true
