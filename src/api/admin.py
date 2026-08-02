@@ -578,3 +578,123 @@ async def close_handoff(
         "success": True,
         "message": "已结束人工服务",
     }
+
+
+# ======================================================================
+# HITL 人工审批 API（对齐 langgraph_multi-agent 的 humanloop_manager）
+# ======================================================================
+
+@router.get("/admin/approvals")
+async def list_pending_approvals(
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+):
+    """列出所有待审批请求
+
+    敏感操作（退款/注销/数据导出等）触发审批后，人工客服在此查看。
+    需要 admin/agent 角色
+    """
+    try:
+        from src.integrations.humanloop import get_humanloop_manager
+        manager = get_humanloop_manager()
+        pending = manager.list_pending()
+        return {
+            "success": True,
+            "count": len(pending),
+            "approvals": [
+                {
+                    "request_id": r.request_id,
+                    "action": r.action,
+                    "description": r.description,
+                    "context": r.context,
+                    "user_id": r.user_id,
+                    "session_id": r.session_id,
+                    "created_at": r.created_at,
+                    "status": r.status.value,
+                }
+                for r in pending
+            ],
+        }
+    except Exception as e:
+        logger.error("List pending approvals failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/approvals/{request_id}/review")
+async def review_approval(
+    request_id: str = Path(..., description="审批请求 ID"),
+    approved: bool = Body(..., embed=True, description="是否批准"),
+    comment: str = Body(default="", embed=True, description="审批意见"),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+):
+    """提交审批结果
+
+    人工客服审核后，通过此接口批准或拒绝操作。
+    需要 admin/agent 角色
+    """
+    try:
+        from src.integrations.humanloop import get_humanloop_manager
+        manager = get_humanloop_manager()
+        reviewer_id = current_user.get("user_id", "unknown")
+
+        success = manager.submit_review(
+            request_id=request_id,
+            approved=approved,
+            reviewer_id=reviewer_id,
+            comment=comment,
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"审批请求不存在或已处理: {request_id}",
+            )
+
+        return {
+            "success": True,
+            "request_id": request_id,
+            "approved": approved,
+            "reviewer": reviewer_id,
+            "message": f"操作已{'批准' if approved else '拒绝'}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Review approval failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/approvals/{request_id}")
+async def get_approval_status(
+    request_id: str = Path(..., description="审批请求 ID"),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+):
+    """查询审批请求状态
+
+    需要 admin/agent 角色
+    """
+    try:
+        from src.integrations.humanloop import get_humanloop_manager
+        manager = get_humanloop_manager()
+        request = manager.get_request(request_id)
+
+        if not request:
+            raise HTTPException(status_code=404, detail=f"审批请求不存在: {request_id}")
+
+        return {
+            "success": True,
+            "request_id": request.request_id,
+            "action": request.action,
+            "description": request.description,
+            "context": request.context,
+            "user_id": request.user_id,
+            "status": request.status.value,
+            "reviewer_id": request.reviewer_id,
+            "review_comment": request.review_comment,
+            "created_at": request.created_at,
+            "reviewed_at": request.reviewed_at,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Get approval status failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))

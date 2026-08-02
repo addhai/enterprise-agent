@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     embedding_provider: str = "openai"  # openai/dashscope/local
     llm_model: str = "qwen-plus"
     llm_complex_model: str = "qwen-max"
+    # LLM 推理参数（对齐阿里云百炼 AI 助理）
+    llm_temperature: float = 0.0           # 温度系数，越高越随机（阿里云默认 0.0）
+    llm_max_tokens: int = 2048             # 最长回复长度（不含提示词）
+    llm_enable_thinking: bool = False      # 思考模式（提升反思效果，需模型支持）
 
     # LangSmith
     langsmith_api_key: str = ""
@@ -56,6 +60,15 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 5
     retrieval_rerank_top_n: int = 3
     retrieval_min_tokens: int = 200  # 最小检索 token 数，低于此值标记低置信度
+    # 知识库配置（对齐阿里云百炼 AI 助理）
+    kb_similarity_threshold: float = 0.2   # 相似度阈值 0.01~1，仅高于此值才召回（阿里云默认 0.2）
+    kb_call_mode: str = "always"           # 调用模式：always 必定调用 / smart 智能调用（AI 自主判断）
+    kb_weights: str = ""                   # 多知识库权重 JSON，如 {"kb_a":1.0,"kb_b":1.5}，范围 0.5~2
+    # 重排序配置（对齐阿里云百炼 + RAGFlow）
+    rerank_enabled: bool = False           # 是否启用重排序（默认关闭，开启后检索准确率提升 10-20%）
+    rerank_provider: str = "dashscope"     # Provider: dashscope(阿里云gte-rerank) / local_bge(BGE本地) / llm(LLM降级)
+    rerank_model: str = "gte-rerank"       # 重排序模型名（dashscope 用 gte-rerank，local_bge 用 BAAI/bge-reranker-base）
+    rerank_top_n: int = 5                  # 重排序后返回前 N 个结果
 
     # Agent
     max_reasoning_turns: int = 5
@@ -75,6 +88,7 @@ class Settings(BaseSettings):
     # Memory
     memory_context_max_docs: int = 3    # 注入上下文的长期记忆条数
     memory_summary_model: str = ""      # 摘要 LLM 型号，空字符串使用 llm_model
+    context_rounds: int = 10            # 携带上下文轮数（对齐阿里云，轮数越多相关性越强）
 
     # Server
     host: str = "0.0.0.0"
@@ -84,6 +98,10 @@ class Settings(BaseSettings):
     eval_llm_judge_enabled: bool = False       # 是否启用 LLM-as-Judge（增加推理成本）
     eval_online_sampling_rate: float = 0.0     # 在线抽样率 (0.0 ~ 1.0)，0 关闭
     eval_hallucination_check_enabled: bool = True  # 幻觉引用检测（依赖检索文档）
+    # 护栏配置（对齐 langgraph_multi-agent 的 Guardrail Agent）
+    guardrail_enabled: bool = True             # 护栏总开关（正则快检默认开启）
+    guardrail_llm_jailbreak: bool = False      # LLM 越狱检测（成本高，默认关闭）
+    guardrail_llm_relevance: bool = False      # LLM 业务相关性检测（成本高，默认关闭）
 
     # Vision / OCR
     vision_engine_name: str = "qwen"            # 视觉引擎：qwen / openai
@@ -94,6 +112,10 @@ class Settings(BaseSettings):
     ocr_max_image_size: int = 1024              # OCR 大图缩放阈值
     vision_circuit_threshold: int = 5           # 熔断阈值（连续失败 N 次）
     vision_circuit_reset_seconds: int = 60      # 熔断恢复时间（秒）
+    # DeepDoc 增强（对齐 RAGFlow，扫描件 PDF 解析）
+    deepdoc_enabled: bool = False               # 启用 DeepDoc（扫描件 PDF 渲染图片→Vision/OCR）
+    deepdoc_scan_threshold: int = 50            # 扫描件判定阈值（每页最少字符数）
+    deepdoc_render_dpi: int = 150               # 扫描页渲染 DPI（越高越清晰但越慢）
     dedup_exact_enabled: bool = True           # 一级：精确去重（整文档哈希）
     dedup_simhash_enabled: bool = True         # 二级：SimHash 近重去重
     dedup_simhash_threshold: float = 0.95      # SimHash 相似度阈值
@@ -180,6 +202,13 @@ class Settings(BaseSettings):
     alert_feishu_receive_id: str = ""                 # 接收者 ID（open_id / chat_id / user_id / email）
     alert_feishu_receive_id_type: str = "open_id"     # 接收者 ID 类型
     alert_feishu_title_prefix: str = "[EA 告警]"      # 消息标题前缀
+
+    # ---- HITL 人工审批配置（对齐 langgraph_multi-agent 的 humanloop_manager）----
+    # 敏感操作执行前需人工审批（退款/注销/数据导出等）
+    # 复用 alert_feishu_receive_id 作为审批接收人
+    humanloop_enabled: bool = False               # 总开关（默认关闭，开启后敏感操作需审批）
+    humanloop_timeout: int = 300                  # 审批超时秒数（默认 5 分钟）
+    humanloop_notify_channel: str = "feishu"      # 通知渠道（目前仅支持 feishu）
 
     # ---- A2A 专家 Agent 配置 ----
     a2a_perf_expert_url: str = "http://localhost:9002"       # 性能诊断专家 Agent

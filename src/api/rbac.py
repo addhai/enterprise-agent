@@ -44,6 +44,13 @@ class Permission(str, Enum):
     USER_VIEW = "user:view"
     USER_MANAGE = "user:manage"
     NOTIFICATION_VIEW = "notification:view"
+    # P3-P6 新增模块权限
+    CONFIG_VIEW = "config:view"           # 配置中心：查看
+    CONFIG_MANAGE = "config:manage"       # 配置中心：修改/重置
+    EVALUATION_VIEW = "evaluation:view"   # 评估：查看数据集与报告
+    EVALUATION_MANAGE = "evaluation:manage"  # 评估：创建/触发/删除
+    WORKFLOW_VIEW = "workflow:view"       # 工作流：查看
+    WORKFLOW_MANAGE = "workflow:manage"   # 工作流：编辑/发布
 
 
 # 角色 -> 权限映射
@@ -64,6 +71,12 @@ ROLE_PERMISSIONS: Dict[UserRole, List[Permission]] = {
         Permission.CHANNEL_MANAGE,
         Permission.USER_VIEW,
         Permission.NOTIFICATION_VIEW,
+        Permission.CONFIG_VIEW,
+        Permission.CONFIG_MANAGE,
+        Permission.EVALUATION_VIEW,
+        Permission.EVALUATION_MANAGE,
+        Permission.WORKFLOW_VIEW,
+        Permission.WORKFLOW_MANAGE,
     ],
     UserRole.AGENT: [
         Permission.DASHBOARD_VIEW,
@@ -73,6 +86,9 @@ ROLE_PERMISSIONS: Dict[UserRole, List[Permission]] = {
         Permission.AGENT_WORKSPACE,
         Permission.SATISFACTION_VIEW,
         Permission.NOTIFICATION_VIEW,
+        Permission.CONFIG_VIEW,
+        Permission.EVALUATION_VIEW,
+        Permission.WORKFLOW_VIEW,
     ],
     UserRole.VIEWER: [
         Permission.DASHBOARD_VIEW,
@@ -83,6 +99,9 @@ ROLE_PERMISSIONS: Dict[UserRole, List[Permission]] = {
         Permission.CHANNEL_VIEW,
         Permission.USER_VIEW,
         Permission.NOTIFICATION_VIEW,
+        Permission.CONFIG_VIEW,
+        Permission.EVALUATION_VIEW,
+        Permission.WORKFLOW_VIEW,
     ],
 }
 
@@ -353,4 +372,10 @@ def _perm_label(perm: Permission) -> str:
         Permission.USER_VIEW: "查看用户",
         Permission.USER_MANAGE: "管理用户",
         Permission.NOTIFICATION_VIEW: "查看通知",
+        Permission.CONFIG_VIEW: "查看配置",
+        Permission.CONFIG_MANAGE: "修改配置",
+        Permission.EVALUATION_VIEW: "查看评估",
+        Permission.EVALUATION_MANAGE: "管理评估",
+        Permission.WORKFLOW_VIEW: "查看工作流",
+        Permission.WORKFLOW_MANAGE: "管理工作流",
     }.get(perm, perm.value)

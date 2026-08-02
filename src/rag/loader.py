@@ -101,10 +101,12 @@ from src.rag.processors.deduplicate import (
 
 
 def _build_base_meta(info: FileInfo, encoding: str, default_tenant_id: str) -> dict:
-    """构建基础元数据"""
+    """构建基础元数据 — 对齐阿里云百炼知识库"""
     return {
         "source": info.name,
         "category": _get_category(info.ext),
+        "kb_type": _get_kb_type(info.ext),      # 知识库类型（document/data/image/audio_video）
+        "doc_format": info.ext.lstrip(".").lower(),  # 文档格式（pdf/word/excel/jpg/mp4等）
         "created_time": info.metadata.get("created_time", ""),
         "modified_time": info.metadata.get("modified_time", ""),
         "encoding": encoding,
@@ -113,17 +115,61 @@ def _build_base_meta(info: FileInfo, encoding: str, default_tenant_id: str) -> d
 
 
 _CATEGORY_MAP = {
+    # 文档类 — 对齐阿里云百炼
     ".md": "markdown",
     ".pdf": "pdf",
     ".html": "html",
     ".htm": "html",
     ".docx": "docx",
+    ".doc": "doc",
+    ".txt": "txt",
+    ".rtf": "rtf",
+    # 表格类 — 对齐阿里云百炼
+    ".xlsx": "excel",
+    ".xls": "excel",
+    ".csv": "csv",
+    # 图片类 — 对齐阿里云百炼
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".gif": "image",
+    ".webp": "image",
+    ".bmp": "image",
+    # 音视频类 — 对齐阿里云百炼
+    ".mp4": "video",
+    ".mp3": "audio",
+    ".wav": "audio",
+    ".avi": "video",
+    ".mov": "video",
 }
 
 
 def _get_category(ext: str) -> str:
-    """根据扩展名获取文档类别"""
+    """根据扩展名获取文档类别 — 对齐阿里云百炼"""
     return _CATEGORY_MAP.get(ext, "unknown")
+
+
+def _get_kb_type(ext: str) -> str:
+    """根据扩展名获取知识库类型 — 对齐阿里云百炼筛选标签
+
+    返回: document / data / image / audio_video
+    """
+    category = _get_category(ext)
+    type_map = {
+        "markdown": "document",
+        "pdf": "document",
+        "html": "document",
+        "docx": "document",
+        "doc": "document",
+        "txt": "document",
+        "rtf": "document",
+        "excel": "data",
+        "csv": "data",
+        "image": "image",
+        "video": "audio_video",
+        "audio": "audio_video",
+    }
+    return type_map.get(category, "document")
 
 
 # ---------------------------------------------------------------------------

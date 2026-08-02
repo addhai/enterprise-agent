@@ -45,6 +45,28 @@ class PdfLoader(BaseLoader):
             )
             return []
 
+        # ===== DeepDoc 增强：扫描件 PDF 检测（对齐 RAGFlow）=====
+        # 启用后先检测是否为扫描件，是则走 Vision/OCR 路径
+        from src.config import settings
+        if getattr(settings, "deepdoc_enabled", False):
+            try:
+                from src.rag.deepdoc_parser import DeepDocParser
+                deepdoc = DeepDocParser()
+                deepdoc_docs = deepdoc.parse_pdf(info, base_meta)
+                if deepdoc_docs:
+                    # 扫描件 PDF 已由 DeepDoc 处理，直接返回
+                    logger.info(
+                        "PDF parsed by DeepDoc (scanned): %s, %d pages extracted",
+                        info.name, len(deepdoc_docs),
+                    )
+                    return deepdoc_docs
+                # 纯文字 PDF，继续走原有 PyMuPDF 流程
+            except Exception as e:
+                logger.warning(
+                    "DeepDoc parsing failed, falling back to PyMuPDF: %s", e
+                )
+
+        # ===== 原有流程：PyMuPDF 文字提取 =====
         doc_handle = fitz.open(str(info.path))
 
         # 从 PDF 内部元数据提取信息

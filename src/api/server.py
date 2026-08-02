@@ -100,6 +100,14 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.warning("Demo data seed failed: %s", e)
 
+        # 初始化默认工作流 DAG（为可视化编排打基础）
+        try:
+            from src.graph.workflow_dag import init_default_workflow
+            wf = init_default_workflow()
+            logger.info("Default workflow DAG ready: id=%s v%d", wf.id, wf.version)
+        except Exception as e:
+            logger.warning("Default workflow init failed: %s", e)
+
     @app.on_event("shutdown")
     async def shutdown():
         """应用停止：清理资源"""
@@ -239,6 +247,38 @@ def create_app() -> FastAPI:
         logger.info("Registered health router")
     except Exception as e:
         logger.error("Failed to register health router: %s", e)
+
+    # 注册知识库管理路由
+    try:
+        from src.api.knowledge import router as knowledge_router
+        app.include_router(knowledge_router, prefix="/api/v1")
+        logger.info("Registered knowledge router")
+    except Exception as e:
+        logger.error("Failed to register knowledge router: %s", e)
+
+    # 注册工作流管理路由
+    try:
+        from src.api.workflow import router as workflow_router
+        app.include_router(workflow_router, prefix="/api/v1")
+        logger.info("Registered workflow router")
+    except Exception as e:
+        logger.error("Failed to register workflow router: %s", e)
+
+    # 注册评估管理路由
+    try:
+        from src.api.evaluation import router as evaluation_router
+        app.include_router(evaluation_router, prefix="/api/v1")
+        logger.info("Registered evaluation router")
+    except Exception as e:
+        logger.error("Failed to register evaluation router: %s", e)
+
+    # 注册配置中心路由
+    try:
+        from src.api.config import router as config_router
+        app.include_router(config_router, prefix="/api/v1")
+        logger.info("Registered config router")
+    except Exception as e:
+        logger.error("Failed to register config router: %s", e)
 
     # 注册静态文件（必须在所有路由之后，否则会拦截 /api 请求）
     from fastapi.staticfiles import StaticFiles

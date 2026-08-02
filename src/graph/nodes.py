@@ -78,37 +78,62 @@ def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         1. 递增对话轮次
         2. 通过 MemoryManager 注入长期记忆上下文到 state.memory_context
         3. 初始化其他状态字段
-        4. 注入式攻击检测（v0.6 新增）
+        4. 统一护栏检测（v0.7 新增，对齐 multi-agent 的 Guardrail Agent）
+           - 正则快检（必跑）：detect_prompt_injection + InputGuard
+           - LLM 越狱检测（可选）
+           - 业务相关性检查（可选）
     """
     user_id = state.get("user_id", "anonymous")
     session_id = state.get("session_id", "")
     messages = state.get("messages", [])
     last_message = messages[-1].content if messages else ""
 
-    # ===== 注入式攻击检测（v0.6） =====
-    # 核心原则：系统提示词不当安全边界，关键资源靠服务端鉴权
-    # 如果检测到注入意图，直接终止任务，不让 LLM 有机会执行
-    injection = detect_prompt_injection(last_message)
-    if injection["is_injection"]:
-        logger.warning(
-            "Prompt injection detected: type=%s, confidence=%.2f, user=%s",
-            injection["attack_type"], injection["confidence"], user_id,
-        )
-        return {
-            "turn_count": state.get("turn_count", 0) + 1,
-            "intent": None,
-            "needs_human": True,
-            "faq_match": None,
-            "effective_max_turns": 1,
-            "has_reflected": False,
-            "memory_context": "",
-            "injection_blocked": True,
-            "injection_type": injection["attack_type"],
-            "final_response": (
-                f"检测到异常请求，已自动终止。"
-                f"如需帮助请联系人工客服。"
-            ),
-        }
+    # ===== 统一护栏检测（v0.7，对齐 multi-agent 的 guardrail_check）=====
+    # 三层检查：正则快检 → LLM越狱(可选) → 相关性(可选)
+    try:
+        from src.graph.guardrails import get_guardrail_agent
+        guardrail = get_guardrail_agent()
+        gr_result = guardrail.check(last_message)
+
+        if gr_result.blocked:
+            # 被拦截：直接终止任务
+            logger.warning(
+                "Guardrail blocked: reason=%s, confidence=%.2f, user=%s",
+                gr_result.block_reason, gr_result.confidence, user_id,
+            )
+            return {
+                "turn_count": state.get("turn_count", 0) + 1,
+                "intent": None,
+                "needs_human": True,
+                "faq_match": None,
+                "effective_max_turns": 1,
+                "has_reflected": False,
+                "memory_context": "",
+                "injection_blocked": True,
+                "injection_type": gr_result.block_reason,
+                "final_response": gr_result.suggested_response,
+            }
+    except Exception as e:
+        # 护栏异常时降级到原有的 detect_prompt_injection（向后兼容）
+        logger.warning("Guardrail agent failed, fallback to legacy check: %s", e)
+        injection = detect_prompt_injection(last_message)
+        if injection["is_injection"]:
+            logger.warning(
+                "Prompt injection detected (legacy): type=%s, confidence=%.2f, user=%s",
+                injection["attack_type"], injection["confidence"], user_id,
+            )
+            return {
+                "turn_count": state.get("turn_count", 0) + 1,
+                "intent": None,
+                "needs_human": True,
+                "faq_match": None,
+                "effective_max_turns": 1,
+                "has_reflected": False,
+                "memory_context": "",
+                "injection_blocked": True,
+                "injection_type": injection["attack_type"],
+                "final_response": "检测到异常请求，已自动终止。如需帮助请联系人工客服。",
+            }
 
     # 注入长期记忆上下文
     memory_context = ""
@@ -395,6 +420,46 @@ def _generate_clarification_question(missing_info: List[str], original: str) -> 
     )
 
 
+def _detect_negative_emotion(content: str) -> Optional[str]:
+    """检测用户消息中的强烈负面情绪（按场景分级转人工：情绪激动自动转）
+
+    检测维度：
+        1. 愤怒/辱骂词汇（中文 + 英文）
+        2. 标点特征：连续多个感叹号/问号（!!! ??? 等）
+        3. 重复抱怨词（同一负面词重复出现）
+
+    Returns:
+        情绪类型字符串（如 "愤怒"、"急躁"），无强烈情绪返回 None。
+    """
+    if not content:
+        return None
+
+    text = content.lower()
+
+    # 1. 愤怒/辱骂词汇
+    anger_words = [
+        "气死", "气炸", "破系统", "破软件", "垃圾", "什么玩意",
+        "太差劲", "差劲", "无语", "恶心", "骗人", "骗子", "坑人",
+        "狗屎", "他妈", "卧槽", "操", "shit", "fuck", "damn",
+        "受不了", "受够了", "崩溃", "疯掉", "烦死", "讨厌",
+        "什么破", "烂透了", "太烂了", "骗钱",
+    ]
+    if any(w in text for w in anger_words):
+        return "愤怒"
+
+    # 2. 标点特征：连续 3 个及以上感叹号/问号
+    if re.search(r'[！!]{3,}', content) or re.search(r'[？?]{3,}', content):
+        return "急躁"
+
+    # 3. 重复抱怨：同一负面词重复出现 2 次以上
+    complaint_words = ["不行", "不对", "不好", "不能用", "没法", "没办法", "解决不了"]
+    for w in complaint_words:
+        if text.count(w) >= 2:
+            return "急躁"
+
+    return None
+
+
 # ======================================================================
 # Node 2: router_node — 意图路由
 # ======================================================================
@@ -429,6 +494,16 @@ def router_node(state: AgentState) -> Dict[str, Any]:
 
     if any(kw in content.lower() for kw in force_human_keywords):
         return {"intent": "human", "effective_max_turns": settings.max_turns_faq}
+
+    # 情绪激动检测（按场景分级转人工：情绪激动自动转人工）
+    emotion = _detect_negative_emotion(content)
+    if emotion:
+        logger.info("Negative emotion detected, auto-escalating: %s", emotion)
+        return {
+            "intent": "human",
+            "effective_max_turns": settings.max_turns_faq,
+            "escalation_reason": f"情绪激动：{emotion}",
+        }
 
     # 快速规则判断 FAQ vs Technical
     faq_keywords = [
@@ -954,8 +1029,9 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         suggest_human = failed_attempts >= 2
         if suggest_human:
             final_response = (
-                "抱歉，我还是没能理解您的问题。"
-                "您可以换个方式描述试试～"
+                "抱歉，我连续几次都没能准确理解您的问题。\n"
+                "您可以换个方式描述，或者点击下方按钮转接人工客服，"
+                "让人工客服帮您处理～"
             )
         else:
             final_response = (

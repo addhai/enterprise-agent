@@ -68,9 +68,13 @@ class EvaluationTracker:
         if total == 0:
             return {
                 "total_requests": 0,
+                "total_sessions": 0,
                 "resolved": 0,
                 "unresolved": 0,
                 "resolution_rate": 0,
+                "uptime_seconds": time.time() - self._start_time,
+                "avg_latency_ms": 0,
+                "avg_quality_score": 0,
                 "escalation_rate": 0,
                 "avg_turns": 0,
             }

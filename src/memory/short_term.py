@@ -113,8 +113,17 @@ class ShortTermMemory:
         context.extend(self.get_window())
         return context
 
-    def get_conversation_history(self) -> List[tuple]:
-        """返回 [(human, ai), ...] 格式的对话历史（兼容现有 Agent 接口）"""
+    def get_conversation_history(self, max_rounds: int = None) -> List[tuple]:
+        """返回 [(human, ai), ...] 格式的对话历史（兼容现有 Agent 接口）
+
+        Args:
+            max_rounds: 最大返回轮数（对齐阿里云百炼 context_rounds）。
+                        默认使用 settings.context_rounds。设为 0 表示不限制。
+                        1 轮 = 1 个用户消息 + 1 个 AI 回复。
+        """
+        if max_rounds is None:
+            max_rounds = settings.context_rounds
+
         pairs: List[tuple] = []
         current_human = ""
         for msg in self._full_history:
@@ -124,6 +133,10 @@ class ShortTermMemory:
                 if current_human:
                     pairs.append((current_human, msg["content"]))
                     current_human = ""
+
+        # 按轮数截断（对齐阿里云百炼携带上下文轮数）
+        if max_rounds > 0:
+            pairs = pairs[-max_rounds:]
         return pairs
 
     def clear(self) -> None:
