@@ -9,6 +9,7 @@ langchain-community>=0.3.0
 # Server
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
+python-multipart>=0.0.20       # 文件上传 (知识库文档上传 / multipart 请求)
 websockets>=13.0
 
 # Security

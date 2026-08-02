@@ -2870,7 +2870,7 @@ function WorkflowTab({ token, hasPermission }: { token: string; hasPermission: (
 // Main component
 // ============================================================
 
-type TabKey = 'dashboard' | 'tickets' | 'customers' | 'satisfaction' | 'notifications' | 'rbac' | 'channels' | 'sessions' | 'agent' | 'health' | 'config' | 'evaluation' | 'workflow'
+type TabKey = 'dashboard' | 'tickets' | 'customers' | 'satisfaction' | 'notifications' | 'rbac' | 'channels' | 'sessions' | 'agent' | 'health' | 'config' | 'evaluation' | 'workflow' | 'knowledge'
 
 const TABS: { key: TabKey; label: string; permission: string }[] = [
   { key: 'dashboard', label: '仪表盘', permission: 'dashboard:view' },
@@ -2886,7 +2886,310 @@ const TABS: { key: TabKey; label: string; permission: string }[] = [
   { key: 'config', label: '配置中心', permission: 'config:view' },
   { key: 'evaluation', label: '评估管理', permission: 'evaluation:view' },
   { key: 'workflow', label: '工作流', permission: 'workflow:view' },
+  { key: 'knowledge', label: '知识库', permission: 'agent:workspace' },
 ]
+
+// ============================================================
+// Knowledge Base — 对标阿里云百炼/智能客服 知识库管理
+// 后端 API: src/api/knowledge.py (KBSet CRUD / 文档上传 / 重建索引 / 命中测试)
+// ============================================================
+
+interface KBSetItem {
+  id: string
+  name: string
+  description: string
+  kb_version: string
+  kb_type: string
+  similarity_threshold: number
+  weight: number
+  document_count: number
+  total_chunks: number
+  created_at: string
+  updated_at: string
+  created_by: string
+}
+
+interface KBDocItem {
+  id: string
+  kb_id: string
+  title: string
+  file_path: string
+  source_type: string
+  status: string
+  parse_status: string
+  chunk_count: number
+  doc_format: string
+  file_size: number
+  kb_version: string
+  kb_type: string
+  upload_method: string
+  similarity_threshold: number
+  weight: number
+  created_at: string
+  indexed_at?: string
+}
+
+interface KBHitResult {
+  content: string
+  score: number
+  source: string
+}
+
+function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Props['user']; hasPermission: (p: string) => boolean }) {
+  const [kbs, setKbs] = useState<KBSetItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ name: '', description: '', kb_type: 'document' })
+  const [creating, setCreating] = useState(false)
+
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [docs, setDocs] = useState<KBDocItem[]>([])
+  const [docsLoading, setDocsLoading] = useState(false)
+  const [docsError, setDocsError] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [hitQuery, setHitQuery] = useState('')
+  const [hitResults, setHitResults] = useState<KBHitResult[]>([])
+  const [hitLoading, setHitLoading] = useState(false)
+
+  const isAdmin = user?.role === 'admin'
+  const canEdit = hasPermission('agent:workspace')
+
+  const fetchList = useCallback(() => {
+    setLoading(true)
+    setError('')
+    fetchJson('/admin/knowledge', token)
+      .then((d: any) => setKbs((d.knowledge_bases || []) as KBSetItem[]))
+      .catch(err => setError(err instanceof Error ? err.message : '加载失败'))
+      .finally(() => setLoading(false))
+  }, [token])
+
+  useEffect(() => { fetchList() }, [fetchList])
+
+  const fetchDocs = useCallback((kbId: string) => {
+    setDocsLoading(true)
+    setDocsError('')
+    fetchJson(`/admin/knowledge/${kbId}/documents`, token)
+      .then((d: any) => setDocs((d.documents || []) as KBDocItem[]))
+      .catch(err => setDocsError(err instanceof Error ? err.message : '加载文档失败'))
+      .finally(() => setDocsLoading(false))
+  }, [token])
+
+  const selectKb = (kb: KBSetItem) => {
+    setSelectedId(kb.id)
+    setHitResults([])
+    fetchDocs(kb.id)
+  }
+
+  const createKb = async () => {
+    if (!form.name.trim()) { alert('请输入知识库名称'); return }
+    setCreating(true)
+    try {
+      await postJson('/admin/knowledge', token, {
+        name: form.name.trim(),
+        description: form.description.trim(),
+        kb_type: form.kb_type,
+      })
+      setShowCreate(false)
+      setForm({ name: '', description: '', kb_type: 'document' })
+      fetchList()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '创建失败')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const deleteKb = async (kb: KBSetItem) => {
+    if (!confirm(`确认删除知识库「${kb.name}」？其下所有文档也会被删除，不可恢复。`)) return
+    try {
+      await fetchApi(`/admin/knowledge/${kb.id}`, token, { method: 'DELETE' })
+      if (selectedId === kb.id) setSelectedId(null)
+      fetchList()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '删除失败')
+    }
+  }
+
+  const reindexKb = async (kb: KBSetItem) => {
+    try {
+      await postJson(`/admin/knowledge/${kb.id}/reindex`, token, {})
+      alert('已触发重建索引')
+      if (selectedId === kb.id) fetchDocs(kb.id)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '操作失败')
+    }
+  }
+
+  const uploadDoc = async (file?: File) => {
+    if (!selectedId || !file) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      await fetchApi(`/admin/knowledge/${selectedId}/documents/upload`, token, { method: 'POST', body: fd })
+      fetchDocs(selectedId)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '上传失败')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const deleteDoc = async (doc: KBDocItem) => {
+    if (!selectedId) return
+    if (!confirm(`确认删除文档「${doc.title}」？`)) return
+    try {
+      await fetchApi(`/admin/knowledge/${selectedId}/documents/${doc.id}`, token, { method: 'DELETE' })
+      fetchDocs(selectedId)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '删除失败')
+    }
+  }
+
+  const runHitTest = async () => {
+    if (!selectedId || !hitQuery.trim()) return
+    setHitLoading(true)
+    try {
+      const d = await postJson(`/admin/knowledge/${selectedId}/hit_test`, token, { query: hitQuery.trim(), top_k: 5 }) as any
+      setHitResults(d.hits || [])
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '命中测试失败')
+    } finally {
+      setHitLoading(false)
+    }
+  }
+
+  const selectedKb = kbs.find(k => k.id === selectedId) || null
+
+  return (
+    <div>
+      <div className="filter-bar">
+        <button className="btn-primary-small" onClick={() => setShowCreate(v => !v)} disabled={!canEdit}>新建知识库</button>
+        <button className="refresh-btn" onClick={fetchList} disabled={loading}>刷新</button>
+      </div>
+
+      {showCreate && (
+        <div style={{ margin: '12px 0', padding: 16, border: '1px solid #e5e7eb', borderRadius: 8 }}>
+          <div style={{ marginBottom: 8 }}>
+            <label style={{ display: 'block', marginBottom: 4 }}>名称</label>
+            <input className="filter-input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="如：产品手册知识库" />
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <label style={{ display: 'block', marginBottom: 4 }}>描述</label>
+            <input className="filter-input" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="可选" />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', marginBottom: 4 }}>类型</label>
+            <select className="filter-input" value={form.kb_type} onChange={e => setForm(f => ({ ...f, kb_type: e.target.value }))}>
+              <option value="document">文档</option>
+              <option value="data">数据/表格</option>
+              <option value="image">图片</option>
+              <option value="audio_video">音视频</option>
+            </select>
+          </div>
+          <button className="btn-primary-small" onClick={createKb} disabled={creating}>{creating ? '创建中...' : '创建'}</button>
+          <button className="btn-secondary-small" style={{ marginLeft: 8 }} onClick={() => setShowCreate(false)}>取消</button>
+        </div>
+      )}
+
+      {loading && <div className="admin-loading">加载知识库...</div>}
+      {error && <div className="admin-error">{error}</div>}
+      {!loading && !error && kbs.length === 0 && <div className="sessions-placeholder"><p>暂无知识库，点击「新建知识库」开始</p></div>}
+
+      {!loading && !error && kbs.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12, marginTop: 12 }}>
+          {kbs.map(kb => (
+            <div key={kb.id} onClick={() => selectKb(kb)}
+              style={{
+                border: `1px solid ${selectedId === kb.id ? '#2563eb' : '#e5e7eb'}`,
+                borderRadius: 8, padding: 14, cursor: 'pointer',
+                background: selectedId === kb.id ? '#eff6ff' : '#fff',
+              }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600 }}>{kb.name}</span>
+                <span className={`badge status-${kb.kb_type}`}>{kb.kb_type}</span>
+              </div>
+              {kb.description && <div style={{ color: '#6b7280', fontSize: 13, margin: '6px 0' }}>{kb.description}</div>}
+              <div style={{ display: 'flex', gap: 12, fontSize: 12, color: '#6b7280' }}>
+                <span>文档 {kb.document_count}</span>
+                <span>切片 {kb.total_chunks}</span>
+                <span>阈值 {kb.similarity_threshold}</span>
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
+                <button className="btn-secondary-small" onClick={() => reindexKb(kb)}>重建索引</button>
+                {isAdmin && (
+                  <button className="btn-secondary-small" style={{ color: '#dc2626', borderColor: '#dc2626' }} onClick={() => deleteKb(kb)}>删除</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {selectedKb && (
+        <div style={{ marginTop: 20 }}>
+          <h3 className="detail-title">文档列表 · {selectedKb.name}</h3>
+          <div className="filter-bar" style={{ marginBottom: 12 }}>
+            <label className="btn-primary-small" style={{ display: 'inline-block', cursor: 'pointer' }}>
+              上传文档
+              <input type="file" style={{ display: 'none' }} onChange={e => uploadDoc(e.target.files?.[0])} disabled={uploading} accept=".pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.ppt,.pptx" />
+            </label>
+            {uploading && <span style={{ marginLeft: 8 }}>上传中...</span>}
+          </div>
+
+          {docsLoading && <div className="admin-loading">加载文档...</div>}
+          {docsError && <div className="admin-error">{docsError}</div>}
+          {!docsLoading && !docsError && docs.length === 0 && <div className="sessions-placeholder"><p>该知识库暂无文档，点「上传文档」添加</p></div>}
+          {!docsLoading && !docsError && docs.length > 0 && (
+            <div className="sessions-table-wrap">
+              <table className="sessions-table">
+                <thead>
+                  <tr><th>标题</th><th>类型</th><th>状态</th><th>切片</th><th>上传时间</th><th>操作</th></tr>
+                </thead>
+                <tbody>
+                  {docs.map(d => (
+                    <tr key={d.id}>
+                      <td>{d.title}</td>
+                      <td><span className={`badge status-${d.source_type}`}>{d.source_type}</span></td>
+                      <td><span className={`badge status-${d.status}`}>{d.status}</span></td>
+                      <td>{d.chunk_count}</td>
+                      <td>{formatDate(d.created_at)}</td>
+                      <td>
+                        {isAdmin && (
+                          <button className="btn-secondary-small" style={{ color: '#dc2626', borderColor: '#dc2626' }} onClick={() => deleteDoc(d)}>删除</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div style={{ marginTop: 20 }}>
+            <h3 className="detail-title">命中测试（验证检索效果）</h3>
+            <div className="filter-bar" style={{ marginBottom: 8 }}>
+              <input className="filter-input" style={{ flex: 1 }} value={hitQuery} onChange={e => setHitQuery(e.target.value)} placeholder="输入一个问题，测试知识库能否召回相关内容" />
+              <button className="btn-primary-small" onClick={runHitTest} disabled={hitLoading}>{hitLoading ? '测试中...' : '测试'}</button>
+            </div>
+            {hitResults.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {hitResults.map((h, i) => (
+                  <div key={i} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
+                    <div style={{ fontSize: 12, color: '#2563eb', marginBottom: 4 }}>匹配度 {h.score.toFixed(3)}</div>
+                    <div style={{ fontSize: 14 }}>{h.content}</div>
+                    {h.source && <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>来源：{h.source}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function AdminDashboard({ isOpen, onClose, user, token, onLoginClick }: Props) {
   const [rbac, setRbac] = useState<RbacInfo | null>(null)
@@ -2952,6 +3255,7 @@ export default function AdminDashboard({ isOpen, onClose, user, token, onLoginCl
       case 'config': return <ConfigTab token={token} hasPermission={hasPermission} />
       case 'evaluation': return <EvaluationTab token={token} hasPermission={hasPermission} />
       case 'workflow': return <WorkflowTab token={token} hasPermission={hasPermission} />
+      case 'knowledge': return <KnowledgeTab token={token} user={user} hasPermission={hasPermission} />
       default: return null
     }
   }
