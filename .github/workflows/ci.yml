@@ -33,13 +33,14 @@ jobs:
           #   test_mcp_tools  → MCP 工具测试 ✅
           #   test_safety     → 安全检查测试 ✅
           #   test_ticket     → 工单测试 ✅
-          # 注意：test_evaluation 暂未包含，因为其依赖的 src/evaluation/tracker.py
-          #       在 GitHub 上是旧版（缺少 total_sessions 等字段），待全量同步后加回。
+          #   test_evaluation → 评测测试 ✅（src/evaluation/tracker.py 已全量同步，
+          #       total_sessions 等字段已补齐，根因已消除）
           pytest \
             tests/test_agent/ \
             tests/test_mcp_tools/ \
             tests/test_safety/ \
             tests/test_ticket/ \
+            tests/test_evaluation/ \
             -v --cov=src --cov-report=term --cov-report=xml \
             -m "not integration" \
             --cov-fail-under=0 \
