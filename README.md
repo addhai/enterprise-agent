@@ -86,8 +86,8 @@ npm run build                      # vite.config 已配 build.outDir = ../static
 cd ..
 
 # 3. 启动（用 Chroma 规避 Milvus，开箱即跑）
-set VECTOR_STORE_BACKEND=chroma    # Windows；macOS/Linux: export VECTOR_STORE_BACKEND=chroma
-uvicorn src.api.server:app --host 0.0.0.0 --port 8000
+make demo                            # 或：python scripts/run_demo.py
+# 脚本会自动选择 venv Python、设置 VECTOR_STORE_BACKEND=chroma 并启动 uvicorn
 ```
 
 浏览器打开 **http://localhost:8000** → 右下角浮动客服 → 发消息即可获得真实 AI 回复。
@@ -119,6 +119,7 @@ docker compose -f docker-compose.monitoring.yml up -d
 
 ```bash
 make install                       # pip install + npm ci
+make demo                          # 一键启动最小可演示实例（单进程、无 Docker）
 make dev                           # API Server (uvicorn --reload, port 8000)
 make dev-rag                       # RAG Server (port 8001)
 # 前端另开终端：cd frontend && npm run dev (port 3000，已配代理到 :8000 /ws)

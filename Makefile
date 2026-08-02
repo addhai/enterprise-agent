@@ -18,7 +18,7 @@
         format migrate-dry migrate migrate-verify \
         shell-api shell-worker shell-rag \
         pg-connect redis-connect mq-console minio-console \
-        install dev dev-api dev-rag
+        install dev dev-api dev-rag demo
 
 # ---- 默认目标 ----
 .DEFAULT_GOAL := help
@@ -82,6 +82,9 @@ install: ## 安装依赖
 
 dev: ## 启动 API 开发服务器 (热重载)
 	python -m src.api.server
+
+demo: ## 一键启动最小可演示实例（单进程：后端+前端+WS 同源）
+	python scripts/run_demo.py
 
 dev-rag: ## 启动 RAG 开发服务器 (热重载)
 	uvicorn src.rag.server:app --host 0.0.0.0 --port 8001 --reload
