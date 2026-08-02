@@ -14,6 +14,7 @@ chroma_e2e_test/
 test_chroma/
 test_chroma_full/
 node_modules/
+dist/
 logs/
 __pycache__/
 *.pyc

@@ -1248,19 +1248,21 @@ function ChannelsTab({ token }: { token: string }) {
         setChannels(list)
         const cw = list.find(c => c.name === 'chatwoot')
         if (cw?.config) {
+          const cfg = cw.config
           setChatwootForm(prev => ({
             ...prev,
-            base_url: cw.config.base_url || '',
-            account_id: cw.config.account_id || '1',
-            inbox_id: cw.config.inbox_id || '1',
+            base_url: cfg.base_url || '',
+            account_id: cfg.account_id || '1',
+            inbox_id: cfg.inbox_id || '1',
             enabled: cw.enabled,
           }))
         }
         const fs = list.find(c => c.name === 'feishu')
         if (fs?.config) {
+          const fcfg = fs.config
           setFeishuForm(prev => ({
             ...prev,
-            app_id: fs.config.app_id || '',
+            app_id: fcfg.app_id || '',
             enabled: fs.enabled,
           }))
         }
@@ -2228,10 +2230,647 @@ function HealthTab({ token }: { token: string }) {
 }
 
 // ============================================================
+// Config Tab — 配置中心（P6）
+// ============================================================
+
+interface ConfigField {
+  name: string
+  type: string
+  default: unknown
+  value: unknown
+  is_sensitive: boolean
+  configured?: boolean
+  is_default?: boolean
+}
+
+interface ConfigCategory {
+  key: string
+  label: string
+  description: string
+  fields: ConfigField[]
+}
+
+interface FeatureFlag {
+  name: string
+  enabled: boolean
+  is_default: boolean
+  category: string
+  category_label: string
+}
+
+function ConfigTab({ token, hasPermission }: { token: string; hasPermission: (p: string) => boolean }) {
+  const [categories, setCategories] = useState<ConfigCategory[]>([])
+  const [flags, setFlags] = useState<FeatureFlag[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [activeCategory, setActiveCategory] = useState<string>('')
+  const [editingField, setEditingField] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState<string>('')
+  const [saving, setSaving] = useState(false)
+  const [tabMode, setTabMode] = useState<'categories' | 'flags'>('categories')
+  const canManage = hasPermission('config:manage')
+
+  const load = useCallback(() => {
+    Promise.all([
+      fetchJson('/admin/config', token),
+      fetchJson('/admin/config/features', token),
+    ])
+      .then(([catData, flagData]) => {
+        setCategories(catData.categories || [])
+        setFlags(flagData.flags || [])
+        if (!activeCategory && catData.categories?.length > 0) {
+          setActiveCategory(catData.categories[0].key)
+        }
+        setError('')
+      })
+      .catch(err => setError(err instanceof Error ? err.message : '加载失败'))
+      .finally(() => setLoading(false))
+  }, [token, activeCategory])
+
+  useEffect(() => { load() }, [load])
+
+  const startEdit = (field: ConfigField) => {
+    if (!canManage || field.is_sensitive) return
+    setEditingField(field.name)
+    setEditValue(String(field.value))
+  }
+
+  const saveEdit = async () => {
+    if (!editingField) return
+    setSaving(true)
+    try {
+      // 根据字段类型转换值
+      const field = categories
+        .flatMap(c => c.fields)
+        .find(f => f.name === editingField)
+      let typedValue: unknown = editValue
+      if (field?.type === 'bool') {
+        typedValue = ['true', '1', 'yes', 'on'].includes(editValue.toLowerCase())
+      } else if (field?.type === 'int') {
+        typedValue = parseInt(editValue, 10)
+      } else if (field?.type === 'float') {
+        typedValue = parseFloat(editValue)
+      }
+      await putJson('/admin/config', token, { updates: { [editingField]: typedValue } })
+      setEditingField(null)
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleFlag = async (flag: FeatureFlag) => {
+    if (!canManage) return
+    if (!confirm(`确认${flag.enabled ? '关闭' : '开启'} ${flag.name}？`)) return
+    try {
+      await putJson(`/admin/config/features/${flag.name}`, token, { enabled: !flag.enabled })
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '切换失败')
+    }
+  }
+
+  const resetCategory = async () => {
+    if (!canManage || !activeCategory) return
+    if (!confirm(`确认重置 ${activeCategory} 分类的所有配置到默认值？`)) return
+    try {
+      await postJson(`/admin/config/reset/${activeCategory}`, token, {})
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '重置失败')
+    }
+  }
+
+  const resetAll = async () => {
+    if (!canManage) return
+    if (!confirm('确认重置所有配置到默认值？此操作不可撤销。')) return
+    try {
+      await postJson('/admin/config/reset', token, {})
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '重置失败')
+    }
+  }
+
+  if (loading) return <div className="admin-loading">加载配置...</div>
+  if (error) return <div className="admin-error">{error}</div>
+
+  const currentCategory = categories.find(c => c.key === activeCategory)
+
+  return (
+    <div>
+      <div className="metrics-grid">
+        <StatCard label="配置分类" value={String(categories.length)} />
+        <StatCard label="Feature Flag 总数" value={String(flags.length)} />
+        <StatCard label="已启用 Flag" value={String(flags.filter(f => f.enabled).length)} color="#10b981" />
+        <StatCard label="已修改字段" value={String(categories.flatMap(c => c.fields).filter(f => !f.is_sensitive && !f.is_default).length)} color="#f59e0b" />
+      </div>
+
+      <div className="health-controls">
+        <div className="tab-switcher">
+          <button
+            className={`tab-btn ${tabMode === 'categories' ? 'active' : ''}`}
+            onClick={() => setTabMode('categories')}
+          >分类配置</button>
+          <button
+            className={`tab-btn ${tabMode === 'flags' ? 'active' : ''}`}
+            onClick={() => setTabMode('flags')}
+          >Feature Flag</button>
+        </div>
+        {canManage && tabMode === 'categories' && (
+          <>
+            <button className="btn-secondary-small" onClick={resetCategory} disabled={!activeCategory}>
+              ↺ 重置当前分类
+            </button>
+            <button className="btn-secondary-small" onClick={resetAll}>
+              ↺ 重置全部
+            </button>
+          </>
+        )}
+        <button className="btn-secondary-small" onClick={load}>🔄 刷新</button>
+      </div>
+
+      {tabMode === 'categories' && (
+        <div className="config-layout" style={{ display: 'flex', gap: 16, marginTop: 16 }}>
+          {/* 左侧分类列表 */}
+          <div className="config-sidebar" style={{ width: 200, flexShrink: 0 }}>
+            <h3 className="detail-title">分类</h3>
+            <div className="sessions-list" style={{ maxHeight: 500, overflowY: 'auto' }}>
+              {categories.map(cat => (
+                <button
+                  key={cat.key}
+                  className={`session-item ${activeCategory === cat.key ? 'active' : ''}`}
+                  onClick={() => setActiveCategory(cat.key)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px' }}
+                >
+                  <div style={{ fontWeight: 600 }}>{cat.label}</div>
+                  <div style={{ fontSize: 11, color: '#888' }}>{cat.fields.length} 字段</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 右侧字段列表 */}
+          <div className="config-content" style={{ flex: 1, minWidth: 0 }}>
+            {currentCategory && (
+              <>
+                <h3 className="detail-title">{currentCategory.label}</h3>
+                <p style={{ color: '#888', fontSize: 13, marginBottom: 12 }}>{currentCategory.description}</p>
+                <div className="sessions-container">
+                  <table className="config-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#f5f5f5', textAlign: 'left' }}>
+                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>字段名</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>类型</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>当前值</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>默认值</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>状态</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {currentCategory.fields.map(field => (
+                        <tr key={field.name} style={{ borderBottom: '1px solid #eee' }}>
+                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 13 }}>{field.name}</td>
+                          <td style={{ padding: 8, fontSize: 12, color: '#888' }}>{field.type}</td>
+                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 13 }}>
+                            {field.is_sensitive ? (
+                              <span style={{ color: '#888' }}>{field.configured ? '已配置 ••••' : '未配置'}</span>
+                            ) : editingField === field.name ? (
+                              <input
+                                type="text"
+                                value={editValue}
+                                onChange={e => setEditValue(e.target.value)}
+                                style={{ width: '100%', padding: '2px 6px', fontFamily: 'monospace' }}
+                                autoFocus
+                              />
+                            ) : (
+                              <span style={{ color: field.is_default ? '#888' : '#10b981', fontWeight: field.is_default ? 400 : 600 }}>
+                                {String(field.value)}
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 12, color: '#aaa' }}>
+                            {field.is_sensitive ? '-' : String(field.default)}
+                          </td>
+                          <td style={{ padding: 8 }}>
+                            {field.is_sensitive ? (
+                              <span className="role-badge" style={{ background: '#fef3c7', color: '#92400e' }}>敏感</span>
+                            ) : field.is_default ? (
+                              <span className="role-badge" style={{ background: '#e0e7ff', color: '#4338ca' }}>默认</span>
+                            ) : (
+                              <span className="role-badge" style={{ background: '#d1fae5', color: '#065f46' }}>已修改</span>
+                            )}
+                          </td>
+                          <td style={{ padding: 8 }}>
+                            {canManage && !field.is_sensitive && (
+                              editingField === field.name ? (
+                                <>
+                                  <button className="btn-secondary-small" onClick={saveEdit} disabled={saving} style={{ marginRight: 4 }}>
+                                    {saving ? '保存中' : '✓'}
+                                  </button>
+                                  <button className="btn-secondary-small" onClick={() => setEditingField(null)}>✗</button>
+                                </>
+                              ) : (
+                                <button className="btn-secondary-small" onClick={() => startEdit(field)}>编辑</button>
+                              )
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tabMode === 'flags' && (
+        <div className="sessions-container" style={{ marginTop: 16 }}>
+          <h3 className="detail-title">Feature Flag 开关</h3>
+          <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+            {flags.map(flag => (
+              <div key={flag.name} className="metric-card" style={{ padding: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 600 }}>{flag.name}</div>
+                    <div style={{ fontSize: 11, color: '#888' }}>{flag.category_label}</div>
+                  </div>
+                  <span className={`role-badge ${flag.enabled ? 'role-admin' : 'role-viewer'}`} style={{ background: flag.enabled ? '#d1fae5' : '#fee2e2', color: flag.enabled ? '#065f46' : '#991b1b' }}>
+                    {flag.enabled ? '已启用' : '已禁用'}
+                  </span>
+                </div>
+                <button
+                  className="btn-secondary-small"
+                  onClick={() => toggleFlag(flag)}
+                  disabled={!canManage}
+                  style={{ width: '100%', marginTop: 8 }}
+                >
+                  {canManage ? (flag.enabled ? '点击关闭' : '点击开启') : '只读'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// Evaluation Tab — 评估管理（P5）
+// ============================================================
+
+interface EvalDataset {
+  id: string
+  name: string
+  description: string
+  samples: unknown[]
+  created_at: number
+}
+
+interface EvalRun {
+  id: string
+  dataset_id: string
+  dataset_name: string
+  status: string
+  started_at: number
+  finished_at: number | null
+  summary: Record<string, number>
+}
+
+function EvaluationTab({ token, hasPermission }: { token: string; hasPermission: (p: string) => boolean }) {
+  const [datasets, setDatasets] = useState<EvalDataset[]>([])
+  const [runs, setRuns] = useState<EvalRun[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [activeView, setActiveView] = useState<'datasets' | 'runs'>('datasets')
+  const [selectedDataset, setSelectedDataset] = useState<EvalDataset | null>(null)
+  const [selectedRun, setSelectedRun] = useState<EvalRun | null>(null)
+  const canManage = hasPermission('evaluation:manage')
+
+  const load = useCallback(() => {
+    Promise.all([
+      fetchJson('/admin/evaluation/datasets', token).catch(() => ({ datasets: [] })),
+      fetchJson('/admin/evaluation/runs', token).catch(() => ({ runs: [] })),
+    ])
+      .then(([dsData, runData]) => {
+        setDatasets(dsData.datasets || [])
+        setRuns(runData.runs || [])
+        setError('')
+      })
+      .catch(err => setError(err instanceof Error ? err.message : '加载失败'))
+      .finally(() => setLoading(false))
+  }, [token])
+
+  useEffect(() => { load() }, [load])
+
+  const triggerRun = async (datasetId: string) => {
+    if (!canManage) return
+    if (!confirm('确认触发评估运行？')) return
+    try {
+      await postJson('/admin/evaluation/runs', token, { dataset_id: datasetId })
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '触发失败')
+    }
+  }
+
+  const deleteDataset = async (id: string) => {
+    if (!canManage) return
+    if (!confirm('确认删除该数据集？')) return
+    try {
+      await fetchApi(`/admin/evaluation/datasets/${id}`, token, { method: 'DELETE' })
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '删除失败')
+    }
+  }
+
+  if (loading) return <div className="admin-loading">加载评估数据...</div>
+  if (error) return <div className="admin-error">{error}</div>
+
+  return (
+    <div>
+      <div className="metrics-grid">
+        <StatCard label="数据集总数" value={String(datasets.length)} />
+        <StatCard label="评估运行总数" value={String(runs.length)} />
+        <StatCard label="运行中" value={String(runs.filter(r => r.status === 'running').length)} color="#f59e0b" />
+        <StatCard label="已完成" value={String(runs.filter(r => r.status === 'completed').length)} color="#10b981" />
+      </div>
+
+      <div className="health-controls">
+        <div className="tab-switcher">
+          <button className={`tab-btn ${activeView === 'datasets' ? 'active' : ''}`} onClick={() => { setActiveView('datasets'); setSelectedDataset(null); setSelectedRun(null) }}>数据集</button>
+          <button className={`tab-btn ${activeView === 'runs' ? 'active' : ''}`} onClick={() => { setActiveView('runs'); setSelectedDataset(null); setSelectedRun(null) }}>运行历史</button>
+        </div>
+        <button className="btn-secondary-small" onClick={load}>🔄 刷新</button>
+      </div>
+
+      {activeView === 'datasets' && !selectedDataset && (
+        <div className="sessions-container" style={{ marginTop: 16 }}>
+          <h3 className="detail-title">评估数据集</h3>
+          <div className="sessions-list">
+            {datasets.length === 0 ? (
+              <div className="sessions-placeholder"><p>暂无数据集</p></div>
+            ) : datasets.map(ds => (
+              <div key={ds.id} className="session-item" style={{ display: 'block', padding: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{ds.name}</div>
+                    <div style={{ fontSize: 12, color: '#888' }}>{ds.description || '无描述'}</div>
+                    <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+                      {Array.isArray(ds.samples) ? ds.samples.length : 0} 个样本 · 创建于 {formatDate(ds.created_at)}
+                    </div>
+                  </div>
+                  <div>
+                    {canManage && (
+                      <button className="btn-primary" style={{ marginRight: 8, padding: '4px 12px' }} onClick={() => triggerRun(ds.id)}>
+                        ▶ 运行
+                      </button>
+                    )}
+                    <button className="btn-secondary-small" onClick={() => setSelectedDataset(ds)}>查看</button>
+                    {canManage && (
+                      <button className="btn-secondary-small" style={{ marginLeft: 4, color: '#ef4444' }} onClick={() => deleteDataset(ds.id)}>删除</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeView === 'datasets' && selectedDataset && (
+        <div className="sessions-container" style={{ marginTop: 16 }}>
+          <button className="btn-secondary-small" onClick={() => setSelectedDataset(null)} style={{ marginBottom: 12 }}>← 返回列表</button>
+          <h3 className="detail-title">{selectedDataset.name}</h3>
+          <p style={{ color: '#888', fontSize: 13 }}>{selectedDataset.description}</p>
+          <div style={{ marginTop: 12 }}>
+            <h4 style={{ fontSize: 14, marginBottom: 8 }}>样本列表</h4>
+            <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 400, overflow: 'auto', fontSize: 12 }}>
+              {JSON.stringify(selectedDataset.samples, null, 2)}
+            </pre>
+          </div>
+        </div>
+      )}
+
+      {activeView === 'runs' && !selectedRun && (
+        <div className="sessions-container" style={{ marginTop: 16 }}>
+          <h3 className="detail-title">评估运行历史</h3>
+          <div className="sessions-list">
+            {runs.length === 0 ? (
+              <div className="sessions-placeholder"><p>暂无运行记录</p></div>
+            ) : runs.map(run => (
+              <div key={run.id} className="session-item" style={{ display: 'block', padding: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{run.dataset_name || run.dataset_id}</div>
+                    <div style={{ fontSize: 12, color: '#888' }}>
+                      开始: {formatDate(run.started_at)} · 耗时: {run.finished_at ? `${((run.finished_at - run.started_at)).toFixed(1)}s` : '进行中'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className={`role-badge ${run.status === 'completed' ? 'role-admin' : run.status === 'running' ? 'role-agent' : 'role-viewer'}`} style={{ background: run.status === 'completed' ? '#d1fae5' : run.status === 'running' ? '#fef3c7' : '#fee2e2', color: run.status === 'completed' ? '#065f46' : run.status === 'running' ? '#92400e' : '#991b1b' }}>
+                      {run.status}
+                    </span>
+                    <button className="btn-secondary-small" style={{ marginLeft: 8 }} onClick={() => setSelectedRun(run)}>查看报告</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeView === 'runs' && selectedRun && (
+        <div className="sessions-container" style={{ marginTop: 16 }}>
+          <button className="btn-secondary-small" onClick={() => setSelectedRun(null)} style={{ marginBottom: 12 }}>← 返回列表</button>
+          <h3 className="detail-title">评估报告</h3>
+          <div className="metrics-grid">
+            {Object.entries(selectedRun.summary || {}).map(([k, v]) => (
+              <StatCard key={k} label={k} value={typeof v === 'number' ? v.toFixed(3) : String(v)} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// Workflow Tab — 工作流管理（P3-P4）
+// ============================================================
+
+interface WorkflowInfo {
+  id: string
+  name: string
+  description: string
+  version: number
+  is_published: boolean
+  is_default: boolean
+  node_count: number
+  edge_count: number
+  updated_at: number
+}
+
+function WorkflowTab({ token, hasPermission }: { token: string; hasPermission: (p: string) => boolean }) {
+  const [workflows, setWorkflows] = useState<WorkflowInfo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [selectedWf, setSelectedWf] = useState<WorkflowInfo | null>(null)
+  const [wfDetail, setWfDetail] = useState<unknown>(null)
+  const [nodeTypes, setNodeTypes] = useState<unknown[]>([])
+  const canManage = hasPermission('workflow:manage')
+
+  const load = useCallback(() => {
+    Promise.all([
+      fetchJson('/admin/workflows', token).catch(() => ({ workflows: [] })),
+      fetchJson('/admin/workflows/meta/node-types', token).catch(() => ({ node_types: [] })),
+    ])
+      .then(([wfData, ntData]) => {
+        setWorkflows(wfData.workflows || [])
+        setNodeTypes(ntData.node_types || [])
+        setError('')
+      })
+      .catch(err => setError(err instanceof Error ? err.message : '加载失败'))
+      .finally(() => setLoading(false))
+  }, [token])
+
+  useEffect(() => { load() }, [load])
+
+  const viewDetail = async (wf: WorkflowInfo) => {
+    setSelectedWf(wf)
+    try {
+      const data = await fetchJson(`/admin/workflows/${wf.id}`, token)
+      setWfDetail(data)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '加载详情失败')
+    }
+  }
+
+  const publishWorkflow = async (id: string) => {
+    if (!canManage) return
+    if (!confirm('确认发布该工作流？发布后将立即生效。')) return
+    try {
+      await postJson(`/admin/workflows/${id}/publish`, token, {})
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '发布失败')
+    }
+  }
+
+  const validateWorkflow = async (id: string) => {
+    try {
+      const result = await postJson(`/admin/workflows/${id}/validate`, token, {})
+      alert(`校验结果: ${JSON.stringify(result)}`)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '校验失败')
+    }
+  }
+
+  const cloneWorkflow = async (id: string) => {
+    if (!canManage) return
+    const name = prompt('请输入克隆后的工作流名称：')
+    if (!name) return
+    try {
+      await postJson(`/admin/workflows/${id}/clone`, token, { name })
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '克隆失败')
+    }
+  }
+
+  const deleteWorkflow = async (id: string) => {
+    if (!canManage) return
+    if (!confirm('确认删除该工作流？此操作不可撤销。')) return
+    try {
+      await fetchApi(`/admin/workflows/${id}`, token, { method: 'DELETE' })
+      setSelectedWf(null)
+      await load()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '删除失败')
+    }
+  }
+
+  if (loading) return <div className="admin-loading">加载工作流...</div>
+  if (error) return <div className="admin-error">{error}</div>
+
+  return (
+    <div>
+      <div className="metrics-grid">
+        <StatCard label="工作流总数" value={String(workflows.length)} />
+        <StatCard label="已发布" value={String(workflows.filter(w => w.is_published).length)} color="#10b981" />
+        <StatCard label="默认工作流" value={String(workflows.filter(w => w.is_default).length)} color="#3b82f6" />
+        <StatCard label="节点类型" value={String(nodeTypes.length)} />
+      </div>
+
+      <div className="health-controls">
+        <button className="btn-secondary-small" onClick={load}>🔄 刷新</button>
+      </div>
+
+      {!selectedWf ? (
+        <div className="sessions-container" style={{ marginTop: 16 }}>
+          <h3 className="detail-title">工作流列表</h3>
+          <div className="sessions-list">
+            {workflows.length === 0 ? (
+              <div className="sessions-placeholder"><p>暂无工作流</p></div>
+            ) : workflows.map(wf => (
+              <div key={wf.id} className="session-item" style={{ display: 'block', padding: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {wf.name}
+                      {wf.is_default && <span className="role-badge" style={{ background: '#dbeafe', color: '#1e40af' }}>默认</span>}
+                      {wf.is_published && <span className="role-badge" style={{ background: '#d1fae5', color: '#065f46' }}>已发布</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>{wf.description || '无描述'}</div>
+                    <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+                      v{wf.version} · {wf.node_count} 节点 · {wf.edge_count} 边 · 更新于 {formatDate(wf.updated_at)}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <button className="btn-secondary-small" onClick={() => viewDetail(wf)}>查看</button>
+                    <button className="btn-secondary-small" onClick={() => validateWorkflow(wf.id)}>校验</button>
+                    {canManage && (
+                      <>
+                        {!wf.is_published && <button className="btn-secondary-small" onClick={() => publishWorkflow(wf.id)}>发布</button>}
+                        <button className="btn-secondary-small" onClick={() => cloneWorkflow(wf.id)}>克隆</button>
+                        {!wf.is_default && <button className="btn-secondary-small" style={{ color: '#ef4444' }} onClick={() => deleteWorkflow(wf.id)}>删除</button>}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="sessions-container" style={{ marginTop: 16 }}>
+          <button className="btn-secondary-small" onClick={() => setSelectedWf(null)} style={{ marginBottom: 12 }}>← 返回列表</button>
+          <h3 className="detail-title">{selectedWf.name} 详情</h3>
+          <p style={{ color: '#888', fontSize: 13 }}>{selectedWf.description}</p>
+          <div style={{ marginTop: 12 }}>
+            <h4 style={{ fontSize: 14, marginBottom: 8 }}>工作流定义（JSON）</h4>
+            <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 500, overflow: 'auto', fontSize: 12 }}>
+              {JSON.stringify(wfDetail, null, 2)}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
 // Main component
 // ============================================================
 
-type TabKey = 'dashboard' | 'tickets' | 'customers' | 'satisfaction' | 'notifications' | 'rbac' | 'channels' | 'sessions' | 'agent' | 'health'
+type TabKey = 'dashboard' | 'tickets' | 'customers' | 'satisfaction' | 'notifications' | 'rbac' | 'channels' | 'sessions' | 'agent' | 'health' | 'config' | 'evaluation' | 'workflow'
 
 const TABS: { key: TabKey; label: string; permission: string }[] = [
   { key: 'dashboard', label: '仪表盘', permission: 'dashboard:view' },
@@ -2244,6 +2883,9 @@ const TABS: { key: TabKey; label: string; permission: string }[] = [
   { key: 'sessions', label: '会话管理', permission: 'agent:workspace' },
   { key: 'agent', label: '人工坐席', permission: 'agent:workspace' },
   { key: 'health', label: 'Agent 监控', permission: 'agent:workspace' },
+  { key: 'config', label: '配置中心', permission: 'config:view' },
+  { key: 'evaluation', label: '评估管理', permission: 'evaluation:view' },
+  { key: 'workflow', label: '工作流', permission: 'workflow:view' },
 ]
 
 export default function AdminDashboard({ isOpen, onClose, user, token, onLoginClick }: Props) {
@@ -2307,6 +2949,9 @@ export default function AdminDashboard({ isOpen, onClose, user, token, onLoginCl
       case 'sessions': return <SessionsTab token={token} />
       case 'agent': return <AgentTab token={token} user={user} />
       case 'health': return <HealthTab token={token} />
+      case 'config': return <ConfigTab token={token} hasPermission={hasPermission} />
+      case 'evaluation': return <EvaluationTab token={token} hasPermission={hasPermission} />
+      case 'workflow': return <WorkflowTab token={token} hasPermission={hasPermission} />
       default: return null
     }
   }
