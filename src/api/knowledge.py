@@ -19,10 +19,10 @@ from pydantic import BaseModel, Field
 from src.api.rbac import Role, require_roles
 from src.config import settings
 from src.mcp_tools.common import (
-    TenantIsolatedStore,
     current_utc_time,
     generate_id,
 )
+from src.db.stores import PgKBSetStore
 from src.mcp_tools.kb import (
     KBItem,
     KBItemStatus,
@@ -61,10 +61,8 @@ class KBSet(BaseModel):
     created_by: str = ""
 
 
-# 租户隔离的知识库集合存储
-_kb_set_store: TenantIsolatedStore[KBSet] = TenantIsolatedStore(
-    max_items_per_tenant=200, name="kb_set"
-)
+# 租户隔离的知识库集合存储（已落库持久化）
+_kb_set_store: PgKBSetStore = PgKBSetStore()
 
 # 默认租户 ID（单租户部署回退用）
 _DEFAULT_TENANT = "default"

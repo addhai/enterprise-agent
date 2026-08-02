@@ -89,8 +89,8 @@ async def get_dashboard_kpi(
     # 满意度统计
     satisfaction = {"avg_score": 0, "csat_rate": 0, "total": 0}
     try:
-        from src.api.satisfaction import _satisfaction_records
-        records = [r for r in _satisfaction_records if r["created_at"] >= week_ago]
+        from src.db.repositories import satisfaction_list
+        records = [r for r in satisfaction_list(limit=10000) if r["created_at"] >= week_ago]
         if records:
             scores = [r["score"] for r in records]
             satisfaction["avg_score"] = round(sum(scores) / len(scores), 2)
@@ -207,8 +207,8 @@ async def get_agent_performance(
 
     # 满意度
     try:
-        from src.api.satisfaction import _satisfaction_records
-        for r in _satisfaction_records:
+        from src.db.repositories import satisfaction_list
+        for r in satisfaction_list(limit=10000):
             if r.get("agent_id") and r["created_at"] >= cutoff:
                 agent_id = r["agent_id"]
                 if agent_id not in agents:

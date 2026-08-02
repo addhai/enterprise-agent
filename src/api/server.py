@@ -92,6 +92,15 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup():
         """应用启动：预初始化单例，确保首次请求不阻塞"""
+        # 初始化数据库（建表 + seed 默认账号）放在最前，保证后续 store 可用
+        try:
+            from src.db.init import init_db
+
+            init_db()
+            logger.info("Database initialized (tables + seed)")
+        except Exception as e:
+            logger.warning("Database init failed (non-fatal): %s", e)
+
         logger.info("App starting — pre-warming singletons...")
         try:
             from src.api.dependencies import get_workflow

@@ -1,7 +1,8 @@
 """演示数据初始化
 
 在应用启动时注入一些模拟数据，方便前端展示和测试。
-注意：当前使用内存存储，重启后数据会丢失。
+注意：业务数据现已持久化（Postgres / SQLite），重启后不丢失；
+演示数据仅在数据库为空时注入，重复启动不会重复生成。
 """
 import time
 import logging
@@ -108,8 +109,8 @@ def _seed_tickets():
 
 def _seed_satisfaction():
     """生成示例满意度记录"""
-    from src.api.satisfaction import _satisfaction_records
-    if _satisfaction_records:
+    from src.db.repositories import satisfaction_list, satisfaction_create
+    if satisfaction_list(limit=1):
         return
 
     samples = [
@@ -122,7 +123,7 @@ def _seed_satisfaction():
 
     now = time.time()
     for i, s in enumerate(samples):
-        _satisfaction_records.append({
+        satisfaction_create({
             "id": f"SAT-SEED-{i+1}",
             "session_id": s["session_id"],
             "user_id": s["user_id"],

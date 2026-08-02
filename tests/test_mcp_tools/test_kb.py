@@ -12,11 +12,9 @@ from src.mcp_tools.common import current_utc_time, generate_id
 
 @pytest.fixture(autouse=True)
 def reset_store():
-    _kb_store._store.clear()
-    _kb_store._timestamps.clear()
+    _kb_store.reset()
     yield
-    _kb_store._store.clear()
-    _kb_store._timestamps.clear()
+    _kb_store.reset()
 
 
 @pytest.fixture

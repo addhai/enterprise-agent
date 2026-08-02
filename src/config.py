@@ -83,6 +83,8 @@ class Settings(BaseSettings):
 
     # PostgreSQL
     database_url: str = "postgresql://localhost:5432/agent"
+    # 存储后端切换: auto(默认, 连不上 PG 自动回退 SQLite 文件) / postgres(强制 PG) / sqlite(强制 SQLite 文件)
+    storage_backend: str = "auto"
     long_term_max_per_user: int = 1000  # 每用户长期记忆上限
 
     # Memory

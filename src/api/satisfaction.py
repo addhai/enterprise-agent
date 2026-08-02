@@ -6,7 +6,6 @@
 import os
 import time
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -16,17 +15,15 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 from src.api.rbac import get_current_user, require_permissions, Permission
+from src.db.repositories import satisfaction_create, satisfaction_list
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["satisfaction"])
 
 
 # ====================================================================
-# 内存数据存储
+# 数据存储（Postgres / SQLite，由 src.db.repositories 统一落库）
 # ====================================================================
-
-_satisfaction_records: List[Dict[str, Any]] = []
-_records_lock = threading.Lock()
 
 
 # ====================================================================
@@ -65,18 +62,10 @@ async def list_satisfaction(
     current_user: Dict[str, Any] = Depends(require_permissions(Permission.SATISFACTION_VIEW)),
 ):
     """获取满意度评价列表"""
-    with _records_lock:
-        records = list(_satisfaction_records)
-
-    if user_id:
-        records = [r for r in records if r["user_id"] == user_id]
-    if session_id:
-        records = [r for r in records if r["session_id"] == session_id]
-    if agent_id:
-        records = [r for r in records if r.get("agent_id") == agent_id]
-
-    records.sort(key=lambda r: r["created_at"], reverse=True)
-    return {"total": len(records), "records": records[:limit]}
+    records = satisfaction_list(
+        user_id=user_id, session_id=session_id, agent_id=agent_id, limit=limit,
+    )
+    return {"total": len(records), "records": records}
 
 
 @router.post("/satisfaction")
@@ -96,8 +85,7 @@ async def submit_satisfaction(request: SubmitSatisfactionRequest):
         "created_at": time.time(),
     }
 
-    with _records_lock:
-        _satisfaction_records.append(record)
+    satisfaction_create(record)
 
     logger.info("Satisfaction submitted: session=%s user=%s score=%s", request.session_id, request.user_id, request.score)
 
@@ -125,8 +113,7 @@ async def get_satisfaction_stats(
 ):
     """获取满意度统计"""
     cutoff = time.time() - days * 24 * 3600
-    with _records_lock:
-        records = [r for r in _satisfaction_records if r["created_at"] >= cutoff]
+    records = [r for r in satisfaction_list(limit=100000) if r["created_at"] >= cutoff]
 
     stats = SatisfactionStats(total=len(records))
     if records:
@@ -160,8 +147,10 @@ async def get_agent_satisfaction_stats(
 ):
     """获取指定客服的满意度统计"""
     cutoff = time.time() - days * 24 * 3600
-    with _records_lock:
-        records = [r for r in _satisfaction_records if r.get("agent_id") == agent_id and r["created_at"] >= cutoff]
+    records = [
+        r for r in satisfaction_list(agent_id=agent_id, limit=100000)
+        if r.get("agent_id") == agent_id and r["created_at"] >= cutoff
+    ]
 
     if not records:
         return {"agent_id": agent_id, "total": 0, "average_score": 0, "csat_rate": 0}

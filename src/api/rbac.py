@@ -258,9 +258,9 @@ async def list_users_with_roles(
     current_user: Dict[str, Any] = Depends(require_permissions(Permission.USER_VIEW))
 ):
     """获取用户列表及其角色"""
-    from src.api.auth import _users
+    from src.db.repositories import list_users
     users = []
-    for u in _users.values():
+    for u in list_users():
         users.append(UserWithRole(
             user_id=u["user_id"],
             username=u["username"],
@@ -280,15 +280,15 @@ async def update_user_role(
     current_user: Dict[str, Any] = Depends(require_user_manage),
 ):
     """更新用户角色（仅超级管理员）"""
-    from src.api.auth import _users
-    target = _users.get(user_id)
+    from src.db.repositories import user_get_by_id, user_update
+    target = user_get_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="用户不存在")
     # 不能修改自己的角色，避免把自己锁死
     if target["user_id"] == current_user["user_id"]:
         raise HTTPException(status_code=400, detail="不能修改自己的角色")
     old_role = target.get("role", "viewer")
-    target["role"] = request.role.value
+    user_update(user_id, {"role": request.role.value})
     logger.info("User role updated: %s %s -> %s by %s", user_id, old_role, request.role.value, current_user["user_id"])
     return {
         "success": True,
@@ -304,15 +304,15 @@ async def update_user_status(
     current_user: Dict[str, Any] = Depends(require_permissions(Permission.USER_MANAGE)),
 ):
     """启用/禁用用户"""
-    from src.api.auth import _users
-    target = _users.get(user_id)
+    from src.db.repositories import user_get_by_id, user_update
+    target = user_get_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="用户不存在")
     if target["user_id"] == current_user["user_id"]:
         raise HTTPException(status_code=400, detail="不能禁用自己")
     if status not in ("active", "inactive", "suspended"):
         raise HTTPException(status_code=400, detail="无效的状态")
-    target["status"] = status
+    user_update(user_id, {"status": status})
     return {"success": True, "user_id": user_id, "status": status}
 
 

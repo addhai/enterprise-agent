@@ -19,6 +19,8 @@ bcrypt>=4.0.0             # 密码哈希（替代不安全的 SHA-256）
 chromadb>=0.5.0
 redis>=5.0.0
 psycopg2-binary>=2.9.0
+sqlalchemy>=2.0.0         # ORM（用户/知识库/工单/对话等持久化，支持 Postgres + SQLite）
+aiosqlite>=0.19.0         # SQLite 驱动（本机零安装持久化回退，标准库 sqlite3 亦可）
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 

@@ -15,12 +15,12 @@ from pydantic import BaseModel, Field
 
 from src.agent.tools import PermissionChecker
 from src.mcp_tools.common import (
-    TenantIsolatedStore,
     current_utc_time,
     format_result,
     generate_id,
     require_admin,
 )
+from src.db.stores import PgKBItemStore
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ class KBItem(BaseModel):
     weight: float = 1.0                          # 权重（0.5~2）
 
 
-_kb_store = TenantIsolatedStore(max_items_per_tenant=1000, name="kb")
+_kb_store = PgKBItemStore()
 
 
 def create_kb_tools(

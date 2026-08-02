@@ -6,9 +6,43 @@
     2. `asyncio_mode=auto` 已在 pyproject.toml 配置，异步测试无需手标。
 """
 
+import os
+
 import pytest
 
 from src.agent.fake_llm import FakeLLMClient
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _init_test_database():
+    """为所有测试初始化一个独立的 SQLite 数据库（自动建表 + seed）。
+
+    阶段一改造后，用户 / 知识库 / 工单 / 对话等 store 已落库；本 fixture 保证
+    测试也能跑通，且使用独立的 test_agent.db，不污染开发用的 agent.db。
+    """
+    from src.config import settings
+
+    settings.storage_backend = "sqlite"
+    settings.database_url = "sqlite:///./test_agent.db"
+
+    # 每次测试会话从干净状态开始
+    try:
+        os.remove("test_agent.db")
+    except OSError:
+        pass
+
+    from src.db.init import init_db
+
+    init_db()
+
+    yield
+
+    try:
+        from src.db.engine import dispose_engine
+
+        dispose_engine()
+    except Exception:
+        pass
 
 # ---- 收集时忽略：这些目录的 conftest 会导入不存在的模块或需要真实服务，
 #      必须在 pytest 发现阶段就跳过，否则 import 就崩了（exit code 4）。

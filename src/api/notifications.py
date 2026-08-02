@@ -5,7 +5,7 @@
 import os
 import time
 import logging
-import threading
+import uuid
 from typing import Dict, List, Optional, Any
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
@@ -15,18 +15,20 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 from src.models.common import NotificationType, NotificationLevel
 from src.api.rbac import get_current_user, require_permissions, Permission
+from src.db.repositories import (
+    notification_create,
+    notification_list_all,
+    notification_mark_all_read_for,
+    notification_mark_read,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["notifications"])
 
 
 # ====================================================================
-# 内存数据存储
+# 数据存储（Postgres / SQLite，由 src.db.repositories 统一落库）
 # ====================================================================
-
-_notifications: List[Dict[str, Any]] = []
-_notifications_lock = threading.Lock()
-_notification_counter = 0
 
 
 # ====================================================================
@@ -62,8 +64,7 @@ async def list_notifications(
     user_role = current_user.get("role", "viewer")
     username = current_user.get("username", "")
 
-    with _notifications_lock:
-        all_notes = list(_notifications)
+    all_notes = notification_list_all(limit=500)
 
     # 筛选对当前用户可见的通知
     visible = []
@@ -107,16 +108,15 @@ async def get_unread_count(
     username = current_user.get("username", "")
 
     count = 0
-    with _notifications_lock:
-        for n in _notifications:
-            if user_id in n.get("read_by", []):
-                continue
-            if n.get("target_users") and (username in n["target_users"] or user_id in n["target_users"]):
-                count += 1
-            elif n.get("target_roles") and user_role in n["target_roles"]:
-                count += 1
-            elif not n.get("target_users") and not n.get("target_roles"):
-                count += 1
+    for n in notification_list_all(limit=500):
+        if user_id in n.get("read_by", []):
+            continue
+        if n.get("target_users") and (username in n["target_users"] or user_id in n["target_users"]):
+            count += 1
+        elif n.get("target_roles") and user_role in n["target_roles"]:
+            count += 1
+        elif not n.get("target_users") and not n.get("target_roles"):
+            count += 1
 
     return {"unread_count": count}
 
@@ -128,13 +128,10 @@ async def mark_as_read(
 ):
     """标记单条通知为已读"""
     user_id = current_user["user_id"]
-    with _notifications_lock:
-        for n in _notifications:
-            if n["id"] == notification_id:
-                if user_id not in n.get("read_by", []):
-                    n.setdefault("read_by", []).append(user_id)
-                return {"success": True}
-    raise HTTPException(status_code=404, detail="通知不存在")
+    ok = notification_mark_read(notification_id, user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="通知不存在")
+    return {"success": True}
 
 
 @router.post("/notifications/read-all")
@@ -146,19 +143,7 @@ async def mark_all_as_read(
     user_role = current_user.get("role", "viewer")
     username = current_user.get("username", "")
 
-    with _notifications_lock:
-        for n in _notifications:
-            visible = False
-            if n.get("target_users") and (username in n["target_users"] or user_id in n["target_users"]):
-                visible = True
-            elif n.get("target_roles") and user_role in n["target_roles"]:
-                visible = True
-            elif not n.get("target_users") and not n.get("target_roles"):
-                visible = True
-
-            if visible and user_id not in n.get("read_by", []):
-                n.setdefault("read_by", []).append(user_id)
-
+    notification_mark_all_read_for(user_id, user_role, username)
     return {"success": True}
 
 
@@ -175,26 +160,22 @@ def add_notification(
     target_users: Optional[List[str]] = None,
     link: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """添加通知"""
-    global _notification_counter
-    with _notifications_lock:
-        _notification_counter += 1
-        notification = {
-            "id": f"NOT-{_notification_counter}",
-            "type": type,
-            "level": level,
-            "title": title,
-            "message": message,
-            "target_roles": target_roles or [],
-            "target_users": target_users or [],
-            "link": link,
-            "read_by": [],
-            "created_at": time.time(),
-        }
-        _notifications.append(notification)
-
+    """添加通知（落库持久化）"""
+    notification = {
+        "id": f"NOT-{uuid.uuid4().hex[:12]}",
+        "type": type,
+        "level": level,
+        "title": title,
+        "message": message,
+        "target_roles": target_roles or [],
+        "target_users": target_users or [],
+        "link": link,
+        "read_by": [],
+        "created_at": time.time(),
+    }
+    result = notification_create(notification)
     logger.info("Notification added: %s - %s", title, message)
-    return notification
+    return result
 
 
 def add_handoff_notification(session_id: str, user_id: str, reason: str = ""):

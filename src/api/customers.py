@@ -134,8 +134,8 @@ def _refresh_customer_stats(user_id: str):
 
     # 从满意度存储聚合评分
     try:
-        from src.api.satisfaction import _satisfaction_records
-        records = [r for r in _satisfaction_records if r["user_id"] == user_id]
+        from src.db.repositories import satisfaction_list
+        records = satisfaction_list(user_id=user_id)
         if records:
             scores = [r["score"] for r in records]
             c["satisfaction_score"] = round(sum(scores) / len(scores), 2)
@@ -240,9 +240,8 @@ async def get_customer_detail(
     # 满意度记录
     satisfaction = []
     try:
-        from src.api.satisfaction import _satisfaction_records
-        satisfaction = [r for r in _satisfaction_records if r["user_id"] == user_id]
-        satisfaction.sort(key=lambda x: x["created_at"], reverse=True)
+        from src.db.repositories import satisfaction_list
+        satisfaction = satisfaction_list(user_id=user_id)
     except Exception as e:
         logger.warning("Failed to get satisfaction for customer %s: %s", user_id, e)
 
@@ -332,8 +331,8 @@ async def get_customer_timeline(
 
     # 满意度事件
     try:
-        from src.api.satisfaction import _satisfaction_records
-        for r in _satisfaction_records:
+        from src.db.repositories import satisfaction_list
+        for r in satisfaction_list(user_id=user_id):
             if r["user_id"] == user_id:
                 events.append({
                     "type": "satisfaction",

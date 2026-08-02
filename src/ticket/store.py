@@ -202,6 +202,38 @@ class InMemoryTicketStore:
             return True
 
 
+class PgTicketStore:
+    """工单存储 — Postgres / SQLite 落库实现（复用 src.db.repositories）
+
+    接口与 InMemoryTicketStore 一致（create/get/update/list/add_comment/delete），
+    因此 src/api/tickets.py、src/ticket/tools.py、src/seed.py 等调用点无需改动。
+    """
+
+    def create(self, req: "TicketCreateRequest") -> "Ticket":
+        from src.db.repositories import ticket_create
+        return ticket_create(req)
+
+    def get(self, ticket_id: str, tenant_id: str):
+        from src.db.repositories import ticket_get
+        return ticket_get(ticket_id, tenant_id)
+
+    def update(self, ticket_id: str, tenant_id: str, req: "TicketUpdateRequest"):
+        from src.db.repositories import ticket_update
+        return ticket_update(ticket_id, tenant_id, req)
+
+    def list(self, filter: "TicketListFilter"):
+        from src.db.repositories import ticket_list
+        return ticket_list(filter)
+
+    def add_comment(self, ticket_id: str, tenant_id: str, comment: "Comment"):
+        from src.db.repositories import ticket_add_comment
+        return ticket_add_comment(ticket_id, tenant_id, comment)
+
+    def delete(self, ticket_id: str, tenant_id: str) -> bool:
+        from src.db.repositories import ticket_delete
+        return ticket_delete(ticket_id, tenant_id)
+
+
 # ---------------------------------------------------------------------------
 # 全局单例（MCP 单机部署使用）
 # ---------------------------------------------------------------------------
@@ -210,19 +242,24 @@ _global_store: Optional[InMemoryTicketStore] = None
 _store_lock = threading.Lock()
 
 
-def get_default_store() -> InMemoryTicketStore:
-    """获取全局内存工单存储单例"""
+def get_default_store():
+    """获取全局工单存储单例（已落库持久化，Postgres / SQLite 自动切换）"""
     global _global_store
     if _global_store is None:
         with _store_lock:
             if _global_store is None:
-                _global_store = InMemoryTicketStore()
-                logger.info("Initialized global InMemoryTicketStore")
+                _global_store = PgTicketStore()
+                logger.info("Initialized global PgTicketStore (persistent)")
     return _global_store
 
 
 def reset_default_store() -> None:
-    """重置全局存储（仅测试使用）"""
+    """重置全局存储（仅测试使用）— 清空工单表并释放单例"""
     global _global_store
     with _store_lock:
         _global_store = None
+    try:
+        from src.db.repositories import ticket_reset
+        ticket_reset()
+    except Exception as e:
+        logger.warning("ticket_reset failed (non-fatal): %s", e)
