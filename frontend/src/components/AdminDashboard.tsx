@@ -2952,8 +2952,24 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
   const [hitResults, setHitResults] = useState<KBHitResult[]>([])
   const [hitLoading, setHitLoading] = useState(false)
 
+  const [docSourceType, setDocSourceType] = useState<'document' | 'url' | 'text'>('document')
+  const [docUrl, setDocUrl] = useState('')
+  const [docText, setDocText] = useState('')
+  const [docTitle, setDocTitle] = useState('')
+  const [addingDoc, setAddingDoc] = useState(false)
+
   const isAdmin = user?.role === 'admin'
   const canEdit = hasPermission('agent:workspace')
+
+  const srcBtn = (t: 'document' | 'url' | 'text') => ({
+    padding: '6px 12px',
+    borderRadius: 6,
+    border: `1px solid ${docSourceType === t ? '#2563eb' : '#d1d5db'}`,
+    background: docSourceType === t ? '#eff6ff' : '#fff',
+    color: docSourceType === t ? '#2563eb' : '#374151',
+    cursor: addingDoc ? 'not-allowed' : 'pointer',
+    fontSize: 13,
+  })
 
   const fetchList = useCallback(() => {
     setLoading(true)
@@ -3033,6 +3049,28 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
       alert(err instanceof Error ? err.message : '上传失败')
     } finally {
       setUploading(false)
+    }
+  }
+
+  const addDocBySource = async () => {
+    if (!selectedId) return
+    if (docSourceType === 'url') {
+      if (!/^https?:\/\//i.test(docUrl.trim())) { alert('请输入以 http:// 或 https:// 开头的网页 URL'); return }
+    } else if (docSourceType === 'text') {
+      if (!docText.trim()) { alert('请输入文本内容'); return }
+    }
+    setAddingDoc(true)
+    try {
+      const payload: any = { source_type: docSourceType, title: docTitle.trim() }
+      if (docSourceType === 'url') payload.file_path = docUrl.trim()
+      if (docSourceType === 'text') payload.content = docText.trim()
+      await postJson(`/admin/knowledge/${selectedId}/documents`, token, payload)
+      setDocUrl(''); setDocText(''); setDocTitle('')
+      fetchDocs(selectedId)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '添加失败')
+    } finally {
+      setAddingDoc(false)
     }
   }
 
@@ -3130,12 +3168,40 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
       {selectedKb && (
         <div style={{ marginTop: 20 }}>
           <h3 className="detail-title">文档列表 · {selectedKb.name}</h3>
-          <div className="filter-bar" style={{ marginBottom: 12 }}>
-            <label className="btn-primary-small" style={{ display: 'inline-block', cursor: 'pointer' }}>
-              上传文档
-              <input type="file" style={{ display: 'none' }} onChange={e => uploadDoc(e.target.files?.[0])} disabled={uploading} accept=".pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.ppt,.pptx" />
-            </label>
-            {uploading && <span style={{ marginLeft: 8 }}>上传中...</span>}
+          <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="filter-bar" style={{ marginBottom: 0 }}>
+              <button onClick={() => setDocSourceType('document')} disabled={addingDoc} style={srcBtn('document')}>上传文档</button>
+              <button onClick={() => setDocSourceType('url')} disabled={addingDoc} style={srcBtn('url')}>网页URL</button>
+              <button onClick={() => setDocSourceType('text')} disabled={addingDoc} style={srcBtn('text')}>纯文本</button>
+            </div>
+
+            {docSourceType === 'document' && (
+              <label className="btn-primary-small" style={{ display: 'inline-block', cursor: 'pointer', width: 'fit-content' }}>
+                选择文件上传
+                <input type="file" style={{ display: 'none' }} onChange={e => uploadDoc(e.target.files?.[0])} disabled={uploading} accept=".pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.ppt,.pptx" />
+              </label>
+            )}
+
+            {docSourceType === 'url' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input className="filter-input" value={docUrl} onChange={e => setDocUrl(e.target.value)} placeholder="https://example.com/docs/article" disabled={addingDoc} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input className="filter-input" style={{ flex: 1 }} value={docTitle} onChange={e => setDocTitle(e.target.value)} placeholder="标题（可选，默认取 URL）" disabled={addingDoc} />
+                  <button className="btn-primary-small" onClick={addDocBySource} disabled={addingDoc || !docUrl.trim()}>{addingDoc ? '抓取中...' : '添加'}</button>
+                </div>
+              </div>
+            )}
+
+            {docSourceType === 'text' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <textarea className="filter-input" value={docText} onChange={e => setDocText(e.target.value)} placeholder="粘贴或输入纯文本内容..." rows={5} disabled={addingDoc} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input className="filter-input" style={{ flex: 1 }} value={docTitle} onChange={e => setDocTitle(e.target.value)} placeholder="标题（可选）" disabled={addingDoc} />
+                  <button className="btn-primary-small" onClick={addDocBySource} disabled={addingDoc || !docText.trim()}>{addingDoc ? '入库中...' : '添加'}</button>
+                </div>
+              </div>
+            )}
+            {uploading && <span style={{ marginLeft: 0 }}>上传中...</span>}
           </div>
 
           {docsLoading && <div className="admin-loading">加载文档...</div>}

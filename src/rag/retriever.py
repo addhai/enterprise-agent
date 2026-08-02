@@ -161,6 +161,26 @@ class HybridRetriever:
         self.vector_store.add_documents(documents)
         self.bm25_retriever = BM25Retriever.from_documents(documents)
 
+    def add_documents(self, documents: List[Document], tenant_id: str = "") -> None:
+        """增量索引文档（知识库 API 单文档入库用）
+
+        与 index_documents 不同，本方法不清空既有索引：
+            1. 为缺失 tenant_id 的 chunk 补上 tenant_id
+            2. 增量写入向量库（Chroma 持久化，重启不丢）
+            3. 从累积的 self._all_documents 重建 BM25，保持与向量库一致
+        """
+        if not documents:
+            return
+        for doc in documents:
+            if tenant_id and not doc.metadata.get("tenant_id"):
+                doc.metadata["tenant_id"] = tenant_id
+        self.vector_store.add_documents(documents)
+        self._all_documents.extend(documents)
+        try:
+            self.bm25_retriever = BM25Retriever.from_documents(self._all_documents)
+        except Exception as e:
+            logger.warning("BM25 rebuild failed (non-fatal): %s", e)
+
     def index_sentence_chunks(
         self, sentence_chunks: List[Document]
     ) -> None:

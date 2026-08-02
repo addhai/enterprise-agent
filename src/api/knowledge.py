@@ -98,10 +98,11 @@ class KBUpdateRequest(BaseModel):
 
 
 class DocumentCreateRequest(BaseModel):
-    """通过文件路径或 URL 创建文档（不通过 multipart 上传时使用）"""
-    file_path: str = Field(..., description="本地文件路径或 URL")
+    """通过文件路径 / 网页 URL / 纯文本 创建文档（不通过 multipart 上传时使用）"""
+    file_path: str = Field("", description="本地文件路径或网页 URL（document / url 来源）")
+    content: str = Field("", description="纯文本内容（source_type=text 时使用）")
     title: str = Field("", description="文档标题（可选）")
-    source_type: str = Field("document", description="document / url / api")
+    source_type: str = Field("document", description="document / url / text / api")
     upload_method: str = Field("single", description="single / batch / image / agent")
 
 
@@ -358,23 +359,46 @@ def _ingest_document_internal(
     source_type: str,
     upload_method: str,
     kb: KBSet,
+    docs: Optional[List] = None,
 ) -> KBItem:
     """内部：创建 KBItem 并模拟解析/索引流程
 
-    生产环境应替换为真正的异步后台任务。
+    生产环境应替换为真正的异步后台任务。支持三种来源：
+        - document：file_path 为本地文件路径（由上传接口落盘）
+        - url：file_path 为网页 URL（由调用方预抓取为 docs 传入）
+        - text：由调用方将纯文本预加载为 docs 传入
     """
-    doc_format = os.path.splitext(file_path)[1].lstrip(".").lower()
+    # doc_format 推导：URL / 文本来源无扩展名，按 source_type 归类
+    if source_type == "url":
+        doc_format = "web"
+    elif source_type == "text":
+        doc_format = "text"
+    else:
+        doc_format = os.path.splitext(file_path or "")[1].lstrip(".").lower()
+
     file_size = 0
-    try:
-        file_size = os.path.getsize(file_path)
-    except OSError:
-        pass
+    if file_path and os.path.exists(file_path):
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError:
+            pass
+
+    # 展示标题与存储路径（不同来源差异化）
+    if source_type == "url":
+        display_title = title or file_path or "网页文档"
+        stored_path = file_path or ""
+    elif source_type == "text":
+        display_title = title or "文本片段"
+        stored_path = f"text://{display_title}"
+    else:
+        display_title = title or (os.path.basename(file_path) if file_path else "文档")
+        stored_path = file_path or ""
 
     kb_item = KBItem(
         id=generate_id("KB"),
         tenant_id=tenant_id,
-        title=title or os.path.basename(file_path),
-        file_path=file_path,
+        title=display_title,
+        file_path=stored_path,
         source_type=source_type,
         status=KBItemStatus.PENDING,
         created_at=_utc_iso(),
@@ -394,12 +418,21 @@ def _ingest_document_internal(
     kb_item.parse_status = "parsing"
     _kb_store.save(tenant_id, kb_item.id, kb_item)
 
-    # 尝试真正加载文档（若加载器可用），否则用占位 chunk_count
+    # 加载文档（若未预加载则按 file_path 加载），并注入知识库隔离元数据
     chunk_count = 0
     try:
-        from src.rag.loader import DocumentLoader
-        loader = DocumentLoader(default_tenant_id=tenant_id)
-        docs = loader.load_file(file_path)
+        if docs is None:
+            from src.rag.loader import DocumentLoader
+            loader = DocumentLoader(default_tenant_id=tenant_id)
+            docs = loader.load_file(file_path) if file_path else []
+        # 每个 chunk 注入 kb_id / tenant_id / source_type / doc_id，
+        # 保证检索时可按知识库隔离（对齐阿里云百炼知识库隔离）。
+        for d in docs:
+            d.metadata["kb_id"] = kb_id
+            if tenant_id and not d.metadata.get("tenant_id"):
+                d.metadata["tenant_id"] = tenant_id
+            d.metadata["source_type"] = source_type
+            d.metadata["doc_id"] = kb_item.id
         chunk_count = len(docs)
         # 真正向量化（best-effort，失败不阻塞 API 响应）
         if chunk_count > 0:
@@ -428,7 +461,7 @@ async def create_document(
     kb_id: str = Path(..., description="知识库 ID"),
     current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
-    """添加文档到知识库（通过文件路径或 URL）
+    """添加文档到知识库（支持 document / url / text 三种来源）
 
     需要 admin / agent 角色。处理流程：pending → parsing → indexed
     """
@@ -437,23 +470,47 @@ async def create_document(
     if kb is None:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
 
+    source_type = req.source_type
+    docs = None
+    # 预加载非文件来源（URL / 文本），统一复用 DocumentLoader 分块管线
+    if source_type == "url":
+        if not req.file_path or not req.file_path.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="URL 来源需提供合法的 http(s) 地址")
+        try:
+            from src.rag.source_ingest import url_to_documents
+            docs = url_to_documents(req.file_path, req.title, tenant_id)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"网页抓取失败: {e}")
+    elif source_type == "text":
+        if not req.content or not req.content.strip():
+            raise HTTPException(status_code=400, detail="文本来源需提供 content 内容")
+        try:
+            from src.rag.source_ingest import text_to_documents
+            docs = text_to_documents(req.content, req.title, tenant_id)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"文本解析失败: {e}")
+    else:
+        if not req.file_path:
+            raise HTTPException(status_code=400, detail="document 来源需提供 file_path")
+
     try:
         item = _ingest_document_internal(
             tenant_id=tenant_id,
             kb_id=kb_id,
-            file_path=req.file_path,
+            file_path=req.file_path or None,
             title=req.title,
-            source_type=req.source_type,
+            source_type=source_type,
             upload_method=req.upload_method,
             kb=kb,
+            docs=docs,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"参数错误: {e}")
 
     _recount_kb(tenant_id, kb_id)
     logger.info(
-        "Document created: id=%s kb=%s path=%s by=%s",
-        item.id, kb_id, req.file_path, current_user.get("user_id"),
+        "Document created: id=%s kb=%s source=%s by=%s",
+        item.id, kb_id, source_type, current_user.get("user_id"),
     )
     return {"success": True, "document": _kb_item_to_dict(item)}
 
@@ -692,6 +749,7 @@ async def hit_test(
             top_k=req.top_k,
             tenant_id=tenant_id,
             user_id=current_user.get("user_id", ""),
+            filter_by={"kb_id": kb_id},
         )
     except Exception as e:
         logger.exception("hit_test 检索失败: %s", e)
