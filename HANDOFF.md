@@ -53,7 +53,7 @@
 - 修掉 4 个 TypeScript 编译错误（`AdminDashboard.tsx` 里 `cw.config`/`fs.config` 可选链兜底），`tsc -b --noEmit` → 0 错误；`vite build` 通过；`dist/` 补进 `.gitignore`。
 - **关键认知**：前端浮动聊天组件 **使用 WebSocket** `/ws/chat`（`App.tsx:756` `WS_URL='/ws/chat'`，`:812` `new WebSocket(...)`）；WebSocket 续接（`resume_session` / localStorage `session_id`）**用户自己早已写好**。后端 `/ws/chat` 在 `src/websocket/routes.py`，于 `server.py` 根路径挂载（不带 `/api/v1` 前缀）。
 
-### D. 第二阶段六个开发阶段（2026-08-03，全部推送 GitHub，CI 276 passed / 0 failed）
+### D. 第二阶段六个开发阶段 + 补完轮（2026-08-03，全部本地提交，CI 291 passed / 1 skipped / 0 failed）
 
 | 阶段 | commit | 做了什么 |
 |------|--------|----------|
@@ -85,25 +85,24 @@
 ## 3. 当前状态 / 卡在哪
 
 ### ✅ 已完成，不再卡
-- 6 个开发阶段全部推送 GitHub，CI 稳定在 291 passed、0 failed（测试底座污染 bug 已修，详见坑 29）。
-- **补完轮 3 项后端收尾也已完成**：统一会话 API 共享 service 层、`resume_session` 握手、Hallucination 计数接线（代码在工作区，未提交）。
+- 6 个开发阶段全部推送 GitHub；**补完轮 3 项后端收尾 + 测试底座污染修复 + Windows Postgres 编码崩溃根治（ASCII seed）均已在本地提交**，CI 稳定在 291 passed / 1 skipped / 0 failed（详见坑 29、坑 30）。
 - 后端核心链路已生产级：对话持久化（重启不丢，含显式 resume 握手）、知识库隔离、真实监控指标（含安全 + 幻觉计数）、会话增删查闭环、管理端历史可见。
 - 前端核心页面（官网首页 + 浮动聊天 WS + 9 Tab 后台含 SessionsTab）用户早已写好，无需接手者补。
 
 ### ⏳ 当前真正待办（按"谁来做"分两类）
 
-**需要用户（hai）自己动手的（1 件）**：
-1. **本机 Postgres Docker 端到端验证** —— sandbox 环境无 Docker，只能用户本机跑。手把手步骤已写好：`POSTGRES_LOCAL_SETUP_GUIDE.md`（8 步），照着敲即可确认双后端真实可用。
+**需要用户（hai）自己动手的（2 件）**：
+1. **把本地提交 push 到 GitHub** —— 沙箱无代理出口，只能用户本机代理终端执行 `git push origin master`。
+2. **本机 Postgres Docker 端到端验证** —— sandbox 环境无 Docker，只能用户本机跑。手把手步骤已写好：`POSTGRES_LOCAL_SETUP_GUIDE.md`。
 
 **可继续自主推进的后端任务（接手者无需用户决策即可做）**：
-1. **登录鉴权 UI**：用户此前说"先放一放"，属前端活儿，归用户。
-2. **更多可观测指标/优化**：当前已有 safety + hallucination 真实计数，可按需扩展，但优先级已不高。
+- 当前已无阻塞性后端任务。可选低优：登录鉴权 UI（用户此前说"先放一放"，属前端活儿，归用户）、更多可观测指标。
 
-### 🗂️ 本地未提交的工作（绝对不要误提交 / 不要碰）
+### 🗂️ 本地未提交 / 勿提交清单
 `git status` 当前显示：
 - 用户自己的前端 WIP：`frontend/src/App.css`（已改）、`App.css.old`/`App.tsx.old`/`App.tsx.vite`（被删，是用户的本地备份文件）——**一律别动、别提交**。
-- 接手者创建的未跟踪文件：`HANDOFF.md`、`POSTGRES_LOCAL_SETUP_GUIDE.md`、`install.log`、`test_out.log`、`test_out.txt`、`.workbuddy/`、以及用户新建的 `你当前还有哪些任务.md`。
-- **绝不要 `git add .` 一把梭**。只 add 指定路径，且避开用户 WIP。
+- 垃圾/个人文件：`install.log`、`test_out.log`、`test_out.txt`、`.workbuddy/`、用户新建的 `你当前还有哪些任务.md`。
+- **绝不要 `git add .` 一把梭**。用户 push 时只 push 已 commit 的内容即可。
 
 ---
 
@@ -111,8 +110,8 @@
 
 > 排在前面的是对作品集价值最高、最该先做的。
 
-1. **【最高·需用户】让用户跑通本机 Postgres 验证**：用 `POSTGRES_LOCAL_SETUP_GUIDE.md` 在用户机器用 Docker 起 Postgres，确认双后端真实可用、数据落库正确。sandbox 无 Docker，这步只能用户做。
-2. **【次高·需用户】提交并推送本轮后端改动**：`src/api/sessions_service.py`、改过的 `admin.py`/`conversations.py`/`monitoring.py`/`routes.py`、`src/evaluation/tracker.py`、新测试 `test_ws_resume_session.py` + 更新的 `test_conversation_api.py`/`test_tracker.py`/`test_guards.py` 等，需要用户在本机（有代理）单独 add 后 push。**注意避开 `frontend/` 里你自己的 WIP。**
+1. **【最高·需用户】把本地提交 push 到 GitHub**：用户在本机代理终端执行 `git push origin master`（本轮后端改动已全部本地 commit，无需再 add）。
+2. **【次高·需用户】本机 Postgres Docker 端到端验证**：容器已在跑，seed 数据已改为 ASCII，重启后端后 admin/admin123 登录应可成功，再验证聊天 → 重启 → 历史仍在。
 3. **【可选低优先】少量高价值测试**：挑 `src/` 最核心模块补确定性单测，让覆盖率缓慢上涨——但**不要**专门刷 80%。
 4. **【可选】README 校准**：把"企业级 SaaS 多租户客服中台"泛称，结合"个人作品集、对标阿里云 AI 助理"的真实定位重写。
 5. **【归用户】登录鉴权 UI**：你此前说"先放一放"，后续想继续时再排期。
@@ -153,12 +152,20 @@
 27. **提交路径手滑写反斜杠会失败**：`git add C:\Users\...` 报错，改正为 `git add C:/Users/...`（Git Bash 用正斜杠）重跑成功。
 28. **前端 WS 续接/历史面板是用户已完成的 WIP**：别把"历史会话面板/WebSocket 续接"再列为"待补 UI 缺口"——它们早好了，真正缺口在后端（已分阶段补齐）。
 29. **⚠️ 测试跨运行脏数据污染（最隐蔽的"假绿"）**：原 conftest 用固定文件 `test_agent.db`，Windows 上 SQLite 文件被连接池锁住时 `os.remove` 静默失败 → 旧库残留、固定 `session_id` 串味 → 表现为"单个测试文件单独跑全过、整套 `pytest` 跑挂 5 个"。上一个 AI 只跑精选子集（`test_conversation_api.py` 单独 16 过）就报成功，掩盖了回归。**根治**：conftest 改用 `sqlite:///:memory:` + `engine.py` 对 `:memory:` 走 `StaticPool`（所有连接共享同一内存库），零文件、零锁、天然隔离，且 teardown 不再留孤儿 `.db`。**CI 与本地验收必须跑完整白名单**才算数，绝不能只跑单文件子集冒充全绿。
-30. **⚠️ Windows 中文系统 + Postgres 编码崩溃**：`connect_args['options'] = "-c client_encoding=UTF8"` 在 Windows 中文系统上会被 libpq 用 ANSI/GBK 编码解析，psycopg2 再按 UTF-8 解码时报 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd6 in position 61: invalid continuation byte`，导致所有数据库请求直接 `Internal Server Error`。**根治**：
-   1. 在应用入口 `src/api/server.py` 最顶部、任何 import 之前强制设置 `os.environ['PGCLIENTENCODING'] = 'UTF8'`（libpq 首次连接前就必须确定客户端编码）；
-   2. `src/db/engine.py` 同步强制设置作为兜底；
-   3. 保留 psycopg2 关键字参数 `connect_args={'client_encoding': 'utf8'}`；
-   4. `_clean_url()` 去掉 `database_url` 的行内注释与首尾空白，防御 `.env`/环境变量污染。
-   **已修复**（`src/api/server.py` + `src/db/engine.py`）。
+30. **⚠️ Windows 中文系统 + Postgres 编码崩溃（已根治·方案 B）**：报错 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd6 in position 61` 的本质是 **Windows 控制台默认代码页是 GBK（936）**，`src/seed.py` / `src/db/seed.py` 里的**中文演示数据**（工单标题、客户姓名、满意度评论、部门名）在写入 Postgres 时触发编码混乱，PostgreSQL 返回的中文错误信息再被 Python 按 UTF-8 解码失败。
+   代码层已做 3 处兜底：
+   1. `src/api/server.py` 最顶部强制 `os.environ['PGCLIENTENCODING'] = 'UTF8'` + `PYTHONUTF8=1`；
+   2. `src/db/engine.py` 同步强制设置兜底 + `connect_args={'client_encoding': 'utf8'}` + `_clean_url()` 去注释/空白；
+   3. **最终方案**：把 `src/seed.py` 与 `src/db/seed.py` 中**写入数据库**的演示字符串全部改成英文/ASCII，彻底绕开 Windows 控制台代码页问题。
+   **启动方式**：现在用 **Git Bash** 或 **PowerShell** 都可以启动；若仍不放心，可用 PowerShell + UTF-8 代码页：
+   ```powershell
+   chcp 65001
+   $env:PGCLIENTENCODING="UTF8"
+   $env:PYTHONUTF8="1"
+   $env:VECTOR_STORE_BACKEND="chroma"
+   cd C:\Users\hai\enterprise-agent
+   venv\Scripts\python.exe -m uvicorn src.api.server:app --host 127.0.0.1 --port 8000
+   ```
 
 ---
 
@@ -166,7 +173,7 @@
 
 | 文件 | 作用 | 状态 |
 |------|------|------|
-| `.github/workflows/ci.yml` | GitHub Actions 流水线（测试+覆盖率 + SAST） | ✅ 已推送，全绿 276 passed |
+| `.github/workflows/ci.yml` | GitHub Actions 流水线（测试+覆盖率 + SAST） | ✅ 本地 291 passed / 1 skipped，待用户 push 后 GitHub 同步 |
 | `pyproject.toml` `bandit.yaml` | ruff + pytest + SAST | ✅ 已推送 |
 | `.gitlab-ci.yml` | GitLab CI（GitHub 不跑，备用） | ✅ 已推送 |
 | `src/api/server.py` | FastAPI 应用装配（所有 router 在此挂载，含 WS） | ✅ 已推送 |
@@ -174,17 +181,17 @@
 | `src/db/repositories.py` | 仓储层：`conversation_ensure/message_save/message_list/conversation_list/conversation_delete` | ✅ 已推送 |
 | `src/db/models.py` | `Conversation` / `Message` / `User` / `Role` 等 ORM 表 | ✅ 已推送 |
 | `src/evaluation/tracker.py` | 评估指标 + `record_safety_event` 安全计数 | ✅ 已推送 |
-| `src/api/conversations.py` | 阶段三新增：`/api/v1/conversations` + 历史 + 删除；补完轮改调 `sessions_service.py` | ✅ 已推送 + 工作区有改 |
-| `src/api/admin.py` | legacy `/sessions` `/admin/sessions` 端点，阶段六合并 DB；补完轮改调 `sessions_service.py` | ✅ 已推送 + 工作区有改 |
-| `src/api/sessions_service.py` | 补完轮新增：会话 API 共享 service 层 | ⏳ 新文件，未提交 |
-| `src/api/monitoring.py` | `/metrics/system` `/metrics/risk` 真实指标（含 hallucination 计数） | ✅ 已推送 + 工作区有改 |
-| `tests/test_mcp_tools/test_ws_resume_session.py` | 补完轮新增：`resume_session` 4 条路径集成测试 | ⏳ 新文件，未提交 |
+| `src/api/conversations.py` | 阶段三新增：`/api/v1/conversations` + 历史 + 删除；补完轮改调 `sessions_service.py` | ✅ 已本地提交，待 push |
+| `src/api/admin.py` | legacy `/sessions` `/admin/sessions` 端点，阶段六合并 DB；补完轮改调 `sessions_service.py` | ✅ 已本地提交，待 push |
+| `src/api/sessions_service.py` | 补完轮新增：会话 API 共享 service 层 | ✅ 已本地提交，待 push |
+| `src/api/monitoring.py` | `/metrics/system` `/metrics/risk` 真实指标（含 hallucination 计数） | ✅ 已本地提交，待 push |
+| `tests/test_mcp_tools/test_ws_resume_session.py` | 补完轮新增：`resume_session` 4 条路径集成测试 | ✅ 已本地提交，待 push |
 | `src/rag/retriever.py` | `HybridRetriever` + `add_documents()`（阶段二修复根因） | ✅ 已推送 |
 | `src/rag/source_ingest.py` | 阶段二新增：URL / 纯文本摄取 | ✅ 已推送 |
 | `frontend/src/App.tsx` | 单文件巨石：官网首页+登录+个人中心+浮动聊天(WS) | ⏳ 用户本地 WIP，勿碰 |
 | `frontend/src/components/AdminDashboard.tsx` | 9 Tab 管理后台（含 SessionsTab 历史会话面板） | ⏳ 用户本地 WIP，勿碰 |
-| `POSTGRES_LOCAL_SETUP_GUIDE.md` | 用户本机 Postgres Docker 验证手把手指南 | ⏳ 未提交（接手者写） |
-| `HANDOFF.md` | 本交接文档 | ⏳ 未提交（本会话重写） |
+| `POSTGRES_LOCAL_SETUP_GUIDE.md` | 用户本机 Postgres Docker 验证手把手指南 | ✅ 已本地提交，待 push |
+| `HANDOFF.md` | 本交接文档 | ✅ 已本地提交，待 push |
 | `团队技术提升方案.md` `改动方案.md` `overview.md` | 规划文档（部分已过时） | 仅供参考，**勿当真** |
 
 ---
