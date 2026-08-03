@@ -50,6 +50,91 @@ def _session_to_dict(session, include_history: bool = False) -> Dict[str, Any]:
     return result
 
 
+def _db_sessions_as_dicts(user_id_filter: Optional[str] = None, limit: int = 500) -> List[Dict[str, Any]]:
+    """从持久化 DB 读取历史会话，返回与 _session_to_dict 兼容的 dict 列表。
+
+    把「重启后仍在 DB 里的会话」合并进会话列表（原接口只看内存活跃会话）。
+    """
+    from src.db.repositories import conversation_list as _repo_list, DEFAULT_TENANT, _dt2f
+    from src.db.session import db_session
+    from src.db.models import Conversation as _Conv
+
+    out: List[Dict[str, Any]] = []
+    try:
+        rows = _repo_list(DEFAULT_TENANT, user_id_filter, limit)
+    except Exception as e:
+        logger.warning("读取持久化会话列表失败（非致命）: %s", e)
+        return out
+    try:
+        with db_session() as s:
+            convs = s.query(_Conv).all()
+        # 在 session 作用域内提取标量，避免闭包外访问已分离实例
+        conv_meta = {}
+        for c in convs:
+            conv_meta[c.id] = (c.user_id, _dt2f(c.created_at) if c.created_at else 0.0)
+    except Exception:
+        conv_meta = {}
+    for row in rows:
+        sid = row.get("session_id") or row.get("id") or ""
+        if not sid:
+            continue
+        meta = conv_meta.get(sid)
+        user_id = meta[0] if meta else (row.get("user_id") or "anonymous")
+        created_at = meta[1] if meta else row.get("updated_at", 0)
+        out.append({
+            "session_id": sid,
+            "user_id": user_id,
+            "mode": "ai_chat",
+            "created_at": created_at,
+            "last_active": row.get("updated_at", 0),
+            "turn_count": row.get("message_count", 0),
+            "last_message_preview": (row.get("last_message") or "")[:50],
+        })
+    return out
+
+
+def _db_session_detail_dict(session_id: str) -> Optional[Dict[str, Any]]:
+    """从持久化 DB 读取单个会话详情（含消息历史），兼容 _session_to_dict(include_history=True)。"""
+    from src.db.repositories import message_list, _dt2f
+    from src.db.session import db_session
+    from src.db.models import Conversation as _Conv
+
+    try:
+        msgs = message_list(session_id, 500)
+    except Exception as e:
+        logger.warning("读取持久化会话详情失败（非致命）: %s", e)
+        return None
+    if not msgs:
+        return None
+    try:
+        with db_session() as s:
+            conv = s.query(_Conv).filter(_Conv.id == session_id).first()
+            user_id = conv.user_id if conv else "anonymous"
+            created_at = _dt2f(conv.created_at) if conv and conv.created_at else (msgs[0].get("created_at", 0) if msgs else 0)
+    except Exception:
+        user_id = "anonymous"
+        created_at = msgs[0].get("created_at", 0) if msgs else 0
+    history = [
+        {"role": m["role"], "content": m["content"], "timestamp": m.get("created_at")}
+        for m in msgs
+    ]
+    return {
+        "session_id": session_id,
+        "user_id": user_id,
+        "mode": "ai_chat",
+        "created_at": created_at,
+        "last_active": msgs[-1].get("created_at", 0),
+        "turn_count": len(msgs),
+        "last_message_preview": (msgs[-1].get("content", "") or "")[:50],
+        "conversation_history": history,
+        "handoff_context": None,
+        "assigned_agent": None,
+        "needs_human": False,
+        "failed_attempts": 0,
+        "suggest_human": False,
+    }
+
+
 def _get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
     """可选的用户认证（未登录也能访问，但会过滤会话）"""
     if not authorization:
@@ -70,25 +155,30 @@ def _get_current_user_optional(authorization: Optional[str] = Header(None)) -> O
 
 @router.get("/sessions")
 async def get_user_sessions(current_user: Optional[Dict[str, Any]] = Depends(_get_current_user_optional)):
-    """获取当前用户的会话列表
-    
-    需要用户登录，返回当前用户的所有会话
-    返回：session_id, created_at, last_active, turn_count, 最后一条消息预览
+    """获取当前用户的会话列表（内存活跃会话 + 持久化 DB 历史会话合并）
+
+    需要用户登录，返回当前用户的所有会话；重启后仍在 DB 的历史会话也会被合并进来。
     """
     session_mgr = get_session_manager()
     all_sessions = list(session_mgr._sessions.values())
-    
-    # 如果有当前用户，只返回该用户的会话
+
     user_id = current_user.get("user_id") if current_user else None
     if user_id:
-        sessions = [s for s in all_sessions if s.user_id == user_id]
+        live = [s for s in all_sessions if s.user_id == user_id]
     else:
-        sessions = all_sessions
-    
-    return {
-        "total": len(sessions),
-        "sessions": [_session_to_dict(s) for s in sessions],
-    }
+        live = all_sessions
+
+    result = [_session_to_dict(s) for s in live]
+    # 合并持久化 DB 中、当前不在内存的会话（重启后仍能看到历史）
+    if user_id:
+        try:
+            for d in _db_sessions_as_dicts(user_id, 200):
+                if not any(x["session_id"] == d["session_id"] for x in result):
+                    result.append(d)
+        except Exception:
+            pass
+    result.sort(key=lambda x: x.get("last_active", 0), reverse=True)
+    return {"total": len(result), "sessions": result}
 
 
 @router.get("/sessions/{session_id}")
@@ -96,21 +186,23 @@ async def get_user_session_detail(
     session_id: str = Path(..., description="会话 ID"),
     current_user: Optional[Dict[str, Any]] = Depends(_get_current_user_optional),
 ):
-    """获取当前用户的会话详情和历史消息
-    
-    需要用户登录，只能查看自己的会话
-    """
+    """获取当前用户的会话详情和历史消息（内存优先，回退持久化 DB）"""
     session_mgr = get_session_manager()
     session = session_mgr.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
-    
-    # 如果有当前用户，检查是否是自己的会话
     user_id = current_user.get("user_id") if current_user else None
-    if user_id and session.user_id != user_id:
+
+    if session:
+        if user_id and session.user_id != user_id:
+            raise HTTPException(status_code=403, detail="无权访问此会话")
+        return _session_to_dict(session, include_history=True)
+
+    # 内存无此会话 → 回退持久化 DB
+    detail = _db_session_detail_dict(session_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    if user_id and detail["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="无权访问此会话")
-    
-    return _session_to_dict(session, include_history=True)
+    return detail
 
 
 @router.delete("/sessions/{session_id}")
@@ -147,16 +239,18 @@ async def delete_user_session(
 async def get_admin_sessions(
     current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
-    """获取所有用户的会话列表（管理员版）
-    
-    需要 admin/agent 角色
-    """
+    """获取所有用户的会话列表（管理员版，内存活跃 + 持久化 DB 历史合并）"""
     session_mgr = get_session_manager()
-    sessions = session_mgr._sessions.values()
-    return {
-        "total": len(list(sessions)),
-        "sessions": [_session_to_dict(s) for s in sessions],
-    }
+    result = [_session_to_dict(s) for s in session_mgr._sessions.values()]
+    # 合并持久化 DB 中、当前不在内存的会话
+    try:
+        for d in _db_sessions_as_dicts(None, 500):
+            if not any(x["session_id"] == d["session_id"] for x in result):
+                result.append(d)
+    except Exception:
+        pass
+    result.sort(key=lambda x: x.get("last_active", 0), reverse=True)
+    return {"total": len(result), "sessions": result}
 
 
 @router.get("/admin/sessions/{session_id}")
@@ -164,17 +258,15 @@ async def get_admin_session_detail(
     session_id: str = Path(..., description="会话 ID"),
     current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
-    """获取会话详情（管理员版）
-    
-    包含会话基本信息和完整的历史消息
-    需要 admin/agent 角色
-    """
+    """获取会话详情（管理员版，内存优先，回退持久化 DB）"""
     session_mgr = get_session_manager()
     session = session_mgr.get_session(session_id)
-    if not session:
+    if session:
+        return _session_to_dict(session, include_history=True)
+    detail = _db_session_detail_dict(session_id)
+    if not detail:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
-    
-    return _session_to_dict(session, include_history=True)
+    return detail
 
 
 @router.get("/admin/channels")

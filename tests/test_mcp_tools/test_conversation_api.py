@@ -149,3 +149,45 @@ def test_delete_nonexistent_returns_404():
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 404
+
+
+def test_admin_sessions_merges_persisted_db_sessions():
+    """管理员会话列表/详情应合并持久化 DB 的历史会话（重启后可见）。"""
+    client = _client()
+    token, _ = _register(client)
+
+    # 直接往 DB 写一条不在内存的会话
+    conversation_ensure("SES-DB-ADM", "default", "user_db", channel="web")
+    message_save("SES-DB-ADM", "default", "user_db", "user", "你好")
+    message_save("SES-DB-ADM", "default", "user_db", "assistant", "您好，有什么可以帮您？")
+
+    r = client.get("/api/v1/admin/sessions", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    sids = {s["session_id"] for s in r.json()["sessions"]}
+    assert "SES-DB-ADM" in sids
+
+    d = client.get(
+        "/api/v1/admin/sessions/SES-DB-ADM",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert d.status_code == 200
+    body = d.json()
+    assert body["session_id"] == "SES-DB-ADM"
+    assert len(body["conversation_history"]) == 2
+
+
+def test_user_sessions_merges_persisted_db_sessions_scoped():
+    """普通用户会话列表应合并自己的持久化会话，且看不到别人的。"""
+    client = _client()
+    token, uid = _register(client)
+
+    conversation_ensure("SES-DB-USR", "default", uid, channel="web")
+    message_save("SES-DB-USR", "default", uid, "user", "我的订单")
+    conversation_ensure("SES-DB-OTHER2", "default", "stranger", channel="web")
+    message_save("SES-DB-OTHER2", "default", "stranger", "user", "别人的订单")
+
+    r = client.get("/api/v1/sessions", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    sids = {s["session_id"] for s in r.json()["sessions"]}
+    assert "SES-DB-USR" in sids
+    assert "SES-DB-OTHER2" not in sids
