@@ -153,7 +153,7 @@
 27. **提交路径手滑写反斜杠会失败**：`git add C:\Users\...` 报错，改正为 `git add C:/Users/...`（Git Bash 用正斜杠）重跑成功。
 28. **前端 WS 续接/历史面板是用户已完成的 WIP**：别把"历史会话面板/WebSocket 续接"再列为"待补 UI 缺口"——它们早好了，真正缺口在后端（已分阶段补齐）。
 29. **⚠️ 测试跨运行脏数据污染（最隐蔽的"假绿"）**：原 conftest 用固定文件 `test_agent.db`，Windows 上 SQLite 文件被连接池锁住时 `os.remove` 静默失败 → 旧库残留、固定 `session_id` 串味 → 表现为"单个测试文件单独跑全过、整套 `pytest` 跑挂 5 个"。上一个 AI 只跑精选子集（`test_conversation_api.py` 单独 16 过）就报成功，掩盖了回归。**根治**：conftest 改用 `sqlite:///:memory:` + `engine.py` 对 `:memory:` 走 `StaticPool`（所有连接共享同一内存库），零文件、零锁、天然隔离，且 teardown 不再留孤儿 `.db`。**CI 与本地验收必须跑完整白名单**才算数，绝不能只跑单文件子集冒充全绿。
-30. **⚠️ Windows 中文系统 + Postgres 编码崩溃**：`connect_args['options'] = "-c client_encoding=UTF8"` 在 Windows 中文系统上会被 libpq 用 ANSI/GBK 编码解析，psycopg2 再按 UTF-8 解码时报 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd6 in position 61: invalid continuation byte`，导致所有数据库请求直接 `Internal Server Error`。**根治**：把 `client_encoding=utf8` 放到 Postgres URL 的 query 参数里（如 `postgresql://user:pass@host:5432/db?client_encoding=utf8`），不要通过 `options` 传。**已修复**（`src/db/engine.py` 的 `_ensure_pg_encoding()`）。
+30. **⚠️ Windows 中文系统 + Postgres 编码崩溃**：`connect_args['options'] = "-c client_encoding=UTF8"` 在 Windows 中文系统上会被 libpq 用 ANSI/GBK 编码解析，psycopg2 再按 UTF-8 解码时报 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd6 in position 61: invalid continuation byte`，导致所有数据库请求直接 `Internal Server Error`。**根治**：用 psycopg2 关键字参数 `connect_args={'client_encoding': 'utf8'}` 强制编码，不要通过 `options` 传；同时 `_clean_url()` 去掉 `database_url` 的行内注释与首尾空白，防御 `.env`/环境变量污染。**已修复**（`src/db/engine.py` 的 `_pg_connect_args()` + `_clean_url()`）。
 
 ---
 
@@ -245,7 +245,7 @@ curl -s -X POST "http://127.0.0.1:8000/api/v1/admin/knowledge/$KB_ID/hit_test" -
 1. 6 个开发阶段全部 push 到 GitHub，CI 从 271 稳步涨到 **291 passed / 1 skipped / 0 failed**。
 2. **补完轮**：统一会话 API（`sessions_service.py`）、接上 `resume_session` 握手、接入 hallucination 真实计数。
 3. **测试底座污染根治**：conftest 改用 `sqlite:///:memory:` + `StaticPool`，消除"单文件过、整套挂"的假绿。
-4. **Windows 中文系统 Postgres 编码崩溃修复**：把 `client_encoding=UTF8` 从 `connect_args['options']` 迁到 URL query 参数，解决 `UnicodeDecodeError: byte 0xd6 in position 61`。
+4. **Windows 中文系统 Postgres 编码崩溃修复**：把 `client_encoding=UTF8` 从 `connect_args['options']` 改为 psycopg2 关键字参数 `connect_args={'client_encoding': 'utf8'}`，并增加 `_clean_url()` 防御 `.env`/环境变量污染，解决 `UnicodeDecodeError: byte 0xd6 in position 61`。
 
 我还纠正了一个旧误判：**前端的历史会话面板 + WebSocket 续接你早就写好了**，之前列为"待补 UI"是错的；真正缺口在后端，已全部补齐。
 
