@@ -194,27 +194,43 @@ async def websocket_chat(websocket: WebSocket):
                 incoming_tenant = msg.get("tenant_id", "")
                 incoming_plan = msg.get("user_plan", "free")
 
-                # 优先复用已有的 session（如果 WebSocket 连接已经建立了会话）
-                if session_id and session_mgr.get_session(session_id):
-                    # 复用当前连接的会话
+                # 优先使用客户端携带的 session_id（支持跨连接 / 重启续接历史）
+                if incoming_session:
+                    existing = session_mgr.get_session(incoming_session)
+                    if existing:
+                        # 内存中仍有该会话（同生命周期内的重连）→ 直接复用
+                        session_id = incoming_session
+                        if incoming_user_id and incoming_user_id != "anonymous":
+                            existing.user_id = incoming_user_id
+                        user_id = existing.user_id
+                        tenant_id = incoming_tenant or existing.tenant_id
+                        user_plan = incoming_plan or existing.user_plan
+                    else:
+                        # 内存无此会话（如服务重启）→ 以该 id 重建，稍后从 DB 恢复历史
+                        session_id = incoming_session
+                        user_id = incoming_user_id
+                        tenant_id = incoming_tenant
+                        user_plan = incoming_plan
+                        session_mgr.create_session(
+                            session_id=session_id,
+                            user_id=user_id,
+                            tenant_id=tenant_id,
+                            mode=SessionMode.AI_CHAT,
+                        )
+                        # 保存 WebSocket 引用（关键！）
+                        session_mgr.get_session(session_id)._websocket_ref = websocket
+                elif session_id and session_mgr.get_session(session_id):
+                    # 客户端未带 session_id，复用本连接自动创建的会话
                     state = session_mgr.get_session(session_id)
                     if incoming_user_id and incoming_user_id != "anonymous":
                         state.user_id = incoming_user_id
                     if incoming_plan:
                         state.user_plan = incoming_plan
-                elif incoming_session and session_mgr.get_session(incoming_session):
-                    # 使用消息中带的 session_id
-                    session_id = incoming_session
-                    user_id = incoming_user_id
-                    tenant_id = incoming_tenant
-                    user_plan = incoming_plan
-                    state = session_mgr.get_session(session_id)
-                    if user_id and user_id != "anonymous":
-                        state.user_id = user_id
-                    if user_plan:
-                        state.user_plan = user_plan
+                    user_id = state.user_id
+                    tenant_id = state.tenant_id
+                    user_plan = state.user_plan
                 else:
-                    # 创建新会话
+                    # 兜底：新建会话
                     session_id = str(uuid.uuid4())
                     user_id = incoming_user_id
                     tenant_id = incoming_tenant
@@ -311,6 +327,17 @@ async def _handle_ai_chat(
 
     start_time = time.time()
 
+    # ---- Phase 3: 持久化用户输入，并确保会话行存在（重启后可恢复上下文）----
+    try:
+        from src.db.repositories import conversation_ensure, message_save
+        await asyncio.to_thread(conversation_ensure, session_id, tenant_id, user_id, "web")
+        await asyncio.to_thread(
+            message_save, session_id, tenant_id, user_id, "user", message,
+            metadata={"has_image": bool(image_base64), "has_audio": bool(audio_base64)},
+        )
+    except Exception as e:
+        logger.warning("[Persistence] 用户消息落库失败（非致命）: %s", e)
+
     # 1. 发送"正在思考"
     await websocket.send_json(build_typing_indicator(
         session_id, is_typing=True, status="正在理解您的问题...",
@@ -340,6 +367,21 @@ async def _handle_ai_chat(
         # 3. 构建 AgentState
         # 从会话状态中读取上一轮的失败次数和历史消息
         session_state = session_mgr.get_session(session_id)
+        # Phase 3: 若内存会话无历史（如服务重启后重连），从 DB 恢复多轮上下文
+        if session_state is not None and not getattr(session_state, "conversation_history", []):
+            try:
+                from src.db.repositories import message_list
+                restored = await asyncio.to_thread(message_list, session_id, 200)
+                if restored:
+                    session_state.conversation_history = [
+                        {"role": r["role"], "content": r["content"]} for r in restored
+                    ]
+                    logger.info(
+                        "[ContextMemory] 从DB恢复 %d 条历史: session=%s",
+                        len(restored), session_id,
+                    )
+            except Exception as e:
+                logger.warning("恢复对话历史失败（非致命）: %s", e)
         prev_failed_attempts = 0
         history_messages = []
         if session_state:
@@ -552,6 +594,16 @@ async def _handle_ai_chat(
             session_state.conversation_history.append(ai_msg)
             # 更新轮次计数
             session_state.turn_count += 1
+            # Phase 3: 持久化 AI 回复（与内存历史并行落库）
+            try:
+                from src.db.repositories import message_save
+                await asyncio.to_thread(
+                    message_save, session_id, tenant_id, user_id, "assistant",
+                    final_response, intent=intent or "",
+                    metadata={"quality_score": quality_score},
+                )
+            except Exception as e:
+                logger.warning("[Persistence] AI回复落库失败（非致命）: %s", e)
             logger.info(
                 "[ContextMemory] session=%s: 保存对话历史，当前总消息数=%d, turn_count=%d",
                 session_id, len(session_state.conversation_history), session_state.turn_count

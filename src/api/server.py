@@ -258,6 +258,14 @@ def create_app() -> FastAPI:
     except Exception as e:
         logger.error("Failed to register satisfaction router: %s", e)
 
+    # 注册会话历史路由
+    try:
+        from src.api.conversations import router as conversations_router
+        app.include_router(conversations_router, prefix="/api/v1", tags=["会话历史 Conversations"])
+        logger.info("Registered conversations router")
+    except Exception as e:
+        logger.error("Failed to register conversations router: %s", e)
+
     # 注册通知中心路由
     try:
         from src.api.notifications import router as notifications_router
