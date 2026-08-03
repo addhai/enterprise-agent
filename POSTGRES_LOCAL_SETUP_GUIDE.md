@@ -148,10 +148,8 @@ docker compose up -d
 
 ---
 
-## 已知缺口（不用你管，我后端来修）
+## 已知缺口（已全部修复，仅留作记录）
 
-- 后端 WebSocket 目前**不处理**前端发来的 `resume_session` 消息类型，所以“刷新页面后续接旧会话”
-  在服务重启后还不稳。这是后端 bug，我会自己补一个 `resume_session` 分支（复用已有 `session_id`，
-  不再每次新建），修完推 GitHub，你拉代码即可。
-- 项目里存在两套会话 API：你前端用的 `/api/v1/admin/sessions`（legacy）和我阶段三加的
-  `/api/v1/conversations`。功能重叠，我后续会统一到一套，不影响你本机验证。
+> 以下两条在写本指南时还是 TODO，现在已经做完并提交（commit `878ad80`），**你本机验证无需顾及**：
+> - ✅ 后端 WebSocket 已处理 `resume_session` 握手：内存命中复用 / DB 有历史则重建恢复 / 未带 session_id 沿用当前连接。
+> - ✅ 两套会话 API 已统一到 `src/api/sessions_service.py` 共享 service 层（`/api/v1/admin/sessions` 与 `/api/v1/conversations` 复用同一逻辑）。
