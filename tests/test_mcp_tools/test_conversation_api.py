@@ -106,6 +106,27 @@ def test_metrics_risk_returns_real_fields():
     assert isinstance(body["safety_events"], dict)
 
 
+def test_metrics_risk_exposes_hallucination_fields():
+    """/metrics/risk 应暴露 hallucinations_detected / hallucinations_blocked 真实计数。"""
+    from src.evaluation.tracker import get_evaluation_tracker
+
+    tracker = get_evaluation_tracker()
+    before_detected = tracker.stats().get("hallucinations_detected", 0)
+    before_blocked = tracker.stats().get("hallucinations_blocked", 0)
+    tracker.record_safety_event("hallucination_detected")
+    tracker.record_safety_event("hallucination_blocked")
+
+    client = _client()
+    r = client.get("/api/v1/metrics/risk")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["hallucinations_detected"] == before_detected + 1
+    assert body["hallucinations_blocked"] == before_blocked + 1
+    # safety_events 明细也要包含原始 key
+    assert body["safety_events"].get("hallucination_detected") == before_detected + 1
+    assert body["safety_events"].get("hallucination_blocked") == before_blocked + 1
+
+
 def test_tracker_records_real_safety_events():
     """EvaluationTracker 真实累计安全事件（供 /metrics/risk 暴露）。"""
     from src.evaluation.tracker import get_evaluation_tracker
@@ -134,11 +155,12 @@ def test_delete_conversation_removes_messages():
     assert r.status_code == 200
     assert r.json()["success"] is True
 
+    # 删除后再查消息 → 404（会话与消息均已从 DB 删除）
     m = client.get(
         "/api/v1/conversations/SES-DEL-1/messages",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert m.json()["count"] == 0
+    assert m.status_code == 404
 
 
 def test_delete_nonexistent_returns_404():
@@ -191,3 +213,128 @@ def test_user_sessions_merges_persisted_db_sessions_scoped():
     sids = {s["session_id"] for s in r.json()["sessions"]}
     assert "SES-DB-USR" in sids
     assert "SES-DB-OTHER2" not in sids
+
+
+# ============================================================
+# 统一会话 API（共享 service 层）—— 5 个新增测试
+# ============================================================
+
+def test_user_session_detail_returns_own_history():
+    """普通用户 GET /sessions/{sid} 返回自己的会话详情（DB 历史回退）。"""
+    client = _client()
+    token, uid = _register(client)
+
+    conversation_ensure("SES-USR-DET", "default", uid, channel="web")
+    message_save("SES-USR-DET", "default", uid, "user", "你好")
+    message_save("SES-USR-DET", "default", uid, "assistant", "您好，请问需要什么帮助？")
+
+    r = client.get(
+        "/api/v1/sessions/SES-USR-DET",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_id"] == "SES-USR-DET"
+    # DB 回退路径会填充 conversation_history
+    assert len(body["conversation_history"]) == 2
+    assert body["conversation_history"][0]["role"] == "user"
+
+
+def test_user_session_detail_403_for_other_users():
+    """普通用户访问别人的会话详情应返回 403（统一 service 层归属校验）。"""
+    client = _client()
+    token_a, _ = _register(client)
+    # 直接往 DB 写一条属于 other-user 的会话
+    conversation_ensure("SES-OTHER-DET", "default", "other-user", channel="web")
+    message_save("SES-OTHER-DET", "default", "other-user", "user", "别人的会话")
+
+    r = client.get(
+        "/api/v1/sessions/SES-OTHER-DET",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert r.status_code == 403
+
+
+def test_conversation_messages_403_for_viewer_role_users():
+    """viewer 角色用户访问别人会话的 /conversations/{sid}/messages 应返回 403。
+
+    注册默认创建 role=agent 用户（被 service 层视为管理员，可跨用户访问），
+    因此要测试跨用户 403 必须显式构造一个 role=viewer 的低权限用户。
+    """
+    import time as _time
+    import uuid as _uuid
+    from src.db.repositories import user_create
+    from src.api.auth import _tokens  # 直接注入 token，绕过登录
+
+    client = _client()
+    # 直接往 DB 写一条属于 other-user 的会话
+    conversation_ensure("SES-CONV-OTHER", "default", "other-user", channel="web")
+    message_save("SES-CONV-OTHER", "default", "other-user", "user", "别人的会话")
+
+    # 构造一个 viewer 角色用户
+    viewer_id = str(_uuid.uuid4())
+    user_create({
+        "user_id": viewer_id,
+        "username": f"viewer_{_uuid.uuid4().hex[:8]}",
+        "password_hash": "dummy",
+        "avatar": "V",
+        "created_at": _time.time(),
+        "is_admin": False,
+        "role": "viewer",
+        "status": "active",
+        "email": "viewer@test.local",
+        "department": "test",
+    })
+    token = "test-viewer-token-" + _uuid.uuid4().hex
+    _tokens[token] = viewer_id
+
+    r = client.get(
+        "/api/v1/conversations/SES-CONV-OTHER/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 403
+
+
+def test_user_deletes_own_session_from_memory_and_db():
+    """普通用户 DELETE /sessions/{sid} 同时从内存与 DB 删除。"""
+    client = _client()
+    token, uid = _register(client)
+    conversation_ensure("SES-USR-DEL", "default", uid, channel="web")
+    message_save("SES-USR-DEL", "default", uid, "user", "待删除")
+
+    r = client.delete(
+        "/api/v1/sessions/SES-USR-DEL",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    # 删除后再查详情 → 404（DB 也已删除）
+    r2 = client.get(
+        "/api/v1/sessions/SES-USR-DEL",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r2.status_code == 404
+
+
+def test_admin_delete_any_session():
+    """管理员 DELETE /admin/sessions/{sid} 可删除任意用户的会话。"""
+    client = _client()
+    token, _ = _register(client)  # 默认 role=agent（满足 ADMIN/AGENT 校验）
+    # 写一条属于 third-user 的会话
+    conversation_ensure("SES-ADM-DEL", "default", "third-user", channel="web")
+    message_save("SES-ADM-DEL", "default", "third-user", "user", "待管理员删除")
+
+    r = client.delete(
+        "/api/v1/admin/sessions/SES-ADM-DEL",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    # 删除后再查 → 404
+    r2 = client.get(
+        "/api/v1/admin/sessions/SES-ADM-DEL",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r2.status_code == 404

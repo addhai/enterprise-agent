@@ -85,8 +85,8 @@ async def get_risk_metrics():
       - escalation_rate：转人工 / 升级率（越高代表自助解决越差）
       - low_quality_rate：低质量回复占比（quality_score < 0.5）
       - unresolved_rate：未解决会话占比
-    注：细粒度幻觉检测（hallucination）接入安全子系统的计数后才单独暴露，
-    此处以可观测的真实代理指标替代硬编码假值。
+      - hallucinations_detected / hallucinations_blocked：
+        reflect_node 的 check_hallucination 检测计数 / output_guard 拦截计数
     """
     if get_evaluation_tracker is None:
         return {
@@ -119,6 +119,8 @@ async def get_risk_metrics():
         "total_requests": total,
         "prompt_injections_blocked": stats.get("prompt_injections_blocked", 0),
         "safety_violations": stats.get("safety_violations", 0),
+        "hallucinations_detected": stats.get("hallucinations_detected", 0),
+        "hallucinations_blocked": stats.get("hallucinations_blocked", 0),
         "safety_events": stats.get("safety_events", {}),
         "instrumented": True,
     }

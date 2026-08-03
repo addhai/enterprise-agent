@@ -67,6 +67,13 @@ class OutputGuard:
                 ]
 
                 if hallucinated and len(hallucinated) > len(tech_identifiers) * 0.5:
+                    # 上报真实拦截计数到 EvaluationTracker，供 /metrics/risk 暴露
+                    try:
+                        from src.evaluation.tracker import get_evaluation_tracker
+                        get_evaluation_tracker().record_safety_event("hallucination_blocked")
+                    except Exception:
+                        # tracker 不可用时静默降级，不影响安全拦截本身
+                        pass
                     return SafetyResult(
                         blocked=True,
                         reason=f"hallucinated_reference:{','.join(hallucinated[:5])}",

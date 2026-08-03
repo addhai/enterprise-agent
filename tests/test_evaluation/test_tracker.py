@@ -191,3 +191,43 @@ class TestSingleton:
     def test_singleton_is_evaluation_tracker(self):
         t = get_evaluation_tracker()
         assert isinstance(t, EvaluationTracker)
+
+
+# ============================================================
+# Hallucination 计数（v0.7 新增接线）
+# ============================================================
+
+class TestHallucinationStats:
+    def test_empty_stats_exposes_hallucination_fields(self, tracker):
+        """空 tracker.stats() 也应暴露 hallucinations_detected/blocked 字段（值 0）。"""
+        stats = tracker.stats()
+        assert "hallucinations_detected" in stats
+        assert "hallucinations_blocked" in stats
+        assert stats["hallucinations_detected"] == 0
+        assert stats["hallucinations_blocked"] == 0
+
+    def test_record_hallucination_detected(self, tracker):
+        tracker.record_safety_event("hallucination_detected")
+        tracker.record_safety_event("hallucination_detected")
+        stats = tracker.stats()
+        assert stats["hallucinations_detected"] == 2
+        # safety_events 也要包含原始计数
+        assert stats["safety_events"].get("hallucination_detected") == 2
+
+    def test_record_hallucination_blocked(self, tracker):
+        tracker.record_safety_event("hallucination_blocked")
+        stats = tracker.stats()
+        assert stats["hallucinations_blocked"] == 1
+        assert stats["safety_events"].get("hallucination_blocked") == 1
+
+    def test_hallucination_counts_independent_from_other_safety_events(self, tracker):
+        """幻觉计数与 prompt 注入 / 安全违规计数互不污染。"""
+        tracker.record_safety_event("hallucination_detected")
+        tracker.record_safety_event("hallucination_blocked")
+        tracker.record_safety_event("prompt_injection_blocked")
+        tracker.record_safety_event("safety_violation")
+        stats = tracker.stats()
+        assert stats["hallucinations_detected"] == 1
+        assert stats["hallucinations_blocked"] == 1
+        assert stats["prompt_injections_blocked"] == 1
+        assert stats["safety_violations"] == 1

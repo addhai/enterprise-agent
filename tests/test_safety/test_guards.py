@@ -65,6 +65,29 @@ class TestOutputGuard:
         )
         assert result.blocked is False
 
+    def test_blocks_hallucinated_references_and_records_tracker_event(self):
+        """应拦截检索文档中不存在的幻觉技术标识符，并上报 hallucination_blocked 事件。"""
+        from src.evaluation.tracker import get_evaluation_tracker
+        from langchain_core.documents import Document as LCDocument
+
+        guard = OutputGuard()
+        tracker = get_evaluation_tracker()
+        before = tracker.stats().get("hallucinations_blocked", 0)
+
+        # 回复中引用了 ERR_TIMEOUT_GATEWAY、API_V2_BILLING 等虚构标识符
+        reply = (
+            "您的错误码是 ERR_TIMEOUT_GATEWAY，请检查 API_V2_BILLING 配置项，"
+            "并调用 STATUS_SERVICE_UNAVAILABLE 接口排查。"
+        )
+        # 检索文档中只包含正常帮助文档内容，不包含上述标识符
+        docs = [LCDocument(page_content="退款政策说明：购买后7天内可无理由退款。")]
+        result = guard.check(reply, retrieved_docs=docs)
+
+        assert result.blocked is True
+        assert "hallucinated_reference" in result.reason
+        after = tracker.stats().get("hallucinations_blocked", 0)
+        assert after == before + 1
+
 
 class TestSanitizer:
     def test_removes_injection_from_documents(self):

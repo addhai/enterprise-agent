@@ -90,6 +90,8 @@ class EvaluationTracker:
                 "safety_events": dict(self._safety_events),
                 "prompt_injections_blocked": self._safety_events.get("prompt_injection_blocked", 0),
                 "safety_violations": self._safety_events.get("safety_violation", 0),
+                "hallucinations_detected": self._safety_events.get("hallucination_detected", 0),
+                "hallucinations_blocked": self._safety_events.get("hallucination_blocked", 0),
             }
 
         latencies = [r["latency_ms"] for r in self._records[-100:]]
@@ -120,6 +122,8 @@ class EvaluationTracker:
             "safety_events": dict(self._safety_events),
             "prompt_injections_blocked": self._safety_events.get("prompt_injection_blocked", 0),
             "safety_violations": self._safety_events.get("safety_violation", 0),
+            "hallucinations_detected": self._safety_events.get("hallucination_detected", 0),
+            "hallucinations_blocked": self._safety_events.get("hallucination_blocked", 0),
         }
 
 

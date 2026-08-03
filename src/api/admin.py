@@ -4,7 +4,7 @@
 import os
 import time
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Path, Depends, Header, Body
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -13,126 +13,15 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 from src.websocket.session_manager import get_session_manager, SessionMode
 from src.config import settings
 from src.api.rbac import require_roles, Role
+from src.api.sessions_service import (
+    delete_session as _delete_session,
+    get_session_detail as _get_session_detail,
+    get_session_owner as _get_session_owner,
+    list_sessions as _list_sessions,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
-
-
-def _get_last_message_preview(conversation_history: list, max_length: int = 50) -> str:
-    """获取最后一条消息的预览"""
-    if not conversation_history:
-        return ""
-    last_msg = conversation_history[-1]
-    content = last_msg.get("content", "")
-    if len(content) > max_length:
-        return content[:max_length] + "..."
-    return content
-
-
-def _session_to_dict(session, include_history: bool = False) -> Dict[str, Any]:
-    """将会话状态转换为可序列化的字典"""
-    result = {
-        "session_id": session.session_id,
-        "user_id": session.user_id,
-        "mode": session.mode.value,
-        "created_at": session.created_at,
-        "last_active": session.last_active,
-        "turn_count": session.turn_count,
-        "last_message_preview": _get_last_message_preview(session.conversation_history),
-    }
-    if include_history:
-        result["conversation_history"] = session.conversation_history
-        result["handoff_context"] = session.handoff_context
-        result["assigned_agent"] = session.assigned_agent
-        result["needs_human"] = session.needs_human
-        result["failed_attempts"] = session.failed_attempts
-        result["suggest_human"] = session.suggest_human
-    return result
-
-
-def _db_sessions_as_dicts(user_id_filter: Optional[str] = None, limit: int = 500) -> List[Dict[str, Any]]:
-    """从持久化 DB 读取历史会话，返回与 _session_to_dict 兼容的 dict 列表。
-
-    把「重启后仍在 DB 里的会话」合并进会话列表（原接口只看内存活跃会话）。
-    """
-    from src.db.repositories import conversation_list as _repo_list, DEFAULT_TENANT, _dt2f
-    from src.db.session import db_session
-    from src.db.models import Conversation as _Conv
-
-    out: List[Dict[str, Any]] = []
-    try:
-        rows = _repo_list(DEFAULT_TENANT, user_id_filter, limit)
-    except Exception as e:
-        logger.warning("读取持久化会话列表失败（非致命）: %s", e)
-        return out
-    try:
-        with db_session() as s:
-            convs = s.query(_Conv).all()
-        # 在 session 作用域内提取标量，避免闭包外访问已分离实例
-        conv_meta = {}
-        for c in convs:
-            conv_meta[c.id] = (c.user_id, _dt2f(c.created_at) if c.created_at else 0.0)
-    except Exception:
-        conv_meta = {}
-    for row in rows:
-        sid = row.get("session_id") or row.get("id") or ""
-        if not sid:
-            continue
-        meta = conv_meta.get(sid)
-        user_id = meta[0] if meta else (row.get("user_id") or "anonymous")
-        created_at = meta[1] if meta else row.get("updated_at", 0)
-        out.append({
-            "session_id": sid,
-            "user_id": user_id,
-            "mode": "ai_chat",
-            "created_at": created_at,
-            "last_active": row.get("updated_at", 0),
-            "turn_count": row.get("message_count", 0),
-            "last_message_preview": (row.get("last_message") or "")[:50],
-        })
-    return out
-
-
-def _db_session_detail_dict(session_id: str) -> Optional[Dict[str, Any]]:
-    """从持久化 DB 读取单个会话详情（含消息历史），兼容 _session_to_dict(include_history=True)。"""
-    from src.db.repositories import message_list, _dt2f
-    from src.db.session import db_session
-    from src.db.models import Conversation as _Conv
-
-    try:
-        msgs = message_list(session_id, 500)
-    except Exception as e:
-        logger.warning("读取持久化会话详情失败（非致命）: %s", e)
-        return None
-    if not msgs:
-        return None
-    try:
-        with db_session() as s:
-            conv = s.query(_Conv).filter(_Conv.id == session_id).first()
-            user_id = conv.user_id if conv else "anonymous"
-            created_at = _dt2f(conv.created_at) if conv and conv.created_at else (msgs[0].get("created_at", 0) if msgs else 0)
-    except Exception:
-        user_id = "anonymous"
-        created_at = msgs[0].get("created_at", 0) if msgs else 0
-    history = [
-        {"role": m["role"], "content": m["content"], "timestamp": m.get("created_at")}
-        for m in msgs
-    ]
-    return {
-        "session_id": session_id,
-        "user_id": user_id,
-        "mode": "ai_chat",
-        "created_at": created_at,
-        "last_active": msgs[-1].get("created_at", 0),
-        "turn_count": len(msgs),
-        "last_message_preview": (msgs[-1].get("content", "") or "")[:50],
-        "conversation_history": history,
-        "handoff_context": None,
-        "assigned_agent": None,
-        "needs_human": False,
-        "failed_attempts": 0,
-        "suggest_human": False,
-    }
 
 
 def _get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
@@ -159,25 +48,7 @@ async def get_user_sessions(current_user: Optional[Dict[str, Any]] = Depends(_ge
 
     需要用户登录，返回当前用户的所有会话；重启后仍在 DB 的历史会话也会被合并进来。
     """
-    session_mgr = get_session_manager()
-    all_sessions = list(session_mgr._sessions.values())
-
-    user_id = current_user.get("user_id") if current_user else None
-    if user_id:
-        live = [s for s in all_sessions if s.user_id == user_id]
-    else:
-        live = all_sessions
-
-    result = [_session_to_dict(s) for s in live]
-    # 合并持久化 DB 中、当前不在内存的会话（重启后仍能看到历史）
-    if user_id:
-        try:
-            for d in _db_sessions_as_dicts(user_id, 200):
-                if not any(x["session_id"] == d["session_id"] for x in result):
-                    result.append(d)
-        except Exception:
-            pass
-    result.sort(key=lambda x: x.get("last_active", 0), reverse=True)
+    result = _list_sessions(current_user, None, 200, include_live=True, all_users=False)
     return {"total": len(result), "sessions": result}
 
 
@@ -187,21 +58,15 @@ async def get_user_session_detail(
     current_user: Optional[Dict[str, Any]] = Depends(_get_current_user_optional),
 ):
     """获取当前用户的会话详情和历史消息（内存优先，回退持久化 DB）"""
-    session_mgr = get_session_manager()
-    session = session_mgr.get_session(session_id)
     user_id = current_user.get("user_id") if current_user else None
-
-    if session:
-        if user_id and session.user_id != user_id:
-            raise HTTPException(status_code=403, detail="无权访问此会话")
-        return _session_to_dict(session, include_history=True)
-
-    # 内存无此会话 → 回退持久化 DB
-    detail = _db_session_detail_dict(session_id)
+    owner = _get_session_owner(session_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    if user_id and owner != user_id:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+    detail = _get_session_detail(session_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
-    if user_id and detail["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="无权访问此会话")
     return detail
 
 
@@ -211,23 +76,16 @@ async def delete_user_session(
     current_user: Optional[Dict[str, Any]] = Depends(_get_current_user_optional),
 ):
     """删除当前用户的会话
-    
-    需要用户登录，只能删除自己的会话
+
+    需要用户登录，只能删除自己的会话；同时从内存与持久化 DB 删除（重启后不会重现）。
     """
-    session_mgr = get_session_manager()
-    session = session_mgr.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
-    
-    # 如果有当前用户，检查是否是自己的会话
     user_id = current_user.get("user_id") if current_user else None
-    if user_id and session.user_id != user_id:
+    owner = _get_session_owner(session_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    if user_id and owner != user_id:
         raise HTTPException(status_code=403, detail="无权删除此会话")
-    
-    success = session_mgr.remove_session(session_id)
-    if not success:
-        raise HTTPException(status_code=500, detail="删除会话失败")
-    
+    _delete_session(session_id)
     return {"success": True, "message": "会话已删除"}
 
 
@@ -240,16 +98,7 @@ async def get_admin_sessions(
     current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取所有用户的会话列表（管理员版，内存活跃 + 持久化 DB 历史合并）"""
-    session_mgr = get_session_manager()
-    result = [_session_to_dict(s) for s in session_mgr._sessions.values()]
-    # 合并持久化 DB 中、当前不在内存的会话
-    try:
-        for d in _db_sessions_as_dicts(None, 500):
-            if not any(x["session_id"] == d["session_id"] for x in result):
-                result.append(d)
-    except Exception:
-        pass
-    result.sort(key=lambda x: x.get("last_active", 0), reverse=True)
+    result = _list_sessions(current_user, None, 500, include_live=True, all_users=True)
     return {"total": len(result), "sessions": result}
 
 
@@ -259,14 +108,22 @@ async def get_admin_session_detail(
     current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取会话详情（管理员版，内存优先，回退持久化 DB）"""
-    session_mgr = get_session_manager()
-    session = session_mgr.get_session(session_id)
-    if session:
-        return _session_to_dict(session, include_history=True)
-    detail = _db_session_detail_dict(session_id)
+    detail = _get_session_detail(session_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
     return detail
+
+
+@router.delete("/admin/sessions/{session_id}")
+async def delete_admin_session(
+    session_id: str = Path(..., description="会话 ID"),
+    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+):
+    """删除任意用户的会话（管理员版，同时从内存与持久化 DB 删除）"""
+    ok = _delete_session(session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    return {"success": True, "message": "会话已删除"}
 
 
 @router.get("/admin/channels")

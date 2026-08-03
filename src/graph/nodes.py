@@ -749,6 +749,12 @@ def rag_node(
                 if not h_result["is_clean"]:
                     logger.warning("Potential hallucination detected: %s",
                                    h_result["hallucinated"][:5])
+                    # 上报真实计数到 EvaluationTracker，供 /metrics/risk 暴露
+                    try:
+                        from src.evaluation.tracker import get_evaluation_tracker
+                        get_evaluation_tracker().record_safety_event("hallucination_detected")
+                    except Exception:
+                        logger.debug("Failed to record hallucination_detected event", exc_info=True)
         except Exception:
             logger.debug("Hallucination check skipped", exc_info=True)
 

@@ -112,6 +112,86 @@ async def websocket_chat(websocket: WebSocket):
                 })
                 continue
 
+            # --- resume_session 握手（前端连接后第一条消息，用于跨连接/重启续接历史）---
+            if msg_type == "resume_session":
+                incoming_session = msg.get("session_id")
+                incoming_user_id = msg.get("user_id", "anonymous")
+                incoming_tenant = msg.get("tenant_id", "")
+                incoming_plan = msg.get("user_plan", "free")
+
+                if not incoming_session:
+                    # 客户端没带 session_id → 复用本连接已建会话；告知前端
+                    await websocket.send_json({
+                        "type": "session_resumed",
+                        "session_id": session_id,
+                        "restored_count": 0,
+                        "message": "未携带 session_id，沿用当前会话",
+                        "timestamp": time.time(),
+                    })
+                    continue
+
+                existing = session_mgr.get_session(incoming_session)
+                if existing:
+                    # 内存仍有该会话（同生命周期内的重连）→ 直接复用，更新连接引用与可选身份
+                    session_id = incoming_session
+                    if incoming_user_id and incoming_user_id != "anonymous":
+                        existing.user_id = incoming_user_id
+                    if incoming_plan:
+                        existing.user_plan = incoming_plan
+                    existing._websocket_ref = websocket
+                    user_id = existing.user_id
+                    tenant_id = incoming_tenant or existing.tenant_id
+                    user_plan = existing.user_plan
+                    restored_count = len(getattr(existing, "conversation_history", []))
+                    await websocket.send_json({
+                        "type": "session_resumed",
+                        "session_id": session_id,
+                        "restored_count": restored_count,
+                        "source": "memory",
+                        "message": "会话已从内存续接",
+                        "timestamp": time.time(),
+                    })
+                else:
+                    # 内存无此会话（如服务重启）→ 以该 id 重建，并从 DB 恢复历史
+                    session_id = incoming_session
+                    user_id = incoming_user_id
+                    tenant_id = incoming_tenant
+                    user_plan = incoming_plan
+                    session_mgr.create_session(
+                        session_id=session_id,
+                        user_id=user_id,
+                        tenant_id=tenant_id,
+                        mode=SessionMode.AI_CHAT,
+                    )
+                    new_state = session_mgr.get_session(session_id)
+                    if new_state is not None:
+                        new_state._websocket_ref = websocket
+                        # 从 DB 恢复历史
+                        restored_count = 0
+                        try:
+                            from src.db.repositories import message_list
+                            restored = await asyncio.to_thread(message_list, session_id, 200)
+                            if restored:
+                                new_state.conversation_history = [
+                                    {"role": r["role"], "content": r["content"]} for r in restored
+                                ]
+                                restored_count = len(restored)
+                                logger.info(
+                                    "[resume_session] 从DB恢复 %d 条历史: session=%s",
+                                    restored_count, session_id,
+                                )
+                        except Exception as e:
+                            logger.warning("[resume_session] 恢复历史失败（非致命）: %s", e)
+                        await websocket.send_json({
+                            "type": "session_resumed",
+                            "session_id": session_id,
+                            "restored_count": restored_count,
+                            "source": "database",
+                            "message": "会话已重建并从历史恢复",
+                            "timestamp": time.time(),
+                        })
+                continue
+
             # --- 用户主动请求转人工 ---
             if msg_type == "human_escalation":
                 incoming_session = msg.get("session_id")

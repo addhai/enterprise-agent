@@ -18,17 +18,24 @@ def _init_test_database():
     """为所有测试初始化一个独立的 SQLite 数据库（自动建表 + seed）。
 
     阶段一改造后，用户 / 知识库 / 工单 / 对话等 store 已落库；本 fixture 保证
-    测试也能跑通，且使用独立的 test_agent.db，不污染开发用的 agent.db。
+    测试也能跑通，且使用独立的临时库，不污染开发用的 agent.db。
+
+    ⚠️ 必须用「每会话唯一文件名」：Windows 上 SQLite 文件被连接池锁住时，
+    `os.remove` 会静默失败，导致旧库残留、固定 session_id 串味、测试顺序相关
+    地失败（单独跑过、整跑挂）。唯一文件名从源头杜绝该问题。
     """
     from src.config import settings
 
+    # 用内存库（StaticPool）做测试：零文件、零锁、无残留，且天然隔离。
     settings.storage_backend = "sqlite"
-    settings.database_url = "sqlite:///./test_agent.db"
+    settings.database_url = "sqlite:///:memory:"
 
-    # 每次测试会话从干净状态开始
+    # 防御性清理：先释放可能持有的引擎（避免旧连接池占用内存库）
     try:
-        os.remove("test_agent.db")
-    except OSError:
+        from src.db.engine import dispose_engine
+
+        dispose_engine()
+    except Exception:
         pass
 
     from src.db.init import init_db
