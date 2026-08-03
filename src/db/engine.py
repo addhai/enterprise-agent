@@ -37,27 +37,38 @@ def _mask(url: str) -> str:
     return url
 
 
-def _ensure_pg_encoding(url: str) -> str:
-    """在 Postgres URL 上追加 client_encoding=utf8（避免 Windows GBK 编码冲突）。
-
-    不用 connect_args['options'] 传 '-c client_encoding=UTF8'，因为 libpq 在 Windows
-    中文系统上会用 ANSI 代码页编码该字符串，导致 psycopg2 报 UnicodeDecodeError。
-    """
-    if not (url.startswith("postgresql") or url.startswith("postgres")):
-        return url
-    p = urlparse(url)
-    qs = parse_qs(p.query)
-    if "client_encoding" not in qs:
-        qs["client_encoding"] = ["utf8"]
-        p = p._replace(query=urlencode(qs, doseq=True))
-        return urlunparse(p)
+def _clean_url(url: str) -> str:
+    """清理 URL：去掉行内注释、首尾空白，防止 .env / 环境变量污染。"""
+    if not isinstance(url, str):
+        url = str(url)
+    # 去掉 # 开头的行内注释（dotenv 本应做，但环境变量或某些编辑器会带进来）
+    url = url.split("#", 1)[0].strip()
     return url
 
 
+def _ensure_pg_encoding(url: str) -> str:
+    """保证 Postgres URL 不含非 ASCII 污染，并准备通过 connect_args 强制 UTF-8。
+
+    不再用 URL query ?client_encoding=utf8，也不在 connect_args['options'] 里传
+    '-c client_encoding=UTF8'（libpq 在 Windows 中文系统会用 ANSI 代码页编码
+    options 字符串）。真正的 client_encoding 在 _pg_connect_args 中以关键字
+    参数形式传给 psycopg2.connect()，可绕过该问题。
+    """
+    url = _clean_url(url)
+    if not (url.startswith("postgresql") or url.startswith("postgres")):
+        return url
+    # 如果 URL 里已经带 client_encoding query，先剥掉（避免重复/冲突）
+    p = urlparse(url)
+    qs = parse_qs(p.query)
+    qs.pop("client_encoding", None)
+    p = p._replace(query=urlencode(qs, doseq=True))
+    return urlunparse(p)
+
+
 def _pg_connect_args(url: str) -> dict:
-    """Postgres 连接参数：仅保留连接超时，编码通过 URL query 参数强制指定。"""
+    """Postgres 连接参数：超时 + 强制 UTF-8 编码（绕开 Windows GBK 代码页 bug）。"""
     if url.startswith("postgresql") or url.startswith("postgres"):
-        return {"connect_timeout": 3}
+        return {"connect_timeout": 3, "client_encoding": "utf8"}
     return {}
 
 
@@ -78,7 +89,8 @@ def _pg_reachable(url: str) -> bool:
 
 def _resolve_url() -> str:
     """根据 storage_backend 决定最终连接串"""
-    raw = settings.database_url
+    raw = _clean_url(settings.database_url)
+    logger.debug("Resolved raw database_url (masked): %s", _mask(raw))
     backend = getattr(settings, "storage_backend", "auto")
     if backend == "sqlite":
         return raw if raw.startswith("sqlite") else "sqlite:///./agent.db"
