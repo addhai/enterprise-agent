@@ -42,6 +42,7 @@ from src.websocket.session_manager import (
     get_session_manager,
 )
 from src.websocket.dispatcher import get_dispatcher
+from src.db.engine import _decode_pg_error
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -181,7 +182,7 @@ async def websocket_chat(websocket: WebSocket):
                                     restored_count, session_id,
                                 )
                         except Exception as e:
-                            logger.warning("[resume_session] 恢复历史失败（非致命）: %s", e)
+                            logger.warning("[resume_session] 恢复历史失败（非致命）: %s", _decode_pg_error(e))
                         await websocket.send_json({
                             "type": "session_resumed",
                             "session_id": session_id,

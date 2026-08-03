@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 
 from src.db.base import Base
-from src.db.engine import get_engine
+from src.db.engine import _decode_pg_error, get_engine
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +20,14 @@ def init_db() -> None:
 
     engine = get_engine()
     logger.info("Creating database tables (if not exist)...")
-    Base.metadata.create_all(engine)
-    logger.info("Database tables ready.")
+    try:
+        Base.metadata.create_all(engine)
+        logger.info("Database tables ready.")
+    except Exception as e:
+        logger.warning("Database init failed (non-fatal): %s", _decode_pg_error(e))
+        return
 
     try:
         db_seed.seed_defaults()
     except Exception as e:
-        logger.warning("DB seed_defaults failed (non-fatal): %s", e)
+        logger.warning("DB seed_defaults failed (non-fatal): %s", _decode_pg_error(e))

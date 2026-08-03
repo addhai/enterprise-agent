@@ -49,29 +49,65 @@ def _clean_url(url: str) -> str:
 
 
 def _ensure_pg_encoding(url: str) -> str:
-    """保证 Postgres URL 不含非 ASCII 污染，并准备通过 connect_args 强制 UTF-8。
+    """保证 Postgres URL 不含非 ASCII 污染，并在 query 中强制 UTF-8 + 英文报错。
 
-    不再用 URL query ?client_encoding=utf8，也不在 connect_args['options'] 里传
-    '-c client_encoding=UTF8'（libpq 在 Windows 中文系统会用 ANSI 代码页编码
-    options 字符串）。真正的 client_encoding 在 _pg_connect_args 中以关键字
-    参数形式传给 psycopg2.connect()，可绕过该问题。
+    在 URL query 中追加 client_encoding=utf8 与 options=-c lc_messages=C，
+    让 libpq 在连接握手阶段就把这两个参数发给 PostgreSQL，尽量让服务器在
+    返回连接错误时也使用英文（全 ASCII），避免 Windows 中文系统用 GBK 返回
+    错误信息导致 psycopg2 解码崩溃（byte 0xd6）。
+
+    同时在 _pg_connect_args 中仍以关键字参数形式重复设置，作为双重兜底。
     """
     url = _clean_url(url)
     if not (url.startswith("postgresql") or url.startswith("postgres")):
         return url
-    # 如果 URL 里已经带 client_encoding query，先剥掉（避免重复/冲突）
     p = urlparse(url)
     qs = parse_qs(p.query)
+    # 去掉可能冲突的旧值，再用列表形式追加（urlencode(doseq=True) 兼容多值）
     qs.pop("client_encoding", None)
+    qs.pop("options", None)
+    qs["client_encoding"] = ["utf8"]
+    qs["options"] = ["-c lc_messages=C"]
     p = p._replace(query=urlencode(qs, doseq=True))
     return urlunparse(p)
 
 
 def _pg_connect_args(url: str) -> dict:
-    """Postgres 连接参数：超时 + 强制 UTF-8 编码（绕开 Windows GBK 代码页 bug）。"""
+    """Postgres 连接参数：超时 + 强制 UTF-8 编码 + 强制英文报错（双重兜底）。"""
     if url.startswith("postgresql") or url.startswith("postgres"):
-        return {"connect_timeout": 3, "client_encoding": "utf8"}
+        return {
+            "connect_timeout": 3,
+            "client_encoding": "utf8",
+            "options": "-c lc_messages=C",
+        }
     return {}
+
+
+def _decode_pg_error(exc: Exception) -> str:
+    """把 PostgreSQL 连接异常转换成可读字符串，兼容 Windows GBK 错误信息。
+
+    psycopg2 在 Windows 中文系统下可能把 GBK 编码的中文错误信息按 UTF-8 解码，
+    直接抛出 UnicodeDecodeError 而不是 OperationalError。本函数优先尝试 GBK
+    解码原始 bytes，让用户看到真实的数据库错误（如密码错、数据库不存在）。
+    """
+    # 1) 如果异常对象本身可 str，先拿到文本
+    msg = str(exc)
+    # 2) 异常可能带有 .args，其中包含原始 bytes
+    raw: bytes | None = None
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, bytes):
+            raw = arg
+            break
+    if raw is None:
+        return msg
+    # 3) 尝试 GBK 解码；失败则回退 latin1（单字节不会丢信息）
+    for enc in ("gbk", "utf-8", "latin1"):
+        try:
+            decoded = raw.decode(enc)
+            return f"{msg} (decoded with {enc}: {decoded})"
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            continue
+    return msg
 
 
 def _pg_reachable(url: str) -> bool:
@@ -85,7 +121,7 @@ def _pg_reachable(url: str) -> bool:
         probe.dispose()
         return True
     except Exception as e:
-        logger.warning("PostgreSQL not reachable: %s", e)
+        logger.warning("PostgreSQL not reachable: %s", _decode_pg_error(e))
         return False
 
 

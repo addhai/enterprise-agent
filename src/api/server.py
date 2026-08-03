@@ -23,9 +23,11 @@ os.chdir(_project_root)
 sys.path.insert(0, str(_project_root))
 
 # 加载 .env 文件（在导入 config 之前）
+# 必须显式指定 encoding="utf-8"，否则 Windows 中文系统会用 GBK 读取，
+# 行内中文注释可能被污染到环境变量值里。
 try:
     from dotenv import load_dotenv
-    load_dotenv(_project_root / ".env", override=True)
+    load_dotenv(_project_root / ".env", override=True, encoding="utf-8")
 except ImportError:
     pass  # python-dotenv 未安装则跳过
 

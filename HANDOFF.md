@@ -85,7 +85,8 @@
 ## 3. 当前状态 / 卡在哪
 
 ### ✅ 已完成，不再卡
-- 6 个开发阶段全部推送 GitHub；**补完轮 3 项后端收尾 + 测试底座污染修复 + Windows Postgres 编码崩溃根治（ASCII seed）均已在本地提交**，CI 稳定在 291 passed / 1 skipped / 0 failed（详见坑 29、坑 30）。
+- 6 个开发阶段全部推送 GitHub；**补完轮 3 项后端收尾 + 测试底座污染修复 + Windows Postgres 编码崩溃代码层兜底均已在本地提交**，CI 稳定在 291 passed / 1 skipped / 0 failed（详见坑 29、坑 30）。
+- 注意：编码崩溃的**最终根治**还需 PostgreSQL 容器本身配置 `lc_messages=C`（`POSTGRES_LOCAL_SETUP_GUIDE.md` 已更新），代码层兜底用于在配置未改时也能给出可读错误信息。
 - 后端核心链路已生产级：对话持久化（重启不丢，含显式 resume 握手）、知识库隔离、真实监控指标（含安全 + 幻觉计数）、会话增删查闭环、管理端历史可见。
 - 前端核心页面（官网首页 + 浮动聊天 WS + 9 Tab 后台含 SessionsTab）用户早已写好，无需接手者补。
 
@@ -152,11 +153,21 @@
 27. **提交路径手滑写反斜杠会失败**：`git add C:\Users\...` 报错，改正为 `git add C:/Users/...`（Git Bash 用正斜杠）重跑成功。
 28. **前端 WS 续接/历史面板是用户已完成的 WIP**：别把"历史会话面板/WebSocket 续接"再列为"待补 UI 缺口"——它们早好了，真正缺口在后端（已分阶段补齐）。
 29. **⚠️ 测试跨运行脏数据污染（最隐蔽的"假绿"）**：原 conftest 用固定文件 `test_agent.db`，Windows 上 SQLite 文件被连接池锁住时 `os.remove` 静默失败 → 旧库残留、固定 `session_id` 串味 → 表现为"单个测试文件单独跑全过、整套 `pytest` 跑挂 5 个"。上一个 AI 只跑精选子集（`test_conversation_api.py` 单独 16 过）就报成功，掩盖了回归。**根治**：conftest 改用 `sqlite:///:memory:` + `engine.py` 对 `:memory:` 走 `StaticPool`（所有连接共享同一内存库），零文件、零锁、天然隔离，且 teardown 不再留孤儿 `.db`。**CI 与本地验收必须跑完整白名单**才算数，绝不能只跑单文件子集冒充全绿。
-30. **⚠️ Windows 中文系统 + Postgres 编码崩溃（已根治·方案 B）**：报错 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd6 in position 61` 的本质是 **Windows 控制台默认代码页是 GBK（936）**，`src/seed.py` / `src/db/seed.py` 里的**中文演示数据**（工单标题、客户姓名、满意度评论、部门名）在写入 Postgres 时触发编码混乱，PostgreSQL 返回的中文错误信息再被 Python 按 UTF-8 解码失败。
-   代码层已做 3 处兜底：
+30. **⚠️ Windows 中文系统 + Postgres 编码崩溃（代码层兜底 + 容器配置根治）**：报错 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd6 in position 61` 的本质分两层：
+   - **直接原因**：PostgreSQL 服务器在中文 Windows/容器环境里用 **GBK** 返回错误信息，psycopg2 默认按 UTF-8 解码就崩；
+   - **诱发原因**：早期 `.env` 中 `DATABASE_URL` 行尾有中文注释被当成 URL 一部分、`src/seed.py` 有中文演示数据、控制台代码页非 UTF-8。
+   **代码层兜底**（已提交）：
    1. `src/api/server.py` 最顶部强制 `os.environ['PGCLIENTENCODING'] = 'UTF8'` + `PYTHONUTF8=1`；
-   2. `src/db/engine.py` 同步强制设置兜底 + `connect_args={'client_encoding': 'utf8'}` + `_clean_url()` 去注释/空白；
-   3. **最终方案**：把 `src/seed.py` 与 `src/db/seed.py` 中**写入数据库**的演示字符串全部改成英文/ASCII，彻底绕开 Windows 控制台代码页问题。
+   2. `src/api/server.py` 的 `load_dotenv(..., encoding="utf-8")` 防止 Windows 用 GBK 读 `.env`；
+   3. `src/db/engine.py` 同步强制设置兜底 + `connect_args={'client_encoding': 'utf8'}` + `_clean_url()` 去行内 `#` 注释/空白；
+   4. `src/db/engine.py` 在 Postgres URL query 与 `_pg_connect_args` 双重设置 `options='-c lc_messages=C'`，尽力让 PG 用英文返回错误信息；
+   5. `src/db/engine.py` 新增 `_decode_pg_error()`，遇到 GBK 中文错误信息时尝试 GBK/UTF-8/latin1 解码，让真实 PG 错误可见；
+   6. `src/db/session.py` 在 `db_session()` 内先 `session.connection()` 触发连接，把 `UnicodeDecodeError` 转换成人可读错误；
+   7. `src/db/init.py`、`src/seed.py`、`src/websocket/routes.py` 的异常日志统一走 `_decode_pg_error()`；
+   8. `src/seed.py` 与 `src/db/seed.py` 中写入数据库的演示字符串全部改成英文/ASCII。
+   **最终根治**：PostgreSQL 容器本身必须配置 `lc_messages=C`。`POSTGRES_LOCAL_SETUP_GUIDE.md` 已更新：
+   - 新容器：`docker run ... postgres:16-alpine -c lc_messages=C`
+   - 旧容器（不丢数据）：`docker exec agent-postgres sh -c "echo 'lc_messages = \"C\"' >> /var/lib/postgresql/data/postgresql.conf" && docker restart agent-postgres`
    **启动方式**：现在用 **Git Bash** 或 **PowerShell** 都可以启动；若仍不放心，可用 PowerShell + UTF-8 代码页：
    ```powershell
    chcp 65001
@@ -257,7 +268,7 @@ curl -s -X POST "http://127.0.0.1:8000/api/v1/admin/knowledge/$KB_ID/hit_test" -
 1. 6 个开发阶段全部 push 到 GitHub，CI 从 271 稳步涨到 **291 passed / 1 skipped / 0 failed**。
 2. **补完轮**：统一会话 API（`sessions_service.py`）、接上 `resume_session` 握手、接入 hallucination 真实计数。
 3. **测试底座污染根治**：conftest 改用 `sqlite:///:memory:` + `StaticPool`，消除"单文件过、整套挂"的假绿。
-4. **Windows 中文系统 Postgres 编码崩溃修复**：在 `src/api/server.py` 入口最顶层强制 `PGCLIENTENCODING=UTF8`，`src/db/engine.py` 兜底，配合 `connect_args={'client_encoding': 'utf8'}` + `_clean_url()`，解决 `UnicodeDecodeError: byte 0xd6 in position 61`。
+4. **Windows 中文系统 Postgres 编码崩溃最终修复**：`PGCLIENTENCODING=UTF8` + `load_dotenv(encoding="utf-8")` + `_clean_url()` + `connect_args={'client_encoding':'utf8','options':'-c lc_messages=C'}` 五层兜底，解决 `UnicodeDecodeError: byte 0xd6 in position 61`（根因是 PG 用 GBK 返回中文错误信息）。
 
 我还纠正了一个旧误判：**前端的历史会话面板 + WebSocket 续接你早就写好了**，之前列为"待补 UI"是错的；真正缺口在后端，已全部补齐。
 

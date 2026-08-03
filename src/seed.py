@@ -8,6 +8,7 @@ import time
 import logging
 from datetime import datetime, timezone, timedelta
 
+from src.db.engine import _decode_pg_error
 from src.ticket.models import (
     TicketCreateRequest, TicketUpdateRequest, TicketListFilter,
     TicketStatus, TicketPriority, TicketCategory
@@ -25,7 +26,7 @@ def seed_demo_data():
         _seed_customers()
         logger.info("Demo data seeded successfully")
     except Exception as e:
-        logger.warning("Failed to seed demo data: %s", e)
+        logger.warning("Failed to seed demo data: %s", _decode_pg_error(e))
 
 
 def _seed_tickets():

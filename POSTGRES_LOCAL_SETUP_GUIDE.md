@@ -33,8 +33,11 @@ docker run --name agent-postgres `
   -e POSTGRES_PASSWORD=postgres `
   -e POSTGRES_DB=agent `
   -p 5432:5432 `
-  -d postgres:16-alpine
+  -d postgres:16-alpine `
+  -c lc_messages=C
 ```
+
+> 末尾的 `-c lc_messages=C` 用来强制 PostgreSQL 用英文返回错误信息，避免 Windows 中文系统出现 `UnicodeDecodeError: byte 0xd6`。
 
 验证容器在跑：
 ```powershell
@@ -43,6 +46,23 @@ docker ps
 看到 `agent-postgres` 且 STATUS 是 `Up ...` 就成功了。
 
 > 想停掉它：`docker stop agent-postgres`；想彻底删掉重来：`docker rm -f agent-postgres`。
+
+#### 如果你之前已经按旧命令创建了容器
+
+不用删数据，直接改配置后重启即可：
+
+```powershell
+# 1. 进入容器，在 postgresql.conf 末尾追加英文报错配置
+docker exec agent-postgres sh -c "echo 'lc_messages = \"C\"' >> /var/lib/postgresql/data/postgresql.conf"
+
+# 2. 重启容器生效
+docker restart agent-postgres
+
+# 3. 确认配置已生效
+docker exec -it agent-postgres psql -U postgres -d agent -c "SHOW lc_messages;"
+```
+
+应该显示 `C`。
 
 ### 方案 B：用项目自带的 docker-compose 只起 postgres
 
