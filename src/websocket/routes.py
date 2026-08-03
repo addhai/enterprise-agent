@@ -682,6 +682,11 @@ async def _handle_ai_chat(
                 turn_count=turn_count,
                 resolved=resolved,
             )
+            # 真实安全计数：prompt 注入拦截 + 转人工升级（供 /metrics/risk 暴露）
+            if result.get("injection_blocked"):
+                tracker.record_safety_event("prompt_injection_blocked")
+            if needs_human:
+                tracker.record_safety_event("escalation")
         except Exception as e:
             logger.warning("Failed to record metrics: %s", e)
 

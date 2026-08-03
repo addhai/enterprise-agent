@@ -98,3 +98,23 @@ def test_metrics_risk_returns_real_fields():
     assert "instrumented" in body
     assert "escalation_rate" in body
     assert "low_quality_rate" in body
+    # 真实安全计数已暴露（注入拦截 / 安全违规 / 事件明细）
+    assert "prompt_injections_blocked" in body
+    assert "safety_violations" in body
+    assert "safety_events" in body
+    assert isinstance(body["prompt_injections_blocked"], int)
+    assert isinstance(body["safety_events"], dict)
+
+
+def test_tracker_records_real_safety_events():
+    """EvaluationTracker 真实累计安全事件（供 /metrics/risk 暴露）。"""
+    from src.evaluation.tracker import get_evaluation_tracker
+
+    tracker = get_evaluation_tracker()
+    before = tracker.stats().get("prompt_injections_blocked", 0)
+    tracker.record_safety_event("prompt_injection_blocked")
+    tracker.record_safety_event("safety_violation")
+    after = tracker.stats()
+    assert after["prompt_injections_blocked"] == before + 1
+    assert after["safety_violations"] == 1
+    assert after["safety_events"].get("safety_violation") == 1

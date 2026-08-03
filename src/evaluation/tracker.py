@@ -21,6 +21,7 @@ class EvaluationTracker:
     def __init__(self):
         self._records: list = []
         self._sessions: Dict[str, dict] = {}
+        self._safety_events: Dict[str, int] = {}
         self._start_time = time.time()
 
     def record_chat(
@@ -62,6 +63,15 @@ class EvaluationTracker:
         if resolved is not None:
             sess["resolved"] = resolved
 
+    def record_safety_event(self, kind: str, count: int = 1) -> None:
+        """记录一次安全 / 风险事件（如 prompt_injection_blocked、safety_violation）。
+
+        供 api/monitoring.py 的 /metrics/risk 暴露真实安全计数，替代占位假值。
+        """
+        if count <= 0:
+            return
+        self._safety_events[kind] = self._safety_events.get(kind, 0) + count
+
     def stats(self) -> Dict[str, Any]:
         """返回汇总统计"""
         total = len(self._records)
@@ -77,6 +87,9 @@ class EvaluationTracker:
                 "avg_quality_score": 0,
                 "escalation_rate": 0,
                 "avg_turns": 0,
+                "safety_events": dict(self._safety_events),
+                "prompt_injections_blocked": self._safety_events.get("prompt_injection_blocked", 0),
+                "safety_violations": self._safety_events.get("safety_violation", 0),
             }
 
         latencies = [r["latency_ms"] for r in self._records[-100:]]
@@ -104,6 +117,9 @@ class EvaluationTracker:
             "avg_quality_score": sum(scores) / len(scores) if scores else 0,
             "escalation_rate": human_rate,
             "avg_turns": avg_turns,
+            "safety_events": dict(self._safety_events),
+            "prompt_injections_blocked": self._safety_events.get("prompt_injection_blocked", 0),
+            "safety_violations": self._safety_events.get("safety_violation", 0),
         }
 
 

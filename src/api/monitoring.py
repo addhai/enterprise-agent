@@ -117,6 +117,9 @@ async def get_risk_metrics():
         "avg_quality_score": round(stats.get("avg_quality_score", 0), 4),
         "tracked_sessions": stats.get("total_sessions", 0),
         "total_requests": total,
+        "prompt_injections_blocked": stats.get("prompt_injections_blocked", 0),
+        "safety_violations": stats.get("safety_violations", 0),
+        "safety_events": stats.get("safety_events", {}),
         "instrumented": True,
     }
 
