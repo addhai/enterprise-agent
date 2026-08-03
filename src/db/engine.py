@@ -9,9 +9,11 @@ import logging
 import os
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-# 强制 psycopg2 使用 UTF-8，解决 Windows 中文系统 GBK 编码冲突
-os.environ.setdefault("PGCLIENTENCODING", "UTF8")
-os.environ.setdefault("PYTHONUTF8", "1")
+# 强制 psycopg2 使用 UTF-8，解决 Windows 中文系统 GBK 编码冲突。
+# 在 src/api/server.py 入口已经设置过；这里再次强制设置作为兜底，
+# 防止模块被单独导入时（如测试、脚本）遗漏。
+os.environ["PGCLIENTENCODING"] = "UTF8"
+os.environ["PYTHONUTF8"] = "1"
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
