@@ -6,12 +6,16 @@ import os
 import sys
 from pathlib import Path
 
-# 强制 libpq/psycopg2 使用 UTF-8 客户端编码。必须在导入任何可能触发
-# psycopg2 加载的模块之前设置，否则 Windows 中文系统会默认使用 GBK
-# 代码页，导致中文错误信息/数据在 UTF-8 解码时崩溃（UnicodeDecodeError:
+# 强制 libpq/psycopg2 使用 UTF-8 客户端编码 + 英文 locale。必须在导入任何
+# 可能触发 psycopg2 加载的模块之前设置，否则 Windows 中文系统会默认使用
+# GBK 代码页，导致中文错误信息/数据在 UTF-8 解码时崩溃（UnicodeDecodeError:
 # 'utf-8' codec can't decode byte 0xd6 ...）。
 os.environ["PGCLIENTENCODING"] = "UTF8"
 os.environ["PYTHONUTF8"] = "1"
+# LC_ALL/LC_MESSAGES 控制 libpq 客户端自身返回的错误信息语言；设为 C 可
+# 让 Windows 中文系统下的 libpq 也用全 ASCII 英文报错，避免 GBK 解码失败。
+os.environ["LC_ALL"] = "C"
+os.environ["LC_MESSAGES"] = "C"
 
 # 限制 OpenBLAS 线程数，避免内存分配失败
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
