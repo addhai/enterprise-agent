@@ -16,17 +16,17 @@ DEFAULT_USERS = [
     {
         "user_id": "admin-default", "username": "admin", "password": "admin123",
         "role": "super_admin", "is_admin": True, "email": "admin@enterprise.local",
-        "department": "系统管理部",
+        "department": "System Management",
     },
     {
         "user_id": "agent-default", "username": "agent", "password": "agent123",
         "role": "agent", "is_admin": False, "email": "agent@enterprise.local",
-        "department": "客服部",
+        "department": "Customer Service",
     },
     {
         "user_id": "viewer-default", "username": "viewer", "password": "viewer123",
         "role": "viewer", "is_admin": False, "email": "viewer@enterprise.local",
-        "department": "市场部",
+        "department": "Marketing",
     },
 ]
 
