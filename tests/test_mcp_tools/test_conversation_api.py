@@ -118,3 +118,34 @@ def test_tracker_records_real_safety_events():
     assert after["prompt_injections_blocked"] == before + 1
     assert after["safety_violations"] == 1
     assert after["safety_events"].get("safety_violation") == 1
+
+
+def test_delete_conversation_removes_messages():
+    client = _client()
+    token, uid = _register(client)
+    conversation_ensure("SES-DEL-1", "default", uid, channel="web")
+    message_save("SES-DEL-1", "default", uid, "user", "待删除")
+    message_save("SES-DEL-1", "default", uid, "assistant", "也会被删")
+
+    r = client.delete(
+        "/api/v1/conversations/SES-DEL-1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    m = client.get(
+        "/api/v1/conversations/SES-DEL-1/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert m.json()["count"] == 0
+
+
+def test_delete_nonexistent_returns_404():
+    client = _client()
+    token, _ = _register(client)
+    r = client.delete(
+        "/api/v1/conversations/NOPE-XYZ",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 404

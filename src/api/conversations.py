@@ -9,10 +9,15 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from src.api.rbac import get_current_user
-from src.db.repositories import DEFAULT_TENANT, conversation_list, message_list
+from src.api.rbac import Role, get_current_user, require_roles
+from src.db.repositories import (
+    DEFAULT_TENANT,
+    conversation_delete,
+    conversation_list,
+    message_list,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conversations", tags=["会话历史 Conversations"])
@@ -52,3 +57,17 @@ async def get_conversation_messages(
     """获取单个会话的全部消息（按时间正序）。"""
     messages = message_list(session_id, limit)
     return {"session_id": session_id, "count": len(messages), "messages": messages}
+
+
+@router.delete("/{session_id}")
+async def delete_conversation(
+    session_id: str,
+    current_user: dict = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+):
+    """删除会话及其全部消息（仅 admin / agent）。"""
+    ok = conversation_delete(session_id)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在"
+        )
+    return {"success": True, "session_id": session_id}

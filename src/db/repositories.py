@@ -763,3 +763,16 @@ def conversation_list(
                 "updated_at": _dt2f(r.updated_at),
             })
         return result
+
+
+def conversation_delete(session_id: str) -> bool:
+    """删除会话及其全部消息（管理员清理数据用）。返回是否存在并删除。"""
+    with db_session() as s:
+        msgs = s.query(Message).filter(Message.conversation_id == session_id).all()
+        for m in msgs:
+            s.delete(m)
+        conv = s.query(Conversation).filter(Conversation.id == session_id).first()
+        if conv is None:
+            return False
+        s.delete(conv)
+    return True
