@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 # 强制 psycopg2 使用 UTF-8，解决 Windows 中文系统 GBK 编码冲突
 os.environ.setdefault("PGCLIENTENCODING", "UTF8")
@@ -25,7 +26,6 @@ _engine: Engine | None = None
 def _mask(url: str) -> str:
     """日志中隐藏密码"""
     try:
-        from urllib.parse import urlparse
         p = urlparse(url)
         if p.password:
             netloc = p.hostname or ""
@@ -37,21 +37,36 @@ def _mask(url: str) -> str:
     return url
 
 
+def _ensure_pg_encoding(url: str) -> str:
+    """在 Postgres URL 上追加 client_encoding=utf8（避免 Windows GBK 编码冲突）。
+
+    不用 connect_args['options'] 传 '-c client_encoding=UTF8'，因为 libpq 在 Windows
+    中文系统上会用 ANSI 代码页编码该字符串，导致 psycopg2 报 UnicodeDecodeError。
+    """
+    if not (url.startswith("postgresql") or url.startswith("postgres")):
+        return url
+    p = urlparse(url)
+    qs = parse_qs(p.query)
+    if "client_encoding" not in qs:
+        qs["client_encoding"] = ["utf8"]
+        p = p._replace(query=urlencode(qs, doseq=True))
+        return urlunparse(p)
+    return url
+
+
 def _pg_connect_args(url: str) -> dict:
-    """Postgres 连接参数：强制 UTF-8 编码（解决 Windows 中文系统 GBK 编码冲突）"""
+    """Postgres 连接参数：仅保留连接超时，编码通过 URL query 参数强制指定。"""
     if url.startswith("postgresql") or url.startswith("postgres"):
-        return {
-            "connect_timeout": 3,
-            "options": "-c client_encoding=UTF8",
-        }
+        return {"connect_timeout": 3}
     return {}
 
 
 def _pg_reachable(url: str) -> bool:
     """探测 Postgres 是否可达（3 秒超时）"""
     try:
-        connect_args = _pg_connect_args(url)
-        probe = create_engine(url, pool_pre_ping=False, connect_args=connect_args)
+        url_with_encoding = _ensure_pg_encoding(url)
+        connect_args = _pg_connect_args(url_with_encoding)
+        probe = create_engine(url_with_encoding, pool_pre_ping=False, connect_args=connect_args)
         with probe.connect() as conn:
             conn.execute(text("SELECT 1"))
         probe.dispose()
@@ -68,12 +83,12 @@ def _resolve_url() -> str:
     if backend == "sqlite":
         return raw if raw.startswith("sqlite") else "sqlite:///./agent.db"
     if backend == "postgres":
-        return raw
+        return _ensure_pg_encoding(raw)
     # auto
     if raw.startswith("sqlite"):
         return raw
     if _pg_reachable(raw):
-        return raw
+        return _ensure_pg_encoding(raw)
     logger.warning(
         "PostgreSQL unreachable; falling back to SQLite file ./agent.db for local persistence"
     )
