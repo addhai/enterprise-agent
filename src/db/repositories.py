@@ -97,6 +97,7 @@ def _user_row_to_dict(row: User) -> Dict[str, Any]:
         "role": row.role,
         "status": row.status,
         "is_admin": bool(row.is_admin),
+        "password_hash": row.password_hash,
         "email": row.email,
         "department": row.department,
         "created_at": _dt2f(row.created_at),

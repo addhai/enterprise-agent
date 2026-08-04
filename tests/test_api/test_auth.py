@@ -15,9 +15,8 @@ from fastapi.testclient import TestClient
 def client():
     """FastAPI 测试客户端"""
     from src.api.server import app
-    # 触发默认账号初始化
-    from src.api.auth import _init_default_admin
-    _init_default_admin()
+    # 默认账号（admin/agent/viewer）由 tests/conftest.py 的 _init_test_database
+    # 在 session 级用内存 SQLite 完成建表 + seed，无需再手动初始化。
     return TestClient(app)
 
 
