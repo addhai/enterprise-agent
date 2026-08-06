@@ -1,111 +1,224 @@
+/* ============================================================
+   Enterprise Agent — Design System v2
+   Dark-first Sci-Fi · Glassmorphism · Gradient Accents
+   Inspired by: Linear(midnight), Auros(abyssal), Authkit(glass)
+   Reference sites: AUTO-AUTOMATION, CORTEX AI, Qumica
+   ============================================================ */
+
+/* === ROOT: Light Mode (kept for compatibility, but dark is default UI) === */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  /* Core surfaces */
+  --bg-deep: #fafafa;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-glass: rgba(0, 0, 0, 0.02);
+  --bg-glass-hover: rgba(0, 0, 0, 0.05);
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* Text hierarchy */
+  --text-h: #0a0a0f;
+  --text-primary: #1a1a2e;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --text-dim: #d1d5db;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
+  /* Borders */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-light: rgba(0, 0, 0, 0.1);
+  --border-glass: rgba(0, 0, 0, 0.08);
+
+  /* Brand palette */
+  --brand-teal: #059669;
+  --brand-teal-dim: rgba(5, 150, 105, 0.1);
+  --brand-teal-glow: rgba(5, 150, 105, 0.15);
+  --brand-purple: #7c3aed;
+  --brand-purple-dim: rgba(124, 58, 237, 0.1);
+  --brand-blue: #2563eb;
+  --brand-blue-dim: rgba(37, 99, 235, 0.1);
+  --brand-amber: #d97706;
+
+  /* Gradient */
+  --gradient-brand: linear-gradient(135deg, #059669, #7c3aed);
+  --gradient-brand-hover: linear-gradient(135deg, #047857, #6d28d9);
+  --gradient-hero: linear-gradient(180deg, #fafafa 0%, #f0fdf4 50%, #faf5ff 100%);
+
+  /* Glass */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-blur: blur(16px);
+  --glass-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+
+  /* Nav */
+  --nav-bg: rgba(250, 250, 250, 0.8);
+  --nav-border: rgba(0, 0, 0, 0.06);
+
+  /* Chat */
+  --chat-bg: #ffffff;
+  --chat-bubble-self: linear-gradient(135deg, #ecfdf5, #f5f3ff);
+  --chat-bubble-ai: #f8fafc;
+
+  /* Code */
+  --code-bg: #f4f4f5;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-glow-teal: 0 0 24px rgba(5, 150, 105, 0.15);
+  --shadow-glow-purple: 0 0 24px rgba(124, 58, 237, 0.15);
+
+  /* Typography */
+  --sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --heading: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+
+  /* Spacing scale */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* Transition */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-fast: 0.15s var(--ease-out);
+  --transition-normal: 0.25s var(--ease-out);
+  --transition-slow: 0.4s var(--ease-out);
+
+  font: 16px/1.6 var(--sans);
   color-scheme: light;
-  color: var(--text);
-  background: var(--bg);
+  color: var(--text-primary);
+  background: var(--bg-deep);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
 }
 
-/* 深色模式：通过 .dark 类切换，由主题切换按钮控制 */
+/* ============================================================
+   DARK MODE — Default primary experience
+   Deep space black + teal/purple/blue gradient accents
+   ============================================================ */
 .dark {
-  --text: #9ca3af;
-  --text-h: #f3f4f6;
-  --bg: #16171d;
-  --border: #2e303a;
-  --code-bg: #1f2028;
-  --accent: #c084fc;
-  --accent-bg: rgba(192, 132, 252, 0.15);
-  --accent-border: rgba(192, 132, 252, 0.5);
-  --social-bg: rgba(47, 48, 58, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+  --bg-deep: #0a0a0f;
+  --bg-primary: #111118;
+  --bg-secondary: #18181f;
+  --bg-glass: rgba(255, 255, 255, 0.03);
+  --bg-glass-hover: rgba(255, 255, 255, 0.06);
+
+  --text-h: #f0f0f5;
+  --text-primary: #e2e2e8;
+  --text-secondary: #8888a0;
+  --text-muted: #555568;
+  --text-dim: #3a3a48;
+
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-light: rgba(255, 255, 255, 0.1);
+  --border-glass: rgba(255, 255, 255, 0.08);
+
+  --brand-teal: #2dd4a0;
+  --brand-teal-dim: rgba(45, 212, 160, 0.1);
+  --brand-teal-glow: rgba(45, 212, 160, 0.2);
+  --brand-purple: #aa3bff;
+  --brand-purple-dim: rgba(170, 59, 255, 0.1);
+  --brand-blue: #60a5fa;
+  --brand-blue-dim: rgba(96, 165, 250, 0.1);
+  --brand-amber: #fbbf24;
+
+  --gradient-brand: linear-gradient(135deg, #2dd4a0, #aa3bff);
+  --gradient-brand-hover: linear-gradient(135deg, #34d399, #a78bfa);
+  --gradient-hero: linear-gradient(160deg, #06060c 0%, #0c0a1a 25%, #0a1020 50%, #080816 75%, #060610 100%);
+
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: blur(20px);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+
+  --nav-bg: rgba(10, 10, 15, 0.82);
+  --nav-border: rgba(255, 255, 255, 0.08);
+  --nav-link-color: #b0b0c8;
+
+  --chat-bg: #111118;
+  --chat-bubble-self: linear-gradient(135deg, rgba(45, 212, 160, 0.12), rgba(96, 165, 250, 0.1));
+  --chat-bubble-ai: rgba(255, 255, 255, 0.05);
+
+  --code-bg: #1a1a22;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --shadow-glow-teal: 0 0 28px rgba(45, 212, 160, 0.18);
+  --shadow-glow-purple: 0 0 28px rgba(170, 59, 255, 0.18);
+
   color-scheme: dark;
 }
 
-.dark #social .button-icon {
-  filter: invert(1) brightness(2);
-}
-
+/* === Global Reset & Base === */
 #root {
-  width: 1126px;
+  width: 100%;
   max-width: 100%;
   margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
   min-height: 100svh;
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
 }
 
 body {
   margin: 0;
+  background: var(--bg-deep);
+  color: var(--text-primary);
 }
 
-h1,
-h2 {
+h1, h2, h3 {
   font-family: var(--heading);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-h);
+  line-height: 1.2;
+  letter-spacing: -0.03em;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
+h1 { font-size: clamp(32px, 5vw, 52px); }
+h2 { font-size: clamp(24px, 3vw, 32px); }
+h3 { font-size: clamp(18px, 2vw, 22px); }
+
 p {
   margin: 0;
+  line-height: 1.7;
 }
 
-code,
-.counter {
+code, .counter {
   font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+  font-size: 0.88em;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--text-primary);
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+a {
+  color: var(--brand-teal);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+a:hover { color: var(--brand-purple); }
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--text-dim); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Selection */
+::selection {
+  background: var(--brand-teal-dim);
+  color: var(--text-h);
 }
