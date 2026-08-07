@@ -2377,6 +2377,57 @@
 }
 .admin-error::before { content: '⚠ '; }
 
+/* --- Monitoring 监控大屏 --- */
+.monitor-updated {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.monitor-warn { color: #fbbf24; }
+
+.monitor-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin: 14px 0 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  flex-wrap: wrap;
+}
+.monitor-risk-badge {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.monitor-banner-text {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.monitor-banner-text code {
+  background: rgba(127, 127, 127, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.monitor-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.monitor-event-pill {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.1);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+
 .hint {
   font-size: 13px;
   color: var(--text-muted);

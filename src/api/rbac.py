@@ -44,6 +44,7 @@ class Permission(str, Enum):
     USER_VIEW = "user:view"
     USER_MANAGE = "user:manage"
     NOTIFICATION_VIEW = "notification:view"
+    MONITOR_VIEW = "monitor:view"          # 监控大屏：查看业务/质量/风险/系统指标
     # P3-P6 新增模块权限
     CONFIG_VIEW = "config:view"           # 配置中心：查看
     CONFIG_MANAGE = "config:manage"       # 配置中心：修改/重置
@@ -71,6 +72,7 @@ ROLE_PERMISSIONS: Dict[UserRole, List[Permission]] = {
         Permission.CHANNEL_MANAGE,
         Permission.USER_VIEW,
         Permission.NOTIFICATION_VIEW,
+        Permission.MONITOR_VIEW,
         Permission.CONFIG_VIEW,
         Permission.CONFIG_MANAGE,
         Permission.EVALUATION_VIEW,
@@ -86,6 +88,7 @@ ROLE_PERMISSIONS: Dict[UserRole, List[Permission]] = {
         Permission.AGENT_WORKSPACE,
         Permission.SATISFACTION_VIEW,
         Permission.NOTIFICATION_VIEW,
+        Permission.MONITOR_VIEW,
         Permission.CONFIG_VIEW,
         Permission.EVALUATION_VIEW,
         Permission.WORKFLOW_VIEW,
@@ -99,6 +102,7 @@ ROLE_PERMISSIONS: Dict[UserRole, List[Permission]] = {
         Permission.CHANNEL_VIEW,
         Permission.USER_VIEW,
         Permission.NOTIFICATION_VIEW,
+        Permission.MONITOR_VIEW,
         Permission.CONFIG_VIEW,
         Permission.EVALUATION_VIEW,
         Permission.WORKFLOW_VIEW,
