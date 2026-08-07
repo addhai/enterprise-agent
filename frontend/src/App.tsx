@@ -1040,8 +1040,8 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
 
   const formatTime = (ts: number) => new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
-  const BotIcon = ({ color = 'var(--brand-teal)' }: { color?: string }) => (
-    <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="20" height="20">
+  const BotIcon = ({ color = 'var(--brand-teal)', style }: { color?: string; style?: React.CSSProperties }) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="20" height="20" style={style}>
       <rect x="3" y="7" width="18" height="13" rx="3" /><circle cx="9" cy="13" r="1.5" fill={color} stroke="none" /><circle cx="15" cy="13" r="1.5" fill={color} stroke="none" />
       <path d="M12 2v3" stroke={color} strokeWidth="1.5" /><path d="M8 5h8" stroke={color} strokeWidth="1.5" /><path d="M7 18h10" stroke={color} strokeWidth="1.5" opacity="0.5" />
     </svg>
