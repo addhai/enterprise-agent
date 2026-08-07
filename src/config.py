@@ -1,4 +1,20 @@
+import logging
+import os
+import secrets
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# JWT 默认占位密钥（写死在仓库里、公开可查）。仅作「未配置」的探测哨兵：
+# 若运行时 jwt_secret 仍是这个值，说明用户没有通过 env/.env 配置 JWT_SECRET，
+# 此时绝不能把它当真密钥用（任何人都能据此伪造 token），改为生成持久化随机密钥。
+_JWT_DEV_DEFAULT = "enterprise-agent-dev-secret-please-change-in-prod"
+# dev/demo 随机密钥持久化文件（需 gitignore），保证重启后稳定、且不暴露已知默认密钥
+_JWT_DEV_SECRET_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".jwt_secret"
+)
 
 
 class Settings(BaseSettings):
@@ -23,7 +39,9 @@ class Settings(BaseSettings):
     langsmith_project: str = "enterprise-agent"
     langsmith_tracing: bool = True
 
-    # JWT 认证（无状态 token，支持多副本部署；生产环境务必在 .env 配置 JWT_SECRET）
+    # JWT 认证（无状态 token，支持多副本部署）。
+    # 未配置 JWT_SECRET 时，config 会生成持久化随机密钥（.jwt_secret，gitignored）兜底，
+    # 杜绝使用仓库内写死的已知默认密钥（可被伪造）；多副本/生产务必在 .env 配置 JWT_SECRET 共享密钥。
     jwt_secret: str = "enterprise-agent-dev-secret-please-change-in-prod"
     access_token_expire_hours: int = 12
 
@@ -229,6 +247,49 @@ class Settings(BaseSettings):
     mcp_client_github_url: str = ""                           # GitHub MCP Server URL (如 http://localhost:9000/mcp)
     mcp_client_slack_url: str = ""                            # Slack MCP Server URL
     mcp_client_timeout: int = 30                              # MCP Client 超时秒数
+
+
+    @model_validator(mode="after")
+    def _resolve_jwt_secret(self) -> "Settings":
+        """JWT 密钥解析（生产级安全兜底）。
+
+        - 若已通过环境变量 / .env 配置 JWT_SECRET（jwt_secret 不再是默认占位值），
+          直接使用。生产 / 多副本部署必须如此：所有副本共用同一密钥，token 才能跨副本验签。
+        - 若未配置（仍是仓库默认占位值）：进入 dev/demo 模式，改用持久化在
+          .jwt_secret（gitignored）的随机密钥，避免暴露写死的已知默认密钥（可被伪造）。
+          随机密钥首次启动生成并落盘，重启后仍稳定；多副本未设共享密钥时各副本密钥不同，
+          token 仅本副本有效，因此多副本务必配置 JWT_SECRET 环境变量。
+        """
+        if self.jwt_secret != _JWT_DEV_DEFAULT:
+            return self  # 已显式配置，直接使用
+        self.jwt_secret = self._load_or_create_dev_jwt_secret()
+        return self
+
+    def _load_or_create_dev_jwt_secret(self) -> str:
+        """读取或生成 dev 随机密钥（持久化到 .jwt_secret，gitignored）。"""
+        try:
+            if os.path.exists(_JWT_DEV_SECRET_FILE):
+                with open(_JWT_DEV_SECRET_FILE, "r", encoding="utf-8") as f:
+                    val = f.read().strip()
+                if val:
+                    return val
+        except Exception:
+            pass
+        val = secrets.token_urlsafe(48)
+        try:
+            with open(_JWT_DEV_SECRET_FILE, "w", encoding="utf-8") as f:
+                f.write(val)
+        except Exception:
+            logger.warning(
+                "无法持久化 dev JWT 密钥到 %s，将使用进程内随机密钥（重启失效）",
+                _JWT_DEV_SECRET_FILE,
+            )
+        logger.warning(
+            "JWT_SECRET 未配置，已生成一次性 dev 密钥（持久化于 %s）。"
+            "多副本 / 生产部署请通过环境变量 JWT_SECRET 设置共享密钥，否则跨副本 token 不可用。",
+            _JWT_DEV_SECRET_FILE,
+        )
+        return val
 
 
 settings = Settings()

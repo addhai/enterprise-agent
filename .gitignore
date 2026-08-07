@@ -25,3 +25,6 @@ static/
 *.db
 agent.db
 test_agent.db
+
+# dev/demo 随机 JWT 密钥（由 config 自动生成，禁止入库）
+.jwt_secret
