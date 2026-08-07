@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime
 from typing import List, Optional
+
+from sqlalchemy.orm import sessionmaker
 
 from src.config import settings
 
@@ -114,6 +117,117 @@ def _get_pg_pool():
     except Exception:
         logger.info("LongTermMemory: PG unavailable, using in-memory fallback")
         return None
+
+
+# ---------------------------------------------------------------------------
+# SQLAlchemy 双后端兜底（本地 SQLite / 无 PG 时启用，解决长期记忆重启即失）
+# ---------------------------------------------------------------------------
+
+def _loads(s, default):
+    if not s:
+        return default
+    try:
+        return json.loads(s)
+    except Exception:
+        return default
+
+
+_SA_SESSION_FACTORY = None
+_SA_ENABLED = True
+try:
+    from sqlalchemy.orm import sessionmaker as _SAMK  # noqa: F401
+except Exception:
+    _SA_ENABLED = False
+
+
+def _db_use_fallback() -> bool:
+    """PG 不可用时启用 SQLAlchemy 双后端兜底（本地 auto / SQLite 模式）"""
+    return _get_pg_pool() is None and _SA_ENABLED
+
+
+def _db_session():
+    global _SA_SESSION_FACTORY
+    if _SA_SESSION_FACTORY is None:
+        from src.db.engine import get_engine
+        _SA_SESSION_FACTORY = sessionmaker(bind=get_engine())
+    return _SA_SESSION_FACTORY()
+
+
+def _db_save_memory(user_id, topic, content, importance, metadata, entry) -> None:
+    """本地无 PG 时，把长期记忆落库到 long_term_memories 表（SQLite/PG 双后端）。"""
+    if not _db_use_fallback():
+        return
+    try:
+        from src.db.models import LongTermMemoryDB
+        with _db_session() as s:
+            old = (s.query(LongTermMemoryDB)
+                   .filter_by(user_id=user_id, topic=topic, status="active").all())
+            for o in old:
+                o.status = "superseded"
+            ts = entry.timestamp
+            try:
+                dt = datetime.fromisoformat(
+                    ts.replace("Z", "+00:00").split("+")[0]) if ts else datetime.utcnow()
+            except Exception:
+                dt = datetime.utcnow()
+            s.add(LongTermMemoryDB(
+                id=f"MEM-{uuid.uuid4().hex[:12]}",
+                user_id=user_id,
+                topic=topic,
+                content=content,
+                importance=importance,
+                metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
+                timestamp=dt,
+                status="active",
+            ))
+            s.commit()
+    except Exception as e:
+        logger.warning("LongTermMemory SQLAlchemy write failed: %s", e)
+
+
+def _db_keyword_search(user_id, query, top_k) -> List[MemoryEntry]:
+    try:
+        from src.db.models import LongTermMemoryDB
+        with _db_session() as s:
+            rows = (s.query(LongTermMemoryDB)
+                    .filter_by(user_id=user_id, status="active").all())
+        return [MemoryEntry(
+            topic=r.topic, content=r.content, importance=r.importance,
+            metadata=_loads(r.metadata_json, {}),
+            timestamp=r.timestamp.isoformat() if r.timestamp else "",
+            access_count=r.access_count, status=r.status,
+        ) for r in rows]
+    except Exception as e:
+        logger.warning("LongTermMemory SQLAlchemy search failed: %s", e)
+        return []
+
+
+def _db_get_recent(user_id, limit) -> List[MemoryEntry]:
+    try:
+        from src.db.models import LongTermMemoryDB
+        with _db_session() as s:
+            rows = (s.query(LongTermMemoryDB)
+                    .filter_by(user_id=user_id, status="active")
+                    .order_by(LongTermMemoryDB.timestamp.desc()).limit(limit).all())
+        return [MemoryEntry(
+            topic=r.topic, content=r.content, importance=r.importance,
+            metadata=_loads(r.metadata_json, {}),
+            timestamp=r.timestamp.isoformat() if r.timestamp else "",
+            access_count=r.access_count, status=r.status,
+        ) for r in rows]
+    except Exception as e:
+        logger.warning("LongTermMemory SQLAlchemy get_recent failed: %s", e)
+        return []
+
+
+def _db_clear_user(user_id) -> None:
+    try:
+        from src.db.models import LongTermMemoryDB
+        with _db_session() as s:
+            s.query(LongTermMemoryDB).filter_by(user_id=user_id).delete()
+            s.commit()
+    except Exception as e:
+        logger.warning("LongTermMemory SQLAlchemy clear failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +368,10 @@ class LongTermMemory:
             for m in active[settings.long_term_max_per_user:]:
                 m.status = "pruned"
 
+        # 本地无 PG 时落库到 long_term_memories 表（双后端，解决重启即失）
+        if pool is None:
+            _db_save_memory(user_id, topic, content, importance, metadata, entry)
+
     # ------------------------------------------------------------------
     # 检索
     # ------------------------------------------------------------------
@@ -301,6 +419,14 @@ class LongTermMemory:
         pool = _get_pg_pool()
         if pool:
             return self._pg_search(user_id, query, top_k)
+
+        # 本地 SQLite 双后端兜底：从 long_term_memories 表检索
+        if _db_use_fallback():
+            entries = _db_keyword_search(user_id, query, top_k * 3)
+            if entries:
+                scored = self._score_entries(entries, query)
+                scored.sort(key=lambda x: x[1], reverse=True)
+                return [e for e, _ in scored[:top_k]]
 
         # 纯内存搜索
         if user_id not in self._memories:
@@ -495,6 +621,12 @@ class LongTermMemory:
             except Exception as e:
                 logger.warning("PG get_recent failed: %s", e)
 
+        # 本地 SQLite 双后端兜底
+        if _db_use_fallback():
+            db_rows = _db_get_recent(user_id, limit)
+            if db_rows:
+                return db_rows
+
         # 内存 fallback
         if user_id not in self._memories:
             return []
@@ -519,4 +651,6 @@ class LongTermMemory:
             except Exception as e:
                 logger.warning("PG clear_user failed: %s", e)
 
+        if _db_use_fallback():
+            _db_clear_user(user_id)
         self._memories.pop(user_id, None)

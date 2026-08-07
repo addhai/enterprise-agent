@@ -187,3 +187,24 @@ class Tenant(Base):
     status = Column(String(32), default="active")
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class LongTermMemoryDB(Base):
+    """长期记忆（SQLAlchemy 双后端落库：Postgres / SQLite 自动切换）
+
+    与 long_term.py 的 psycopg2 老表 long_term_memory 解耦：
+    - PG 模式下 long_term.py 仍走 psycopg2（保持兼容，不双写）
+    - 本地 auto / SQLite 模式下走本表，解决长期记忆重启即失问题
+    """
+    __tablename__ = "long_term_memories"
+
+    id = Column(String(64), primary_key=True)
+    tenant_id = Column(String(64), default="default", index=True)
+    user_id = Column(String(64), default="", index=True)
+    topic = Column(String(200), default="")
+    content = Column(Text, default="")
+    importance = Column(Float, default=0.5)
+    metadata_json = Column(Text, default="{}")
+    timestamp = Column(DateTime, default=_utcnow)
+    status = Column(String(32), default="active")
+    access_count = Column(Integer, default=0)
