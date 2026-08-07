@@ -29,9 +29,10 @@ logger = logging.getLogger(__name__)
 
 def _resource_to_line(r: dict) -> str:
     ip = r.get("public_ip") or r.get("private_ip") or "-"
+    ip_label = "公网 IP" if r.get("public_ip") else ("内网 IP" if r.get("private_ip") else "IP")
     return (
-        f"  • {r['resource_id']} | {r['name']} | {r['resource_type']} | "
-        f"{r['region']} | {r['status']} | {r['spec']} | IP: {ip}"
+        f"  • {r['name']}（{r['resource_id']}）| {r['region']} | {r['status']} | "
+        f"{r['spec']} | {ip_label} {ip}"
     )
 
 

@@ -118,8 +118,11 @@ class SampleProvider(CloudProvider):
         return "sample"
 
     def _for_tenant(self, tenant_id: str) -> List[dict]:
-        if not tenant_id:
-            return [r for r in _SAMPLE_RESOURCES if r["tenant_id"] == ""]
+        # 未打标签的样本资源归属「演示租户」：匿名/默认租户（"" 或 "default"）
+        # 都能看到，保证 demo 不空且能露出真实样本标记（websrv-01 / 47.98.12.34 等）。
+        # tenant_A / tenant_B 等资源仍按各自租户隔离，多租户演示不受影响。
+        if not tenant_id or tenant_id == "default":
+            return [r for r in _SAMPLE_RESOURCES if r["tenant_id"] in ("", "default")]
         return [r for r in _SAMPLE_RESOURCES if r["tenant_id"] == tenant_id]
 
     def list_resources(self, tenant_id: str = "") -> List[dict]:

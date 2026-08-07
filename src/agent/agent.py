@@ -171,4 +171,8 @@ class CustomerServiceAgent:
         return {
             "output": output,
             "intermediate_steps": result.get("intermediate_steps", []),
+            # LangGraph create_agent 的工具结果在 messages 的 ToolMessage 里，
+            # 不在 intermediate_steps（那是旧 AgentExecutor 格式）。
+            # rag_node 需要从这里抽资源工具的真实返回做「引用可溯源」气泡。
+            "messages": output_messages,
         }

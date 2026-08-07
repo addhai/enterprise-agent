@@ -654,6 +654,10 @@ def rag_node(
 
     result = agent.run_with_trace(content, chat_history=history)
 
+    # 提前抽资源工具结果（create_agent 的工具结果在 messages 的 ToolMessage 里），
+    # 供下方「引用气泡回填」「安全网」「强制精简跳过」三处使用，避免引用未定义变量。
+    tool_docs = _extract_tool_citation_docs(result.get("messages", []))
+
     # 检查是否触发了转人工
     output = result.get("output", "")
     
@@ -688,7 +692,16 @@ def rag_node(
     # 4. 再次检查：如果输出看起来还是 ReAct 格式，直接清空
     if _looks_like_react_output(output):
         output = ""
-    
+
+    # 🔧 资源工具结果优先：模型对工具返回的自然语言包装常出现「重复编号 + 缺空格」
+    # 的畸形输出，且不可靠；而工具原始返回（[查询完成] 共 N 个资源…）本身结构清晰、
+    # 是事实来源、能与引用气泡一一对应。有工具结果时直接用其作为回复，保证演示稳定、
+    # 可读、可溯源（不再依赖正则去修补 LLM 畸形输出）。
+    # 资源工具结果优先：多个工具（ECS+RDS 等）都被调用时，拼接全部结果，
+    # 避免只取 [0] 丢脏数据；工具原文是事实来源，且能与引用气泡一一对应。
+    if tool_docs:
+        output = "\n".join(d.page_content for d in tool_docs)
+
     # 判断是否需要转人工：通过中间步骤判断 Agent 是否真正调用了 escalate_to_human 工具
     # 注意：不能通过输出文字判断，因为 AI 可能在回复里说"欢迎转接人工客服"之类的话
     needs_human = False
@@ -699,15 +712,25 @@ def rag_node(
                 needs_human = True
                 break
 
-    # 强制精简：如果回复超过120字，提取前3个要点
+    # 强制精简：如果回复超过120字，提取前3个要点。
+    # 注意：资源工具结果（tool_docs 已存在）本身结构清晰，跳过精简避免截断/畸形。
     import re
-    if len(output) > 120:
-        # 尝试提取编号列表（1. 2. 3.）
-        points = re.findall(r'\d+\.\s*([^\n]+)', output)
+    if len(output) > 120 and not tool_docs:
+        # 兼容两种格式：编号点跨行（"1. a\n2. b"）或挤在同一行（"1. a 2. b 3. c"）。
+        # 旧正则 [^\n]+ 在单行情形会贪心吞掉整行导致去重失效、回复出现重复编号，
+        # 改用「匹配到下一个编号点或结尾」的非贪婪切分。
+        points = re.findall(r'\d+\.\s*(.*?)(?=\s*\d+\.\s|$)', output, flags=re.DOTALL)
         if points:
-            # 只保留前3个要点
-            top3 = points[:3]
-            output = "\n".join(f"{i+1}. {p.strip()}" for i, p in enumerate(top3))
+            # 去重（LLM 偶发把同一编号点重复输出），再取前3个要点
+            _seen = set()
+            _dedup = []
+            for p in points:
+                ps = p.strip()
+                if ps and ps not in _seen:
+                    _seen.add(ps)
+                    _dedup.append(ps)
+            top3 = _dedup[:3]
+            output = "\n".join(f"{i+1}. {p}" for i, p in enumerate(top3))
         else:
             # 没有编号列表，截断到第一句或前80字
             sentences = re.split(r'[。！？]', output)
@@ -727,6 +750,13 @@ def rag_node(
 
     # ===== 幻觉防护 2: 检索完整性检查 =====
     retrieved_docs = _extract_retrieved_docs(result.get("intermediate_steps", []))
+
+    # 🔧 引用修复（资源工具）：tool_docs 已在 run_with_trace 后提前提取，
+    # 这里把它并回 retrieved_docs，让「引用可溯源」对最亮眼的云资源查询演示生效
+    # （否则 citations 恒为空）。tool_docs 为空时不影响原 KB 检索路径。
+    if tool_docs:
+        retrieved_docs = (retrieved_docs or []) + tool_docs
+
     # ----------------------------------------------------------------------
     # 🔧 气泡修复：search_knowledge_base 工具把结构化 docs 格式化成字符串
     # 喂给模型 → _extract_retrieved_docs 永远拿不到 list → retrieved_docs=[] →
@@ -806,6 +836,7 @@ def rag_node(
         "needs_human": needs_human,
         "quality_score": quality_score,
         "retrieved_docs": retrieved_docs,
+        "tool_sourced": bool(tool_docs),
         "answer_status": "refused" if is_refusal else "answered",
     }
 
@@ -927,6 +958,11 @@ def reflect_node(state: AgentState) -> Dict[str, Any]:
 
     if state.get("has_reflected"):
         return {}
+
+    # 工具来源的回复（云资源真实返回）已是事实文本，且与引用气泡一一对应，
+    # 再喂给第二个 LLM 改写会偶发畸形、破坏溯源。直接保留，跳过反思改写。
+    if state.get("tool_sourced"):
+        return {"has_reflected": True}
 
     final_response = state.get("final_response", "")
     if not final_response:
@@ -1096,8 +1132,11 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         }
 
     # 统一精简：确保回复简洁，不超过3个要点，100字左右
+    # 工具来源的回复（云资源真实返回）已是结构化事实文本，且内部含
+    # "ecs.g7.large" 这类 "数字.字符" 会被下方正则误当成编号点吞掉重排，
+    # 产生 "1. large" 畸形。tool_sourced 时直接跳过精简，保留原样。
     import re
-    if len(final_response) > 100:
+    if len(final_response) > 100 and not state.get("tool_sourced"):
         # 尝试提取编号列表
         points = re.findall(r'\d+\.\s*([^\n]+)', final_response)
         if points:
@@ -1245,3 +1284,43 @@ def _extract_retrieved_docs(intermediate_steps: list) -> list:
             elif isinstance(observation, list):
                 docs.extend(observation)
     return docs
+
+
+# 资源类工具名（与 src/mcp_tools/resource.py 保持一致）。
+# 这些工具的返回是「真实云数据」，应在引用气泡里透出，让坐席/用户
+# 看到本回答基于哪次云资源查询。KB 检索与资源查询走两条引用路径。
+_RESOURCE_TOOL_NAMES = {"query_resources", "describe_resource", "get_resource_monitor"}
+
+
+def _extract_tool_citation_docs(messages: list) -> list:
+    """从 LangGraph create_agent 的 messages 里抽工具真实返回，转成引用卡片。
+
+    create_agent（prebuilt ReAct）不填 intermediate_steps，工具结果在
+    ToolMessage 里。rag_node 原先只读 intermediate_steps，导致资源查询
+    调了工具、citations 却永远为空——「引用可溯源」对最亮眼的云资源演示失效。
+    这里把资源类 ToolMessage 回填为 Document，让气泡正常显示。
+    """
+    from langchain_core.documents import Document
+    from langchain_core.messages import ToolMessage
+
+    docs = []
+    for m in messages or []:
+        if isinstance(m, ToolMessage) and m.name in _RESOURCE_TOOL_NAMES:
+            content = m.content or ""
+            if not isinstance(content, str):
+                content = str(content)
+            if not content.strip():
+                continue
+            docs.append(Document(
+                page_content=content[:1200],
+                metadata={
+                    "source": f"tool/{m.name}",
+                    "doc_id": f"tool-{m.name}-{m.tool_call_id}",
+                    "title": f"云资源查询结果 · {m.name}",
+                    "kb_id": "cloud-resource",
+                    "score": 1.0,
+                    "rrf_score": 1.0,
+                },
+            ))
+    return docs
+

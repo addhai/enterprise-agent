@@ -18,6 +18,9 @@ class AgentState(TypedDict):
     # 是否已经做过 Reflection
     has_reflected: bool
 
+    # 最终回复是否来自云资源工具的真实返回（事实来源，跳过 reflect 二次改写）
+    tool_sourced: bool
+
     # RAG 检索到的文档
     retrieved_docs: Optional[List[Any]]
 
