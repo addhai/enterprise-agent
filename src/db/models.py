@@ -171,3 +171,19 @@ class Notification(Base):
     link = Column(String(500), nullable=True)
     read_by_json = Column(Text, default="[]")
     created_at = Column(DateTime, default=_utcnow)
+
+
+class Tenant(Base):
+    """租户（多租户隔离的根级单元）
+
+    一个租户 = 一个独立的数据空间，其下的用户 / 工单 / 知识库 / 会话彼此不可见。
+    id 即 tenant_id 字符串（如 "default" / "acme" / "globex"）。
+    """
+    __tablename__ = "tenants"
+
+    id = Column(String(64), primary_key=True)             # = tenant_id
+    name = Column(String(200), nullable=False)
+    plan = Column(String(32), default="free")
+    status = Column(String(32), default="active")
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)

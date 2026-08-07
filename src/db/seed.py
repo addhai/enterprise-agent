@@ -30,6 +30,11 @@ DEFAULT_USERS = [
     },
 ]
 
+# 默认租户：单租户部署回退用，启动时确保存在（多租户运行化的根）
+DEFAULT_TENANTS = [
+    {"tenant_id": "default", "name": "Default Tenant", "plan": "free", "status": "active"},
+]
+
 
 def seed_defaults() -> None:
     defaults = []
@@ -41,3 +46,8 @@ def seed_defaults() -> None:
         defaults.append(d)
     ensure_default_users(defaults)
     logger.info("Default users seeded (count=%d)", len(defaults))
+
+    # 预置 default 租户（多租户运行化的基座；其余租户经 /admin/tenants 创建）
+    from src.db.repositories import ensure_default_tenants
+    ensure_default_tenants(DEFAULT_TENANTS)
+    logger.info("Default tenant seeded")

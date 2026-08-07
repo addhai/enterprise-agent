@@ -128,6 +128,7 @@ def _to_user_response(u: Dict[str, Any]) -> UserResponse:
         avatar=u.get("avatar", (u["username"][0].upper() if u["username"] else "?")),
         role=u.get("role", "agent"),
         status=u.get("status", "active"),
+        tenant_id=u.get("tenant_id", "default"),
         email=u.get("email"),
         department=u.get("department"),
         created_at=u.get("created_at", 0.0),
@@ -143,6 +144,7 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=100, description="密码")
     email: Optional[str] = Field(None, description="邮箱")
     department: Optional[str] = Field(None, description="部门")
+    tenant_id: str = Field(default="default", description="归属租户ID（注册时归属，决定数据隔离空间）")
 
 
 class LoginRequest(BaseModel):
@@ -156,6 +158,7 @@ class UserResponse(BaseModel):
     avatar: str
     role: str
     status: str
+    tenant_id: str = "default"
     email: Optional[str] = None
     department: Optional[str] = None
     created_at: float
@@ -202,6 +205,12 @@ async def register(request: RegisterRequest):
     username = request.username.strip()
     password = request.password
 
+    # 归属租户：校验存在（防注册到不存在的租户，保证隔离空间有效）
+    from src.db.repositories import DEFAULT_TENANT, tenant_exists
+    tenant_id = (request.tenant_id or "").strip() or DEFAULT_TENANT
+    if not tenant_exists(tenant_id):
+        raise HTTPException(status_code=400, detail=f"租户不存在: {tenant_id}")
+
     # 检查用户名是否已存在
     if _get_user_by_username(username):
         raise HTTPException(status_code=400, detail="用户名已存在")
@@ -218,6 +227,7 @@ async def register(request: RegisterRequest):
         "is_admin": False,
         "role": UserRole.AGENT.value,
         "status": UserStatus.ACTIVE.value,
+        "tenant_id": tenant_id,
         "email": request.email or f"{username}@enterprise.local",
         "department": request.department or "未分配",
     })

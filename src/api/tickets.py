@@ -29,6 +29,14 @@ from src.api.rbac import require_roles, Role
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tickets"])
 
+# 默认租户（单租户部署回退用）
+_DEFAULT_TENANT = "default"
+
+
+def _get_tenant_id(current_user: Dict[str, Any]) -> str:
+    """从当前登录用户提取 tenant_id，回退到 default（与 knowledge.py 对齐）"""
+    return current_user.get("tenant_id") or _DEFAULT_TENANT
+
 
 # ====================================================================
 # Pydantic 模型
@@ -82,7 +90,7 @@ async def list_tickets(
     """获取工单列表"""
     store = get_default_store()
     filter_params = {
-        "tenant_id": "default",
+        "tenant_id": _get_tenant_id(current_user),
         "status": status,
         "category": category,
         "priority": priority,
@@ -120,7 +128,7 @@ async def get_ticket_stats(
 ):
     """获取工单统计"""
     store = get_default_store()
-    all_tickets = store.list(TicketListFilter(tenant_id="default", limit=10000))
+    all_tickets = store.list(TicketListFilter(tenant_id=_get_tenant_id(current_user), limit=10000))
 
     # agent 只看自己的
     role = current_user.get("role", "viewer")
@@ -157,7 +165,7 @@ async def get_ticket_detail(
 ):
     """获取工单详情"""
     store = get_default_store()
-    ticket = store.get(ticket_id, tenant_id="default")
+    ticket = store.get(ticket_id, tenant_id=_get_tenant_id(current_user))
     if not ticket:
         raise HTTPException(status_code=404, detail="工单不存在")
     return ticket.dict()
@@ -171,7 +179,8 @@ async def create_ticket(
     """创建工单"""
     store = get_default_store()
     req = TicketCreateRequest(
-        tenant_id=request.tenant_id,
+        # 强制归属当前登录用户的租户，忽略客户端传入的 tenant_id，杜绝越权建单
+        tenant_id=_get_tenant_id(current_user),
         user_id=request.user_id,
         title=request.title,
         description=request.description,
@@ -208,7 +217,7 @@ async def update_ticket(
     store = get_default_store()
 
     # agent 不能重新分配或关闭不是自己负责的工单
-    existing = store.get(ticket_id, tenant_id="default")
+    existing = store.get(ticket_id, tenant_id=_get_tenant_id(current_user))
     if not existing:
         raise HTTPException(status_code=404, detail="工单不存在")
 
@@ -221,7 +230,7 @@ async def update_ticket(
         if request.status == TicketStatus.CLOSED:
             raise HTTPException(status_code=403, detail="客服无法直接关闭工单")
 
-    ticket = store.update(ticket_id, tenant_id="default", req=request)
+    ticket = store.update(ticket_id, tenant_id=_get_tenant_id(current_user), req=request)
     if not ticket:
         raise HTTPException(status_code=400, detail="工单更新失败，可能已关闭")
 
@@ -238,7 +247,7 @@ async def assign_ticket(
     store = get_default_store()
     ticket = store.update(
         ticket_id,
-        tenant_id="default",
+        tenant_id=_get_tenant_id(current_user),
         req=TicketUpdateRequest(assignee=assignee, status=TicketStatus.IN_PROGRESS),
     )
     if not ticket:
@@ -269,7 +278,7 @@ async def add_ticket_comment(
 ):
     """添加工单评论"""
     store = get_default_store()
-    existing = store.get(ticket_id, tenant_id="default")
+    existing = store.get(ticket_id, tenant_id=_get_tenant_id(current_user))
     if not existing:
         raise HTTPException(status_code=404, detail="工单不存在")
 
@@ -283,7 +292,7 @@ async def add_ticket_comment(
         author=current_user.get("username", "system"),
         content=request.content,
     )
-    ticket = store.add_comment(ticket_id, tenant_id="default", comment=comment)
+    ticket = store.add_comment(ticket_id, tenant_id=_get_tenant_id(current_user), comment=comment)
     if not ticket:
         raise HTTPException(status_code=404, detail="工单不存在")
 
@@ -299,7 +308,7 @@ async def close_ticket(
     store = get_default_store()
     ticket = store.update(
         ticket_id,
-        tenant_id="default",
+        tenant_id=_get_tenant_id(current_user),
         req=TicketUpdateRequest(status=TicketStatus.CLOSED),
     )
     if not ticket:
@@ -314,7 +323,7 @@ async def delete_ticket(
 ):
     """删除工单（管理员权限）"""
     store = get_default_store()
-    success = store.delete(ticket_id, tenant_id="default")
+    success = store.delete(ticket_id, tenant_id=_get_tenant_id(current_user))
     if not success:
         raise HTTPException(status_code=404, detail="工单不存在")
     return {"success": True}

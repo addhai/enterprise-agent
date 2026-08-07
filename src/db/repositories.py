@@ -25,6 +25,7 @@ from src.db.models import (
     Message,
     Notification,
     Satisfaction,
+    Tenant,
     Ticket,
     User,
 )
@@ -97,6 +98,7 @@ def _user_row_to_dict(row: User) -> Dict[str, Any]:
         "role": row.role,
         "status": row.status,
         "is_admin": bool(row.is_admin),
+        "tenant_id": row.tenant_id,  # 多租户隔离依赖此字段，必须透传
         "password_hash": row.password_hash,
         "email": row.email,
         "department": row.department,
@@ -174,6 +176,70 @@ def ensure_default_users(defaults: List[Dict[str, Any]]) -> None:
                     created_at=datetime.utcnow(),
                 ))
                 logger.info("Seeded default user: %s", d["username"])
+
+
+# ---------------------------------------------------------------------------
+# 租户（多租户隔离的根级单元）
+# ---------------------------------------------------------------------------
+
+def _tenant_row_to_dict(row: Tenant) -> Dict[str, Any]:
+    return {
+        "tenant_id": row.id,
+        "name": row.name,
+        "plan": row.plan,
+        "status": row.status,
+        "created_at": _dt2iso(row.created_at),
+        "updated_at": _dt2iso(row.updated_at),
+    }
+
+
+def tenant_get(tenant_id: str) -> Optional[Dict[str, Any]]:
+    with db_session() as s:
+        row = s.query(Tenant).filter(Tenant.id == tenant_id).first()
+        return _tenant_row_to_dict(row) if row else None
+
+
+def tenant_exists(tenant_id: str) -> bool:
+    return tenant_get(tenant_id) is not None
+
+
+def tenant_create(tenant_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """创建租户（幂等：已存在则直接返回）。tenant_id 由调用方指定。"""
+    with db_session() as s:
+        exists = s.query(Tenant).filter(Tenant.id == tenant_dict["tenant_id"]).first()
+        if exists is not None:
+            return _tenant_row_to_dict(exists)
+        row = Tenant(
+            id=tenant_dict["tenant_id"],
+            name=tenant_dict.get("name", tenant_dict["tenant_id"]),
+            plan=tenant_dict.get("plan", "free"),
+            status=tenant_dict.get("status", "active"),
+            created_at=datetime.utcnow(),
+        )
+        s.add(row)
+    return tenant_get(tenant_dict["tenant_id"])
+
+
+def tenant_list() -> List[Dict[str, Any]]:
+    with db_session() as s:
+        rows = s.query(Tenant).order_by(Tenant.created_at.asc()).all()
+        return [_tenant_row_to_dict(r) for r in rows]
+
+
+def ensure_default_tenants(defaults: List[Dict[str, Any]]) -> None:
+    """若默认租户不存在则创建。defaults 为含 tenant_id/name 的 dict 列表。"""
+    for d in defaults:
+        with db_session() as s:
+            exists = s.query(Tenant).filter(Tenant.id == d["tenant_id"]).first()
+            if exists is None:
+                s.add(Tenant(
+                    id=d["tenant_id"],
+                    name=d.get("name", d["tenant_id"]),
+                    plan=d.get("plan", "free"),
+                    status=d.get("status", "active"),
+                    created_at=datetime.utcnow(),
+                ))
+                logger.info("Seeded default tenant: %s", d["tenant_id"])
 
 
 # ---------------------------------------------------------------------------

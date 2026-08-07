@@ -4,15 +4,17 @@
 import os
 import time
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Path, Depends, Header, Body
+from pydantic import BaseModel, Field
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 from src.websocket.session_manager import get_session_manager, SessionMode
 from src.config import settings
-from src.api.rbac import require_roles, Role
+from src.api.rbac import require_roles, require_user_manage, Role
+from src.db.repositories import tenant_create, tenant_exists, tenant_list
 from src.api.sessions_service import (
     delete_session as _delete_session,
     get_session_detail as _get_session_detail,
@@ -646,4 +648,70 @@ async def get_approval_status(
         raise
     except Exception as e:
         logger.error("Get approval status failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====================================================================
+# 多租户管理 API（仅超级管理员）
+# ====================================================================
+
+class TenantCreateRequest(BaseModel):
+    """创建租户请求"""
+    tenant_id: str = Field(..., min_length=2, max_length=50, description="租户唯一标识")
+    name: str = Field(..., min_length=1, max_length=100, description="租户名称")
+    plan: str = Field("free", description="套餐: free/standard/pro")
+
+
+class TenantResponse(BaseModel):
+    """租户响应"""
+    tenant_id: str
+    name: str
+    plan: str
+    status: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+def _to_tenant_response(d: Dict[str, Any]) -> TenantResponse:
+    return TenantResponse(**{
+        k: d.get(k) for k in ("tenant_id", "name", "plan", "status", "created_at", "updated_at")
+    })
+
+
+@router.post("/admin/tenants", response_model=TenantResponse)
+async def create_tenant(
+    request: TenantCreateRequest,
+    current_user: Dict[str, Any] = Depends(require_user_manage),
+):
+    """创建租户（仅超级管理员）
+
+    用于演示多租户隔离：创建两个租户后，各租户用户无法互相看到工单与知识库。
+    """
+    try:
+        if tenant_exists(request.tenant_id):
+            raise HTTPException(status_code=409, detail=f"租户已存在: {request.tenant_id}")
+        created = tenant_create({
+            "tenant_id": request.tenant_id,
+            "name": request.name,
+            "plan": request.plan,
+            "status": "active",
+        })
+        return _to_tenant_response(created)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Create tenant failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/tenants", response_model=List[TenantResponse])
+async def list_tenants(
+    current_user: Dict[str, Any] = Depends(require_user_manage),
+):
+    """列出所有租户（仅超级管理员）"""
+    try:
+        rows = tenant_list()
+        return [_to_tenant_response(r) for r in rows]
+    except Exception as e:
+        logger.error("List tenants failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
