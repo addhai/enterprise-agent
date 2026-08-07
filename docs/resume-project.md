@@ -38,6 +38,12 @@
 - 完整基础设施配置：APISIX 网关（路由分发/限流/熔断/鉴权/Prometheus 指标）+ RabbitMQ 任务队列拓扑（4 队列 + DLQ 死信）+ PostgreSQL 9 表 Schema（租户隔离 + 对话记录 + 审计日志）+ Prometheus + Grafana 监控面板（12 面板 + 8 告警规则）
 - **GitHub Actions 3 阶段流水线**：lint（ruff + oxlint）→ test（pytest 白名单覆盖 agent/mcp_tools/safety/ticket/evaluation）→ SAST（Bandit + Semgrep）→ 构建与部署（Docker Compose / Helm）
 
+**6. 真实云 API 资源查询适配层**
+
+- 实现阿里云 OpenAPI 只读适配层：零额外依赖（仅 `requests` 手写 RPC Signature V1 签名），覆盖 ECS / RDS / SLB 查询 + 云监控指标（CPU / 内存）
+- 设计 `CloudProvider` 抽象 + `FallbackProvider`：有 AK/SK 直连真实云，无密钥（或真实查空）自动回退样本数据，`source` 标记区分 `aliyun` / `aliyun+sample` / `sample` 三档，demo 不空且真实代码全保留
+- 对话中实时操作端到端实测：经 WebSocket 发起「查资源 / 开工单」，资源工具返回真实/样本数据、工单真实落库（跨进程可查），验证 MCP 工具由 LangChain 原生函数调用真正执行（修复了早期 ReAct 文本格式与 tool_calls 机制冲突导致工具架空的缺陷）
+
 ## 项目成果
 
 **代码规模：**
@@ -72,6 +78,7 @@
 - **单进程即可跑通完整 demo**：`uvicorn src.api.server:app` 在根路径用 `StaticFiles` 同源托管前端 `static/` 目录，一个进程同时提供前端页面 + REST API + **WebSocket 聊天**，无需前端单独起服务或配代理。
 - **聊天主链路为 WebSocket `/ws/chat`**：前端浮动智能客服组件通过该端点与后端 LangGraph 工作流实时流式对话。AI 回复由真实大模型（通义千问）生成，**非 mock**。
 - **实测验证**：`/api/v1/health` 返回 `{"status":"ok"}`；WebSocket 实测可流式返回贴合产品人设的回复（如询问产品功能得到详细答案），未知问题走护栏优雅降级（建议转人工）。
+- **实时操作链路实测（端到端）**：对话中「查云资源 / 开工单」经 WebSocket 端到端验证通过——资源工具返回代码内真实样本数据（含公网 IP、RDS 连接地址等唯一标记），工单真实落库（SQLite/PG，跨进程可查），确认工具由 LangChain 原生函数调用真正执行，而非模型文本编造。
 - **最轻量启动路径（克隆即可演示）**：配置 `.env`（填 `DASHSCOPE_API_KEY`）→ `cd frontend && npm run build`（产物自动输出到 `static/`）→ `set VECTOR_STORE_BACKEND=chroma && uvicorn src.api.server:app` → 打开 `http://localhost:8000` 即可对话。
 - 完整 12 服务云原生栈（APISIX + 业务服务 + PG/Milvus/Redis/RabbitMQ/MinIO + 监控）亦可经 Docker Compose / K3s + Helm 部署。
 
@@ -90,7 +97,8 @@
 | 消息队列 | RabbitMQ 4.0（Topic Exchange + DLX 死信） |
 | 存储 | PostgreSQL 16 + Redis 7 + MinIO |
 | 前端 | React + TypeScript + Vite |
-| 部署 | Docker Compose（开发）+ K3s + Helm（生产） |
+| 云资源查询 | 阿里云 OpenAPI（ECS/RDS/SLB 只读 + 云监控，手写 RPC 签名零依赖） |
+| 部署 | Docker Compose **多副本**（`--scale`）+ K3s + Helm（生产） |
 | CI/CD | **GitHub Actions**（3 阶段：lint / test / SAST） |
 | 监控 | Prometheus + Grafana（12 面板 + 8 告警） |
 | 代码质量 | Ruff + Bandit + Semgrep |

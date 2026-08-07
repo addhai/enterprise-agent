@@ -15,6 +15,8 @@
 - **RAG 检索增强**：HybridRetriever（向量 + 关键词混合检索），开发用 Chroma、生产用 Milvus，支持多租户 Partition Key 隔离。
 - **MCP 工具服务**：开箱即暴露 **38 个标准化工具**（工单 / 账单 / 用户 / SSO / API Key / 审计 / 知识库），任意 MCP 兼容 Agent 可自动发现并调用。
 - **企业级工程能力**：RBAC 三层防护（工具级 + 参数级 + 审计）、多租户强制隔离（LLM 无法跨租户）、5 层安全护栏、GitHub Actions CI（lint + 确定性测试 + SAST）。
+- **真实云资源查询**：对话中可查真实阿里云 ECS / RDS / SLB 实例与云监控指标（手写阿里云 RPC Signature V1 签名，`requests` 零额外依赖客户端，只读）；无 AK/SK 时自动回退样本数据，demo 不空。
+- **容器化多副本部署**：应用层（api/ws/worker/rag/frontend）去除固定 `container_name`、api/ws 设 `replicas: 2`，网关与数据层保持单实例；水平扩展 `docker compose up -d --scale api-service=3 --scale ws-service=3 ...`。
 - **云原生部署**：APISIX 网关、RabbitMQ 异步、Prometheus/Grafana 监控，Docker Compose / K3s + Helm 两条部署路径。
 
 ---
@@ -143,7 +145,8 @@ make dev-rag                       # RAG Server (port 8001)
 | 前端 | React + TypeScript + Vite |
 | 监控 | Prometheus + Grafana |
 | CI/CD | **GitHub Actions**（lint + 确定性测试 + SAST） |
-| 部署 | Docker Compose（开发）/ K3s + Helm（生产） |
+| 云资源查询 | 阿里云 OpenAPI（ECS/RDS/SLB 只读 + 云监控，手写 RPC 签名零依赖；无密钥回退样本） |
+| 部署 | Docker Compose **多副本**（`--scale`）/ K3s + Helm（生产） |
 
 > 注：仓库内存在 `.gitlab-ci.yml` 但与当前 CI 无关，实际流水线运行在 GitHub Actions（`.github/workflows/ci.yml`），请勿混淆。
 

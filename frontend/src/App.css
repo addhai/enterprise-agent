@@ -914,15 +914,21 @@
 /* ============================================================
    FLOATING CHAT WIDGET — Glassmorphism chat panel
    ============================================================ */
-.chat-widget {
+.chat-widget-container {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
+  left: 0;
+  top: 0;
   z-index: 90;
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: flex-end;
-  gap: 12px;
+  /* 容器现在等于按钮大小（56x56），面板用 absolute 延展出去 */
+  pointer-events: none;
+}
+.chat-widget-container > * {
+  pointer-events: auto;
+}
+
+.chat-widget {
+  /* 位置由内联 style 根据按钮角落智能决定（上/下 + 左/右） */
+  position: absolute;
 }
 
 .chat-toggle {
@@ -995,6 +1001,13 @@
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-glass);
   flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-panel-header:active {
+  cursor: grabbing;
 }
 
 .chat-panel-title {
@@ -1073,6 +1086,71 @@
   color: var(--text-muted);
   font-size: 11px;
   text-align: center;
+}
+
+/* ===== 引用知识片段气泡（对标阿里云智能客服） ===== */
+.chat-citations {
+  margin-top: 8px;
+  border: 1px solid rgba(45, 212, 160, 0.25);
+  border-radius: 10px;
+  background: rgba(45, 212, 160, 0.06);
+  overflow: hidden;
+}
+.chat-citations-summary {
+  cursor: pointer;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-teal);
+  user-select: none;
+  list-style: none;
+}
+.chat-citations-summary::-webkit-details-marker { display: none; }
+.chat-citations-summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.chat-citations[open] > .chat-citations-summary::before {
+  content: "▾ ";
+}
+.chat-citations-list {
+  padding: 0 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-citation-item {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 8px;
+}
+.chat-citation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.chat-citation-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-citation-score {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--brand-teal);
+  font-variant-numeric: tabular-nums;
+}
+.chat-citation-content {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-height: 120px;
+  overflow-y: auto;
 }
 
 .chat-msg-thinking {
@@ -1232,7 +1310,6 @@
 
 @media (max-width: 520px) {
   .chat-panel { width: calc(100vw - 32px); max-width: 380px; }
-  .chat-widget { bottom: 12px; right: 12px; }
 }
 
 /* ============================================================
@@ -3051,4 +3128,227 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ============================================================
+   ADMIN DASHBOARD — Full-screen layout (v2)
+   ============================================================ */
+.admin-layout {
+  min-height: 100vh;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-2xl);
+  height: 64px;
+  background: var(--nav-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--nav-border);
+  flex-shrink: 0;
+}
+
+.admin-topbar-left,
+.admin-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.admin-back-btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-full);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+.admin-back-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-glass);
+  background: var(--bg-glass-hover);
+}
+
+.admin-brand-mini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: var(--space-md);
+}
+.admin-brand-mini .nav-logo {
+  width: 30px;
+  height: 30px;
+  font-size: 12px;
+}
+.admin-brand-mini .nav-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.admin-user-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.admin-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 0;
+  min-height: 0;
+}
+
+.admin-sidebar {
+  padding: var(--space-2xl) var(--space-lg);
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  overflow-y: auto;
+}
+
+.admin-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-h);
+  margin: 0 0 var(--space-lg);
+  letter-spacing: -0.02em;
+}
+
+.admin-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tab-btn {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-btn:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+.tab-btn.active {
+  background: var(--brand-teal-dim);
+  color: var(--brand-teal);
+  font-weight: 600;
+}
+
+.admin-main {
+  padding: var(--space-2xl);
+  overflow-y: auto;
+  background: var(--bg-deep);
+}
+
+.tab-content {
+  width: 100%;
+}
+
+/* ===== 知识库命中测试卡片（做精版） ===== */
+.kb-hit-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-glass);
+  overflow: hidden;
+}
+.kb-hit-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.kb-hit-summary::-webkit-details-marker { display: none; }
+.kb-hit-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.kb-hit-badge.pass {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+.kb-hit-badge.fail {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.kb-hit-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-hit-score {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.kb-hit-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.kb-hit-content {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+.kb-hit-source {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 900px) {
+  .admin-body {
+    grid-template-columns: 1fr;
+  }
+  .admin-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .admin-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+  .tab-btn {
+    flex-shrink: 0;
+  }
 }

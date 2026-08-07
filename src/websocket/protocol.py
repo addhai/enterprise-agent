@@ -92,8 +92,17 @@ def build_streaming_chunk(
     done: bool = False,
     delta: Optional[str] = None,
     suggest_human: bool = False,
+    citations: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """构建流式输出片段"""
+    """构建流式输出片段
+
+    citations: 本回答引用的知识片段（可选），透传给前端做「引用知识片段」气泡。
+    """
+    extra: Dict[str, Any] = {}
+    # 用 `is not None` 而不是真值判断：空列表 `[]`（"已查但无引用"）也要挂字段，
+    # 这样前端能区分「真的没引用」与「字段缺失导致 bubbles 不显示」。
+    if citations is not None:
+        extra["citations"] = citations
     return build_server_message(
         TYPE_STREAMING_CHUNK,
         session_id=session_id,
@@ -101,6 +110,7 @@ def build_streaming_chunk(
         done=done,
         delta=delta or text,
         suggest_human=suggest_human,
+        **extra,
     )
 
 

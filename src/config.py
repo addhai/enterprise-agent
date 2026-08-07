@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     langsmith_project: str = "enterprise-agent"
     langsmith_tracing: bool = True
 
+    # JWT 认证（无状态 token，支持多副本部署；生产环境务必在 .env 配置 JWT_SECRET）
+    jwt_secret: str = "enterprise-agent-dev-secret-please-change-in-prod"
+    access_token_expire_hours: int = 12
+
     # Chroma
     chroma_persist_dir: str = "./chroma_data"
     chroma_collection_name: str = "knowledge_base"

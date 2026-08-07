@@ -642,7 +642,11 @@ def rag_node(
         user_id=user_id or state.get("user_id", ""),
         max_turns=state.get("effective_max_turns", settings.max_reasoning_turns),
         memory_context=state.get("memory_context", ""),
-        tenant_id=state.get("tenant_id", ""),
+        # 单租户 demo 场景：匿名/未携带租户时，tenant 默认归 default，
+        # 否则会查不到 default 知识库里的文档（P0 修复后空 tenant 已被隔离）。
+        # 用 `or "default"` 而非 get 默认值：state 里 tenant_id="" 是 falsy，
+        # 需 fallback；evil-corp 这类真租户仍原样保留（多租户隔离不受影响）。
+        tenant_id=state.get("tenant_id") or "default",
         user_access_levels=state.get("user_access_levels", None),
         user_roles=state.get("user_roles", []),
         user_plan=state.get("user_plan", "free"),
@@ -723,6 +727,45 @@ def rag_node(
 
     # ===== 幻觉防护 2: 检索完整性检查 =====
     retrieved_docs = _extract_retrieved_docs(result.get("intermediate_steps", []))
+    # ----------------------------------------------------------------------
+    # 🔧 气泡修复：search_knowledge_base 工具把结构化 docs 格式化成字符串
+    # 喂给模型 → _extract_retrieved_docs 永远拿不到 list → retrieved_docs=[] →
+    # routes.py 的 _build_citations 拿不到料、前端「引用知识片段」气泡永远不显。
+    # 当结果空时，用原始查询主动补一次结构化检索，绕开工具格式化这一步，
+    # 把真实的 Document 列表回填到 retrieved_docs，**仅修改 rag_node 这一处**。
+    if not retrieved_docs and retriever is not None:
+        try:
+            user_id_fb = user_id or state.get("user_id", "")
+            # 同主检索：空 tenant 兜底 default，真租户保留
+            tenant_id_fb = state.get("tenant_id") or "default"
+            access_lv = state.get("user_access_levels", None)
+            fallback_docs = retriever.search(
+                content,
+                top_k=3,
+                user_id=user_id_fb,
+                tenant_id=tenant_id_fb,
+                user_access_levels=access_lv,
+            )
+            if fallback_docs:
+                # 给每个 doc 打分（search 返回的 Document 没 score），取 1/(rank+1) 作为
+                # 伪相似度。**只塞 metadata**：langchain Document 是 pydantic BaseModel，
+                # 不允许在实例上设未声明字段（doc.score = 0.5 会 ValidationError）。
+                # 路由层 _build_citations 已经从 metadata["rrf_score"] 兜底读，所以分数
+                # 会传到前端气泡。
+                for idx, doc in enumerate(fallback_docs):
+                    fake_score = round(1.0 / (idx + 1), 4)
+                    try:
+                        doc.metadata["rrf_score"] = fake_score
+                        doc.metadata["score"] = fake_score  # 双存一份兼容可能读 score 的代码
+                    except Exception:
+                        pass
+                retrieved_docs = fallback_docs
+                logger.info(
+                    "rag_node 引用补检：tenant=%s 命中 %d 条", tenant_id_fb, len(retrieved_docs),
+                )
+        except Exception as _fb_err:
+            logger.debug("rag_node 引用补检失败，跳过：%s", _fb_err)
+    # ----------------------------------------------------------------------
     quality_score: Optional[float] = None
     if retrieved_docs:
         total_tokens = sum(len(doc.page_content if hasattr(doc, "page_content") else str(doc))

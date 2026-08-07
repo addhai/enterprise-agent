@@ -2,12 +2,11 @@
 用户认证 API — 注册、登录、获取当前用户信息
 
 用户/角色数据持久化到数据库（Postgres / SQLite，见 src/db/）。
-password 用 bcrypt 哈希；会话 token 用随机字符串（内存态，重启失效）。
+password 用 bcrypt 哈希；会话 token 用 JWT（无状态，HS256，支持多副本部署，重启不失效）。
 """
 import os
 import time
 import uuid
-import secrets
 import hashlib
 import logging
 from typing import Optional, Dict, Any
@@ -16,6 +15,15 @@ from pydantic import BaseModel, Field
 
 # bcrypt 用于安全的密码哈希（替代不安全的 SHA-256）
 import bcrypt
+
+# JWT（无状态 token，支持多副本部署）
+from src.config import settings
+from src.api.jwt_utils import (
+    create_access_token as _jwt_create,
+    decode_token as _jwt_decode,
+    JWTExpired,
+    JWTInvalid,
+)
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -36,9 +44,8 @@ router = APIRouter(tags=["auth"])
 # 存储（Postgres / SQLite 文件，由 src.db.engine 统一切换）
 # ====================================================================
 
-# 会话 token 仍是内存态（进程重启后失效，用户需重新登录）；
-# 用户/角色等业务数据已落库持久化（见 src/db/seed.py 在 init_db 时 seed 默认账号）。
-_tokens: Dict[str, str] = {}
+# 会话 token 改为无状态 JWT（见 _get_user_by_token），不再依赖进程内字典，
+# 因此支持多副本 / 多进程部署；用户 / 角色等业务数据已落库持久化。
 
 
 def hash_password(password: str) -> str:
@@ -86,19 +93,20 @@ def _hash_password(password: str) -> str:
     return hash_password(password)
 
 
-def _generate_token() -> str:
-    """生成随机 token"""
-    return secrets.token_hex(32)
-
-
 def _get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     """根据用户名查找用户（从 users 表）"""
     return user_get_by_username(username)
 
 
 def _get_user_by_token(token: str) -> Optional[Dict[str, Any]]:
-    """根据 token 查找用户（token→user_id 在内存，user_id→用户落库）"""
-    user_id = _tokens.get(token)
+    """根据 JWT 查找用户（验签 + 过期校验，再从库取最新用户数据）"""
+    try:
+        payload = _jwt_decode(token, settings.jwt_secret)
+    except JWTExpired:
+        return None
+    except JWTInvalid:
+        return None
+    user_id = payload.get("sub")
     if not user_id:
         return None
     return user_get_by_id(user_id)
@@ -214,9 +222,8 @@ async def register(request: RegisterRequest):
         "department": request.department or "未分配",
     })
 
-    # 生成 token
-    token = _generate_token()
-    _tokens[token] = user_id
+    # 生成无状态 JWT（sub = user_id）
+    token = _jwt_create(user_id, settings.jwt_secret, settings.access_token_expire_hours)
 
     logger.info("User registered: user_id=%s, username=%s", user_id, username)
 
@@ -255,9 +262,8 @@ async def login(request: LoginRequest):
     if user.get("status") == UserStatus.SUSPENDED.value:
         raise HTTPException(status_code=403, detail="账号已被禁用")
 
-    # 生成新 token
-    token = _generate_token()
-    _tokens[token] = user["user_id"]
+    # 生成无状态 JWT（sub = user_id）
+    token = _jwt_create(user["user_id"], settings.jwt_secret, settings.access_token_expire_hours)
 
     logger.info("User logged in: user_id=%s, username=%s, role=%s", user["user_id"], username, user.get("role"))
 

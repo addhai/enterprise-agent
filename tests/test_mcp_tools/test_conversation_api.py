@@ -264,7 +264,8 @@ def test_conversation_messages_403_for_viewer_role_users():
     import time as _time
     import uuid as _uuid
     from src.db.repositories import user_create
-    from src.api.auth import _tokens  # 直接注入 token，绕过登录
+    from src.api.jwt_utils import create_access_token
+    from src.config import settings  # JWT secret
 
     client = _client()
     # 直接往 DB 写一条属于 other-user 的会话
@@ -285,8 +286,8 @@ def test_conversation_messages_403_for_viewer_role_users():
         "email": "viewer@test.local",
         "department": "test",
     })
-    token = "test-viewer-token-" + _uuid.uuid4().hex
-    _tokens[token] = viewer_id
+    # 用 JWT 生成 viewer 的 access token（替代旧的 _tokens 内存字典）
+    token = create_access_token(viewer_id, settings.jwt_secret)
 
     r = client.get(
         "/api/v1/conversations/SES-CONV-OTHER/messages",

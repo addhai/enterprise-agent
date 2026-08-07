@@ -42,3 +42,40 @@ def test_all_tools_have_descriptions():
         assert tool.description, f"Tool {tool.name} has no description"
         assert len(tool.description) > 20, \
             f"Tool {tool.name} description too short: {tool.description}"
+
+
+def test_create_tools_default_excludes_ticket_and_resource():
+    """默认 create_tools 不应包含工单/资源工具（避免与 MCP Server 路径重复注册）"""
+    tools = create_tools(retriever=None, user_id="test_user")
+    names = {t.name for t in tools}
+
+    assert "ticket_create" not in names
+    assert "query_resources" not in names
+
+
+def test_create_tools_with_flags_includes_ticket_and_resource():
+    """开启 include_ticket / include_resource 后，对话 Agent 应获得完整工具集且无重复"""
+    tools = create_tools(
+        retriever=None,
+        user_id="test_user",
+        tenant_id="",
+        roles=[],
+        plan="free",
+        include_ticket=True,
+        include_resource=True,
+    )
+    names = [t.name for t in tools]
+    name_set = set(names)
+
+    # 不重复
+    assert len(names) == len(name_set), f"存在重复工具: {[n for n in names if names.count(n) > 1]}"
+
+    # 工单 6 件齐全
+    for t in ["ticket_create", "ticket_query", "ticket_list",
+              "ticket_update", "ticket_close", "ticket_add_comment"]:
+        assert t in name_set, f"缺少工单工具: {t}"
+
+    # 资源 3 件齐全
+    for t in ["query_resources", "describe_resource", "get_resource_monitor"]:
+        assert t in name_set, f"缺少资源工具: {t}"
+

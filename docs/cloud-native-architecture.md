@@ -2,7 +2,7 @@
 
 > 撰写时间：2026-07-15
 > 项目：`enterprise-agent` — 基于 LangGraph + ReAct 的智能客服系统
-> 现状：单进程 FastAPI + Chroma + 可选 PG/Redis，docker-compose 一键部署
+> 现状：FastAPI 微服务（API/WS/Worker/RAG 可多副本）+ Chroma + 可选 PG/Redis，docker-compose 多副本一键部署；资源查询已接真实阿里云 OpenAPI（只读）。
 
 ---
 
@@ -98,6 +98,41 @@ deploy/
 | **定时伸缩** | CronHPA：工作日 9:00-18:00 保持 3 副本，夜间缩到 1 |
 | **冷启动优化** | 镜像分层构建（依赖层 / 代码层），启动探针就绪前不接流量 |
 | **资源限制** | requests=128Mi/0.25CPU, limits=512Mi/1CPU（按服务调优） |
+
+### 1.6 已落地：容器化多副本（Docker Compose）
+
+> 2026-08-06 落地。原 `docker-compose.yml` 每个服务写死 `container_name`、无 `replicas:`，无法水平扩展；现已改造。
+
+应用层（无状态）支持水平扩展：
+
+| 服务 | 改造点 |
+|------|--------|
+| `api-service` / `ws-service` | 去除固定 `container_name`；设 `deploy.replicas: 2` |
+| `agent-worker` / `rag-service` / `frontend` | 去除固定 `container_name`（默认 1 副本，可 `--scale`） |
+| `apisix` + 数据层（pg/milvus/minio/redis/rabbitmq） | **保持单实例**（有状态，需持久化） |
+
+水平扩展命令：
+
+```bash
+docker compose up -d \
+  --scale api-service=3 \
+  --scale ws-service=3 \
+  --scale agent-worker=2
+```
+
+状态层（PG/Redis/MQ/Milvus/MinIO）与网关 APISIX 不 scale，避免数据一致性问题。api/ws 已透传 `ALIYUN_ACCESS_KEY_ID/SECRET/REGION_ID` 环境变量，使多副本均能访问真实云 API。
+
+### 1.7 已落地：真实云 API 资源查询适配层
+
+对话中的「资源查询 / 故障诊断」**走真实阿里云 OpenAPI**，非样本/mock：
+
+- **零依赖客户端** `src/mcp_tools/aliyun_client.py`：仅用 `requests` 手写阿里云 RPC Signature V1 签名（HMAC-SHA1），无需安装阿里云 SDK；只读覆盖 ECS（DescribeInstances）/ RDS（DescribeDBInstances）/ SLB（DescribeLoadBalancers）/ 云监控（DescribeMetricLast 取 CPU/内存）。
+- **Provider 抽象** `src/mcp_tools/cloud_provider.py`：
+  - `AliyunProvider`：有 AK/SK 时直连真实云，归一化为统一资源结构。
+  - `SampleProvider`：无 AK/SK 时回退样本数据（CI / 本地可跑）。
+  - `FallbackProvider`：真实优先、真实查空时回退样本（`source='aliyun+sample'`），由 `ALIYUN_DEMO_FALLBACK` 开关控制。
+- **多租户隔离**：`tenant_id` 由后端强制注入，资源工具对匿名用户返回「请先登录」。
+- **安全边界**：仅只读动作；任何写操作（Create/Modify/Reboot）均不在适配层范围内；Redis 因试用账号未授权而优雅跳过。
 
 ---
 
@@ -520,7 +555,7 @@ K3s Service → Pod      ← 内网明文，不额外加密（K8s 网络策略�
 ## 八、实施路线图
 
 ### Phase 1：基础设施（1-2 周）
-- [ ] Docker Compose 升级（多服务 + MinIO + RabbitMQ）
+- [x] Docker Compose 升级（多服务 + MinIO + RabbitMQ + 多副本 `--scale`）
 - [ ] Chroma → Milvus 迁移脚本 + 双写验证
 - [ ] APISIX 替换 nginx.conf（本地 Docker Compose 验证）
 - [ ] PostgreSQL Schema 设计（租户隔离 + 对话记录表）

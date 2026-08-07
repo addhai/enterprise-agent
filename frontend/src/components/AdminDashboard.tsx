@@ -5,11 +5,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 // ============================================================
 
 interface Props {
-  isOpen: boolean
-  onClose: () => void
   user: { id: string; username: string; email?: string; role?: string } | null
   token: string | null
   onLoginClick: () => void
+  onBack: () => void
 }
 
 // ============================================================
@@ -2933,6 +2932,7 @@ interface KBHitResult {
   content: string
   score: number
   source: string
+  metadata?: Record<string, any>
 }
 
 function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Props['user']; hasPermission: (p: string) => boolean }) {
@@ -3240,15 +3240,33 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
               <button className="btn-primary-small" onClick={runHitTest} disabled={hitLoading}>{hitLoading ? '测试中...' : '测试'}</button>
             </div>
             {hitResults.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {hitResults.map((h, i) => (
-                  <div key={i} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
-                    <div style={{ fontSize: 12, color: '#2563eb', marginBottom: 4 }}>匹配度 {h.score.toFixed(3)}</div>
-                    <div style={{ fontSize: 14 }}>{h.content}</div>
-                    {h.source && <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>来源：{h.source}</div>}
+              (() => {
+                const threshold = selectedKb?.similarity_threshold ?? 0
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>
+                      共召回 {hitResults.length} 段 · 当前库阈值 {threshold.toFixed(3)}（低于阈值的片段在真实对话中不会被采用）
+                    </div>
+                    {hitResults.map((h, i) => {
+                      const passed = h.score >= threshold
+                      const title = (h.metadata && (h.metadata.title || h.metadata.source)) || h.source || '未知文档'
+                      return (
+                        <details key={i} className="kb-hit-card" open={i === 0}>
+                          <summary className="kb-hit-summary">
+                            <span className={`kb-hit-badge ${passed ? 'pass' : 'fail'}`}>{passed ? '采用' : '低于阈值'}</span>
+                            <span className="kb-hit-title">{title}</span>
+                            <span className="kb-hit-score">匹配度 {h.score.toFixed(3)}</span>
+                          </summary>
+                          <div className="kb-hit-body">
+                            <div className="kb-hit-content">{h.content}</div>
+                            {h.source && <div className="kb-hit-source">来源：{h.source}</div>}
+                          </div>
+                        </details>
+                      )
+                    })}
                   </div>
-                ))}
-              </div>
+                )
+              })()
             )}
           </div>
         </div>
@@ -3257,7 +3275,7 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
   )
 }
 
-export default function AdminDashboard({ isOpen, onClose, user, token, onLoginClick }: Props) {
+export default function AdminDashboard({ user, token, onLoginClick, onBack }: Props) {
   const [rbac, setRbac] = useState<RbacInfo | null>(null)
   const [rbacLoading, setRbacLoading] = useState(false)
   const [rbacError, setRbacError] = useState('')
@@ -3265,7 +3283,6 @@ export default function AdminDashboard({ isOpen, onClose, user, token, onLoginCl
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard')
 
   useEffect(() => {
-    if (!isOpen) return
     setRbac(null)
     setRbacError('')
     setLoginRequired(false)
@@ -3291,7 +3308,7 @@ export default function AdminDashboard({ isOpen, onClose, user, token, onLoginCl
         setRbacError(err instanceof Error ? err.message : '获取权限失败')
       })
       .finally(() => setRbacLoading(false))
-  }, [isOpen, token])
+  }, [token])
 
   const hasPermission = useCallback((permission: string) => {
     return !!rbac && rbac.permissions.includes(permission)
@@ -3326,22 +3343,44 @@ export default function AdminDashboard({ isOpen, onClose, user, token, onLoginCl
     }
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="admin-modal-overlay" onClick={onClose}>
-      <div className="admin-modal" onClick={e => e.stopPropagation()}>
-        <button className="admin-modal-close" onClick={onClose}>×</button>
-        <div className="admin-modal-content">
-          <p className="section-label">Admin Dashboard</p>
-          <h2 className="admin-title">管理后台</h2>
+    <div className="admin-layout">
+      <header className="admin-topbar">
+        <div className="admin-topbar-left">
+          <button className="admin-back-btn" onClick={onBack}>← 返回首页</button>
+          <div className="admin-brand-mini">
+            <div className="nav-logo">E</div>
+            <span className="nav-title">Enterprise<span className="brand-highlight">AI</span></span>
+          </div>
+        </div>
+        <div className="admin-topbar-right">
           {user && (
-            <div className="admin-user-bar">
+            <>
               <span className="admin-user-name">{user.username}</span>
               {rbac && <span className={`role-badge role-${rbac.role}`}>{rbac.role_label}</span>}
-            </div>
+            </>
           )}
+        </div>
+      </header>
 
+      <div className="admin-body">
+        <aside className="admin-sidebar">
+          <p className="section-label">Admin Dashboard</p>
+          <h2 className="admin-title">管理后台</h2>
+          <nav className="admin-tabs">
+            {visibleTabs.map(t => (
+              <button
+                key={t.key}
+                className={`tab-btn ${activeTab === t.key ? 'active' : ''}`}
+                onClick={() => setActiveTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        <main className="admin-main">
           {loginRequired && (
             <div className="sessions-placeholder">
               <p>请先登录以访问管理后台</p>
@@ -3353,26 +3392,15 @@ export default function AdminDashboard({ isOpen, onClose, user, token, onLoginCl
           {rbacError && <div className="admin-error">{rbacError}</div>}
 
           {!rbacLoading && !rbacError && !loginRequired && rbac && (
-            <>
-              <div className="admin-tabs">
-                {visibleTabs.map(t => (
-                  <button
-                    key={t.key}
-                    className={`tab-btn ${activeTab === t.key ? 'active' : ''}`}
-                    onClick={() => setActiveTab(t.key)}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
+            <div className="tab-content">
               {visibleTabs.length === 0 ? (
                 <div className="sessions-placeholder"><p>当前账号无任何权限</p></div>
               ) : (
-                <div className="tab-content">{renderTabContent()}</div>
+                renderTabContent()
               )}
-            </>
+            </div>
           )}
-        </div>
+        </main>
       </div>
     </div>
   )

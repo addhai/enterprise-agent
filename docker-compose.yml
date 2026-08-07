@@ -10,7 +10,10 @@
 #   中间件:  rabbitmq
 #   前端:    frontend
 #
-# 启动:    docker compose up -d
+# 启动(单副本):    docker compose up -d
+# 水平扩展(多副本): docker compose up -d --scale api-service=3 --scale ws-service=3 --scale agent-worker=3 --scale rag-service=3 --scale frontend=3
+#   说明: 应用层(api/ws/worker/rag/frontend)已去除固定 container_name，可安全 --scale 水平扩展；
+#         数据层(postgres/milvus/minio/redis/rabbitmq)与网关 apisix 保持单实例(有状态/需持久化)。
 # 停止:    docker compose down
 # 日志:    docker compose logs -f <service-name>
 # =============================================================================
@@ -70,7 +73,6 @@ services:
     build:
       context: .
       dockerfile: docker/api/Dockerfile
-    container_name: agent-api
     restart: unless-stopped
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -87,6 +89,9 @@ services:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-agent}:${RABBITMQ_PASS:-agent}@rabbitmq:5672
       - RAG_SERVICE_URL=http://rag-service:8001
       - MEMORY_SERVICE_URL=http://api-service:8000   # 当前 memory 内嵌在 api 中
+      - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID:-}
+      - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET:-}
+      - ALIYUN_REGION_ID=${ALIYUN_REGION_ID:-cn-hangzhou}
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
       - EVAL_LLM_JUDGE_ENABLED=false
       - EVAL_ONLINE_SAMPLING_RATE=0.0
@@ -109,6 +114,7 @@ services:
       timeout: 5s
       retries: 3
     deploy:
+      replicas: 2   # 多副本：swarm/k8s 生效；纯 compose 用 --scale 覆盖
       resources:
         limits:
           cpus: '2'
@@ -122,7 +128,6 @@ services:
     build:
       context: .
       dockerfile: docker/worker/Dockerfile
-    container_name: agent-worker
     restart: unless-stopped
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -159,7 +164,6 @@ services:
     build:
       context: .
       dockerfile: docker/rag/Dockerfile
-    container_name: agent-rag
     restart: unless-stopped
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -200,13 +204,15 @@ services:
       context: .
       dockerfile: docker/api/Dockerfile   # 共用 api 镜像
       target: production
-    container_name: agent-ws
     restart: unless-stopped
     command: ["python", "-m", "src.websocket.server"]
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_API_BASE=${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID:-}
+      - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET:-}
+      - ALIYUN_REGION_ID=${ALIYUN_REGION_ID:-cn-hangzhou}
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-agent}
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-agent}:${RABBITMQ_PASS:-agent}@rabbitmq:5672
@@ -218,6 +224,7 @@ services:
       - redis
       - rabbitmq
     deploy:
+      replicas: 2
       resources:
         limits:
           cpus: '1'
@@ -226,7 +233,6 @@ services:
   # 前端 — React SPA 静态服务
   frontend:
     image: nginx:1.27-alpine
-    container_name: agent-frontend
     restart: unless-stopped
     volumes:
       - ./static:/usr/share/nginx/html:ro

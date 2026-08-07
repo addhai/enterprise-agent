@@ -810,6 +810,8 @@ def create_tools(
     roles: Optional[List[str]] = None,
     plan: str = "free",
     authority_source: Optional[Callable] = None,
+    include_ticket: bool = False,
+    include_resource: bool = False,
 ):
     """创建客服 Agent 的工具列表
 
@@ -824,6 +826,13 @@ def create_tools(
         - 敏感操作前强制 refresh() 权威数据源
 
     所有权限检查在工具执行前完成，LLM 无法绕过。
+
+    可选项开关：
+        include_ticket:  注册工单管理工具（create/query/list/update/close/comment），
+                         接入 src.ticket.tools.create_ticket_tools
+        include_resource: 注册云资源查询工具（只读，样本数据），
+                          接入 src.mcp_tools.resource.create_resource_tools
+        默认均关闭，避免与 mcp_server.py 中单独注册产生重复工具。
     """
     checker = PermissionChecker(
         user_id=user_id,
@@ -1013,5 +1022,38 @@ def create_tools(
         tools.extend([call_external_github_tool, call_external_slack_tool])
     except (ImportError, NameError) as e:
         logger.warning("External MCP client tools not available: %s", e)
+
+    # 工单管理工具（接入 src.ticket.tools.create_ticket_tools）
+    # 默认关闭，由对话 Agent（CustomerServiceAgent）显式开启，避免 MCP Server 路径重复注册
+    if include_ticket:
+        try:
+            from src.ticket.tools import create_ticket_tools
+
+            ticket_tools = create_ticket_tools(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                roles=roles or [],
+                plan=plan,
+                authority_source=authority_source,
+            )
+            tools.extend(ticket_tools)
+        except (ImportError, NameError) as e:
+            logger.warning("Ticket tools not available: %s", e)
+
+    # 云资源查询工具（只读，样本数据；接入 src.mcp_tools.resource.create_resource_tools）
+    if include_resource:
+        try:
+            from src.mcp_tools.resource import create_resource_tools
+
+            resource_tools = create_resource_tools(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                roles=roles or [],
+                plan=plan,
+                authority_source=authority_source,
+            )
+            tools.extend(resource_tools)
+        except (ImportError, NameError) as e:
+            logger.warning("Resource tools not available: %s", e)
 
     return tools

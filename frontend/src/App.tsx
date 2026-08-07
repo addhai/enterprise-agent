@@ -753,6 +753,15 @@ function ProfileModal({
 // Chat Widget — Floating (preserving ALL logic, updating class names)
 // ============================================================
 
+interface ChatCitation {
+  title: string
+  content: string
+  score: number
+  source: string
+  doc_id?: string
+  kb_id?: string
+}
+
 interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -761,6 +770,7 @@ interface ChatMessage {
   image?: string
   audio?: string
   suggestHuman?: boolean
+  citations?: ChatCitation[]
 }
 
 interface ChatSession {
@@ -795,6 +805,18 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
   const [showSessionList, setShowSessionList] = useState(false)
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
+
+  // 浮动窗位置：可拖拽，持久化到 localStorage
+  const [widgetPos, setWidgetPos] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const saved = localStorage.getItem('chat_widget_pos')
+      if (saved) {
+        const p = JSON.parse(saved)
+        if (typeof p?.x === 'number' && typeof p?.y === 'number') return p
+      }
+    } catch {}
+    return null
+  })
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -850,6 +872,10 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
             if (data.suggest_human) {
               setMessages(prev => { const updated = [...prev]; const lastIdx = updated.length - 1; if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') updated[lastIdx] = { ...updated[lastIdx], suggestHuman: true }; return updated })
             }
+            // 把本回答引用的知识片段挂到末尾这条 AI 消息上（供「引用知识片段」气泡展示）
+            if (data.citations && data.citations.length) {
+              setMessages(prev => { const updated = [...prev]; const lastIdx = updated.length - 1; if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') updated[lastIdx] = { ...updated[lastIdx], citations: data.citations }; return updated })
+            }
           }
         } else if (data.type === 'transfer_notice') { if (!humanEscalated) setHumanEscalated(true); setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '正在为您转接人工客服...', timestamp: Date.now() }]); setIsTyping(false) }
         else if (data.type === 'handoff_context') { setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '转接上下文已记录', timestamp: Date.now() }]); setIsTyping(false) }
@@ -882,6 +908,7 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
         const msgs: ChatMessage[] = (data.messages || []).map((m: any, idx: number) => ({
           id: String(idx), role: m.role as 'user' | 'assistant' | 'system',
           content: m.content, timestamp: new Date(m.timestamp).getTime(),
+          citations: m.metadata?.citations || undefined,
         }))
         setMessages(msgs); setSessionId(sid); localStorage.setItem('session_id', sid)
       }
@@ -914,6 +941,76 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
   }
 
   const handleQuickQuestion = (text: string) => { setInput(text); setTimeout(() => sendMessage(), 100) }
+
+  // 浮窗几何常量（按钮 + 面板以同一点为锚点）
+  const PANEL_W = 380
+  const PANEL_H_MAX = 520
+  const BUTTON_SIZE = 56
+  const PANEL_GAP = 12
+  const EDGE_SAFETY = 16
+
+  // 根据目标位置算「按钮留在视口内、面板不会越界」的最小/最大允许坐标
+  // 同时返回面板该朝哪个方向展开（panelAbove / isRightSide）
+  const computeSafeBounds = (p: { x: number, y: number }, vw: number, vh: number) => {
+    const isRightSide = p.x > vw / 2
+    const spaceAbove = p.y
+    const spaceBelow = vh - p.y - BUTTON_SIZE
+    // 面板优先展开在上方，但前提是上方真的能塞下 520px 面板
+    const panelAbove = spaceAbove >= PANEL_H_MAX + PANEL_GAP + EDGE_SAFETY && spaceAbove >= spaceBelow
+    // 横向：按钮在右半 → 面板右对齐，按钮最左 PANEL_W - BUTTON_SIZE；按钮在左半 → 面板左对齐，按钮最右 vw - PANEL_W
+    const minX = isRightSide ? PANEL_W - BUTTON_SIZE : 0
+    const maxX = isRightSide ? vw - BUTTON_SIZE : vw - PANEL_W
+    // 纵向：面板在上 → 按钮最上 PANEL_H_MAX + GAP；面板在下 → 按钮最下 vh - PANEL_H_MAX - GAP - BUTTON_SIZE
+    const minY = panelAbove ? PANEL_H_MAX + PANEL_GAP + EDGE_SAFETY : 0
+    const maxY = panelAbove ? vh - BUTTON_SIZE : vh - PANEL_H_MAX - PANEL_GAP - EDGE_SAFETY - BUTTON_SIZE
+    return {
+      isRightSide,
+      panelAbove,
+      minX: Math.max(0, minX),
+      maxX: Math.max(BUTTON_SIZE, maxX),
+      minY: Math.max(0, minY),
+      maxY: Math.max(BUTTON_SIZE, maxY),
+    }
+  }
+
+  // 拖拽手柄：mousedown 启动拖动，位移 > 3px 视为拖动（否则视为点击）
+  // toggleOnClick: true 用于按钮（点击展开/收起），false 用于面板头部（已开，不再切换）
+  const handleDragStart = (e: React.MouseEvent, toggleOnClick: boolean = true) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startY = e.clientY
+    const defaultX = Math.max(24, window.innerWidth - 80)
+    const defaultY = Math.max(24, window.innerHeight - 80)
+    const orig = widgetPos ?? { x: defaultX, y: defaultY }
+    let moved = false
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX
+      const dy = ev.clientY - startY
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        moved = true
+        const target = { x: orig.x + dx, y: orig.y + dy }
+        const bounds = computeSafeBounds(target, window.innerWidth, window.innerHeight)
+        const newX = Math.max(bounds.minX, Math.min(bounds.maxX, target.x))
+        const newY = Math.max(bounds.minY, Math.min(bounds.maxY, target.y))
+        setWidgetPos({ x: newX, y: newY })
+      }
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (moved) {
+        setWidgetPos(prev => {
+          if (prev) localStorage.setItem('chat_widget_pos', JSON.stringify(prev))
+          return prev
+        })
+      } else if (toggleOnClick) {
+        setIsOpen(prev => !prev)
+      }
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
@@ -952,33 +1049,92 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
 
   const handleToggleSessionList = () => { if (!showSessionList && user) fetchSessions(); setShowSessionList(!showSessionList) }
 
+  const defaultX = Math.max(24, window.innerWidth - 80)
+  const defaultY = Math.max(24, window.innerHeight - 80)
+  const pos = widgetPos ?? { x: defaultX, y: defaultY }
+
+  // 渲染时再用一次 clamp，兜底历史 localStorage 里的死角位置
+  const bounds = computeSafeBounds(pos, window.innerWidth, window.innerHeight)
+  const safePos = {
+    x: Math.max(bounds.minX, Math.min(bounds.maxX, pos.x)),
+    y: Math.max(bounds.minY, Math.min(bounds.maxY, pos.y)),
+  }
+
+  // 挂载时校正 localStorage 里的旧位置（之前没有边界约束）
+  useEffect(() => {
+    if (widgetPos) {
+      const b = computeSafeBounds(widgetPos, window.innerWidth, window.innerHeight)
+      const clamped = {
+        x: Math.max(b.minX, Math.min(b.maxX, widgetPos.x)),
+        y: Math.max(b.minY, Math.min(b.maxY, widgetPos.y)),
+      }
+      if (clamped.x !== widgetPos.x || clamped.y !== widgetPos.y) {
+        setWidgetPos(clamped)
+        localStorage.setItem('chat_widget_pos', JSON.stringify(clamped))
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   return (
     <>
-      <button className="chat-toggle" onClick={() => setIsOpen(!isOpen)} title="打开聊天">
-        {isOpen ? (
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-        ) : (
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
-        )}
-      </button>
+      <div
+        className="chat-widget-container"
+        style={{
+          position: 'fixed',
+          left: 0,
+          top: 0,
+          width: BUTTON_SIZE,
+          height: BUTTON_SIZE,
+          transform: `translate3d(${safePos.x}px, ${safePos.y}px, 0)`,
+          zIndex: 90,
+          pointerEvents: 'none',
+        }}
+      >
+        <button
+          className="chat-toggle"
+          style={{ pointerEvents: 'auto', cursor: 'grab' }}
+          onMouseDown={(e) => handleDragStart(e, true)}
+          title="拖动移动 · 点击展开"
+        >
+          {isOpen ? (
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+          ) : (
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+          )}
+        </button>
 
-      {isOpen && (
-        <div className="chat-widget">
-          <div className="chat-panel">
-            <div className="chat-panel-header">
-              <div className="chat-panel-title">
-                {user && (
-                  <button className="chat-panel-action-btn" onClick={handleToggleSessionList} title="会话列表" style={{ marginRight: 4 }}>&#9776;</button>
-                )}
-                <BotIcon />
-                <span style={{ marginLeft: 8 }}>智能客服</span>
+        {isOpen && (
+          <div
+            className="chat-widget"
+            style={{
+              position: 'absolute',
+              right: bounds.isRightSide ? 0 : 'auto',
+              left: bounds.isRightSide ? 'auto' : 0,
+              top: bounds.panelAbove ? 'auto' : `${BUTTON_SIZE + PANEL_GAP}px`,
+              bottom: bounds.panelAbove ? `${BUTTON_SIZE + PANEL_GAP}px` : 'auto',
+              pointerEvents: 'auto',
+            }}
+          >
+            <div className="chat-panel">
+              <div
+                className="chat-panel-header"
+                onMouseDown={(e) => handleDragStart(e, false)}
+                style={{ cursor: 'grab' }}
+              >
+                <div className="chat-panel-title">
+                  {user && (
+                    <button className="chat-panel-action-btn" onClick={handleToggleSessionList} onMouseDown={(e) => e.stopPropagation()} title="会话列表" style={{ marginRight: 4 }}>&#9776;</button>
+                  )}
+                  <BotIcon />
+                  <span style={{ marginLeft: 8 }}>智能客服</span>
+                </div>
+                <div className="chat-panel-actions">
+                  <span className={`hero-chat-status-dot ${connected ? '' : 'chat-panel-status-disconnected'} ${connecting ? 'chat-panel-status-connecting' : ''}`}></span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{connecting ? '连接中' : connected ? '已连接' : '离线'}</span>
+                  <button className="chat-panel-action-btn" onClick={() => setIsOpen(false)} onMouseDown={(e) => e.stopPropagation()} title="关闭">&times;</button>
+                </div>
               </div>
-              <div className="chat-panel-actions">
-                <span className={`hero-chat-status-dot ${connected ? '' : 'chat-panel-status-disconnected'} ${connecting ? 'chat-panel-status-connecting' : ''}`}></span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{connecting ? '连接中' : connected ? '已连接' : '离线'}</span>
-                <button className="chat-panel-action-btn" onClick={() => setIsOpen(false)}>&times;</button>
-              </div>
-            </div>
 
             {showSessionList && user && (
               <div className="chat-session-sidebar">
@@ -1022,6 +1178,23 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
                         onClick={() => handleHumanEscalate(msg.id)} disabled={humanEscalated}>
                         {humanEscalated ? '已申请转接' : '转接人工客服'}
                       </button>
+                    )}
+                    {/* 引用知识片段：对标阿里云智能客服，坐席/用户可展开看本回答基于哪些知识 */}
+                    {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
+                      <details className="chat-citations">
+                        <summary className="chat-citations-summary">引用知识片段 {msg.citations.length}</summary>
+                        <div className="chat-citations-list">
+                          {msg.citations.map((c, i) => (
+                            <div key={i} className="chat-citation-item">
+                              <div className="chat-citation-head">
+                                <span className="chat-citation-title">{c.title || '未知文档'}</span>
+                                <span className="chat-citation-score">匹配度 {(c.score ?? 0).toFixed(3)}</span>
+                              </div>
+                              {c.content && <div className="chat-citation-content">{c.content}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     )}
                     <span style={{ display: 'block', fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>{formatTime(msg.timestamp)}</span>
                   </div>
@@ -1068,6 +1241,7 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
           </div>
         </div>
       )}
+      </div>
     </>
   )
 }
@@ -1077,11 +1251,15 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
 // ============================================================
 
 function App() {
-  const [adminModalOpen, setAdminModalOpen] = useState(false)
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
+  const [route, setRoute] = useState<string>(() => {
+    if (typeof window === 'undefined') return '/'
+    const h = window.location.hash.slice(1)
+    return h || '/'
+  })
 
   // Dark mode by default in v2
   const [theme, setTheme] = useState<'light' | 'dark'>(
@@ -1103,8 +1281,23 @@ function App() {
     }
   }, [])
 
+  // Hash 路由：监听 #/admin 切换
+  useEffect(() => {
+    const onHash = () => {
+      const h = window.location.hash.slice(1)
+      setRoute(h || '/')
+    }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  const navigateTo = (path: string) => {
+    window.location.hash = '#' + path
+  }
+
   const handleLoginSuccess = (u: User, t: string) => { setUser(u); setToken(t) }
   const handleLogout = () => { setUser(null); setToken(null); localStorage.removeItem('token'); localStorage.removeItem('user') }
+  const handleBackToHome = () => navigateTo('/')
 
   // Scroll reveal observer
   useEffect(() => {
@@ -1114,12 +1307,27 @@ function App() {
     )
     document.querySelectorAll('.reveal').forEach(el => observer.observe(el))
     return () => observer.disconnect()
-  }, [])
+  }, [route])
+
+  // 管理后台路由：独立全屏页面
+  if (route === '/admin') {
+    return (
+      <ThemeContext.Provider value={{ theme, toggleTheme }}>
+        <AdminDashboard
+          user={user}
+          token={token}
+          onLoginClick={() => setAuthModalOpen(true)}
+          onBack={handleBackToHome}
+        />
+        <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} onLoginSuccess={handleLoginSuccess} />
+      </ThemeContext.Provider>
+    )
+  }
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
       <div className="landing-page">
-        <Navigation onAdminClick={() => setAdminModalOpen(true)} user={user} onLoginClick={() => setAuthModalOpen(true)} onLogout={handleLogout} onProfileClick={() => setProfileModalOpen(true)} />
+        <Navigation onAdminClick={() => navigateTo('/admin')} user={user} onLoginClick={() => setAuthModalOpen(true)} onLogout={handleLogout} onProfileClick={() => setProfileModalOpen(true)} />
         <HeroSection />
         <ArchitectureSection />
         <CapabilitiesSection />
@@ -1128,7 +1336,6 @@ function App() {
         <CTASection />
         <Footer />
         <FloatingChatWidget user={user} token={token} />
-        <AdminDashboard isOpen={adminModalOpen} onClose={() => setAdminModalOpen(false)} user={user} token={token} onLoginClick={() => setAuthModalOpen(true)} />
         <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} onLoginSuccess={handleLoginSuccess} />
         <ProfileModal isOpen={profileModalOpen} onClose={() => setProfileModalOpen(false)} user={user} onLogout={() => { setProfileModalOpen(false); handleLogout() }} />
       </div>

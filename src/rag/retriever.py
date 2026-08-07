@@ -171,9 +171,11 @@ class HybridRetriever:
         """
         if not documents:
             return
+        # 空 tenant_id 统一归为 "default"，与 _rbac_filter 规则一致
+        effective_tenant = tenant_id or "default"
         for doc in documents:
-            if tenant_id and not doc.metadata.get("tenant_id"):
-                doc.metadata["tenant_id"] = tenant_id
+            if not doc.metadata.get("tenant_id"):
+                doc.metadata["tenant_id"] = effective_tenant
         self.vector_store.add_documents(documents)
         self._all_documents.extend(documents)
         try:
@@ -650,6 +652,9 @@ class HybridRetriever:
         if not results:
             return results
 
+        # 空 tenant_id 统一归为 "default"，与 add_documents 规则一致
+        tenant_id = tenant_id or "default"
+
         # 权限等级优先级映射
         access_priority = {
             "public": 0,
@@ -671,8 +676,11 @@ class HybridRetriever:
             meta = doc.metadata
 
             # 规则 1: 租户隔离
-            doc_tenant = meta.get("tenant_id", "")
-            if doc_tenant and doc_tenant != tenant_id:
+            # 文档若未标注 tenant_id，默认归属 default 租户。
+            # 这样既能堵住「漏打 tenant 的文档对所有租户可见」的后门，
+            # 又保持 default 租户现状不变（历史文档无 tenant 字段时仍对 default 可见）。
+            doc_tenant = meta.get("tenant_id") or "default"
+            if doc_tenant != tenant_id:
                 # 文档属于其他租户，跳过
                 continue
 

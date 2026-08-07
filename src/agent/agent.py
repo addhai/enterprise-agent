@@ -37,6 +37,7 @@ class CustomerServiceAgent:
         self.memory_context = memory_context
 
         # 创建工具（传入完整身份上下文 + 权限检查器）
+        # 对话 Agent 显式开启工单 + 资源查询工具，使"对话中开工单 / 查资源"可用
         self.tools = create_tools(
             retriever=retriever,
             user_id=self.user_id,
@@ -44,6 +45,8 @@ class CustomerServiceAgent:
             user_access_levels=self.user_access_levels,
             roles=self.user_roles,
             plan=self.user_plan,
+            include_ticket=True,
+            include_resource=True,
         )
 
         # 构建 System Prompt（含工具描述 + 长期记忆上下文）

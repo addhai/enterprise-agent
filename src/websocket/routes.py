@@ -390,6 +390,48 @@ async def websocket_chat(websocket: WebSocket):
         session_mgr.remove_session(session_id)
 
 
+def _build_citations(retrieved_docs) -> List[Dict[str, Any]]:
+    """把 graph 返回的检索文档规整成前端可展示的引用卡片。
+
+    检索结果里每个 doc 是 langchain Document（有 page_content 与 metadata），
+    metadata 可能含 source / doc_id / kb_id / title 等字段。null / 异常都安全降级。
+    """
+    citations: List[Dict[str, Any]] = []
+    for d in retrieved_docs or []:
+        if not d:
+            continue
+        meta = getattr(d, "metadata", None) or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        source = meta.get("source") or meta.get("doc_id") or ""
+        doc_id = meta.get("doc_id") or ""
+        title = meta.get("title") or meta.get("source") or doc_id or "未知文档"
+        kb_id = meta.get("kb_id") or ""
+        content = getattr(d, "page_content", None) or ""
+        if isinstance(content, str):
+            content = content[:500]
+        else:
+            content = str(content)[:500]
+        try:
+            # 优先 doc.score（langchain Document 的 pydantic 字段），回退到 metadata.score / metadata.rrf_score
+            score = float(
+                getattr(d, "score", 0)
+                or (isinstance(meta, dict) and (meta.get("score") or meta.get("rrf_score") or 0))
+                or 0
+            )
+        except (TypeError, ValueError):
+            score = 0.0
+        citations.append({
+            "title": title,
+            "content": content,
+            "score": round(score, 4),
+            "source": source,
+            "doc_id": doc_id,
+            "kb_id": kb_id,
+        })
+    return citations
+
+
 async def _handle_ai_chat(
     websocket: WebSocket,
     session_id: str,
@@ -595,6 +637,9 @@ async def _handle_ai_chat(
         suggest_human = result.get("suggest_human", False)
         failed_attempts = result.get("failed_attempts", 0)
 
+        # 引用知识片段：把 RAG 检索结果透传给前端（坐席/用户可见「本回答基于哪些知识」）
+        citations = _build_citations(result.get("retrieved_docs") or [])
+
         # 保存失败次数和建议转人工状态到会话状态
         if session_state:
             session_state.failed_attempts = failed_attempts
@@ -661,9 +706,10 @@ async def _handle_ai_chat(
                     suggest_human=suggest_human if is_last else False,
                 ))
 
-            # 完成标记
+            # 完成标记（附带本回答引用的知识片段，供前端做「引用知识片段」气泡）
             await websocket.send_json(build_streaming_chunk(
                 session_id, text="", done=True, suggest_human=suggest_human,
+                citations=citations,
             ))
 
         # 6.5 保存对话历史到会话状态
@@ -681,7 +727,7 @@ async def _handle_ai_chat(
                 await asyncio.to_thread(
                     message_save, session_id, tenant_id, user_id, "assistant",
                     final_response, intent=intent or "",
-                    metadata={"quality_score": quality_score},
+                    metadata={"quality_score": quality_score, "citations": citations},
                 )
             except Exception as e:
                 logger.warning("[Persistence] AI回复落库失败（非致命）: %s", e)
