@@ -56,6 +56,7 @@
 - SQL 级 + 向量级双重隔离：`tenant_id` 由后端从调用上下文强制注入，LLM 无法跨租户读取
 - P0 加固：空 tenant 文档默认归 default 租户，堵住"漏打 tenant 的文档对所有租户可见"后门；`add_documents` 与过滤端统一空 tenant 归一化，避免检索静默过滤掉合法文档
 - RBAC 4 角色（admin / agent / viewer / user）+ 权限点 + 依赖注入 + REST 管理端点 + seed 用户，覆盖工具级 / 参数级 / 审计三层防护
+- 多租户运行化（P1）已落地：新增 `Tenant` 表与租户 CRUD、超级管理员租户端点；工单与知识库租户由 JWT 用户动态解析（忽略客户端传入防越权）；两真实租户互不可见已由 `tests/test_ticket/test_multitenant.py` 端到端验证通过
 
 **9. JWT 无状态鉴权**
 
@@ -70,7 +71,7 @@
 - 基础设施配置：3 个 Dockerfile + 3 个 docker-compose + 11 个 Helm 模板 + 5 个运维脚本
 
 **测试统计：**
-- CI 采用白名单策略（仅跑确定能过的核心目录：`test_agent` / `test_mcp_tools` / `test_safety` / `test_ticket` / `test_evaluation`），**313 个测试通过 + 1 跳过，CI 稳定可绿**
+- CI 采用白名单策略（仅跑确定能过的核心目录：`test_agent` / `test_mcp_tools` / `test_safety` / `test_ticket` / `test_evaluation`），**315 个测试通过 + 1 跳过，CI 稳定可绿**
 - 覆盖模块：agent 工具调用 / MCP 工具 / 安全护栏 / 工单 / 评估追踪器 等核心链路
 - RAG 离线评估 4 项指标（Recall / Precision / MRR / F1）全部通过
 - 安全护栏测试全部通过（输入注入识别 / 已知攻击模式 / 特殊字符清洗 / 正常内容保留）

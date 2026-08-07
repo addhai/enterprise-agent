@@ -2,7 +2,7 @@
 
 > **写给完全没上下文的接手者**：假设你是第一次接触这个项目，没参加过之前任何对话、没看过任何一个文件。从「第 0 节」往下读，读完就能接手继续干。
 >
-> 最后更新：**2026-08-06 会话结束版**（本次把「前端 Design System v2 重写并推送」的完整过程、已决方案、新踩的坑全部并入；前半部分「当前活跃任务快照」先读）。
+> 最后更新：**2026-08-07 晚间版**。本次把「引用气泡 + 隔离核查 + P0 全量推送」「作品集文档并入」「P1 多租户运行化完成并推送」三件事并入；前半部分「当前活跃任务快照」先读。
 > 代码位置：`C:\Users\hai\enterprise-agent`
 > 仓库：`https://github.com/addhai/enterprise-agent`（GitHub，master 分支）
 
@@ -16,7 +16,7 @@
 ### 本次会话在干什么
 收尾「对标阿里云智能客服」的三件事：① 坐席聊天**引用气泡（citations）**；② 知识库**命中测试做精**；③ **多租户 + RBAC 隔离核查**（含 P0 修复）。
 
-### 已经完成了什么（已验证，本地未提交 GitHub）
+### 已经完成了什么（已验证，已推送 GitHub）
 - **引用气泡全链路打通**（前端 + 协议层 + 节点补检 + 路由层）：
   - `src/websocket/protocol.py`（约 101-103 行）：`if citations:` 改 `if citations is not None:`（空列表 `[]` 也能挂字段，之前被真值判断吃成 `None`）。
   - `src/graph/nodes.py`（rag_node，`_extract_retrieved_docs` 之后）：补检 fallback——`retrieved_docs` 为空时，用原始 `content` 调 `retriever.search(content, top_k=3, user_id=…, tenant_id=…, user_access_levels=…)` 拿结构化 Document 填入。
@@ -25,19 +25,18 @@
   - `frontend/src/App.css`：`.chat-citations` / `.chat-citation` 玻璃风深色样式。
   - `frontend/src/components/AdminDashboard.tsx`：命中测试加「采用 / 低于阈值」徽章 + 文档标题 + 内容折叠。
 - **端到端实测通过**：`.workbuddy/tmp_ws_test.py`（登录拿 JWT → WS 发问 → 验 `citations`）。ECS 问题命中 1 条《ECS 远程连接排障 SOP》✓；价格问题 0 条（正确不引用）。
-- **多租户 + RBAC 隔离核查报告**：`docs/多租户-RBAC隔离核查.md`。结论：SQL 级 + 向量级隔离**代码已实现并通过走查**；生产级多租户运行化（租户创建/跨租户越权端到端）**未做**。
+- **多租户 + RBAC 隔离核查报告**：`docs/多租户-RBAC隔离核查.md`。结论：SQL 级 + 向量级隔离**代码已实现并通过走查**；生产级多租户运行化（P1）**已完成并端到端验证**（新增 `Tenant` 表、租户 CRUD、`tickets.py` 动态取 tenant、注册归属租户、超级管理员租户端点，两真实租户互不可见已测）。
 - **P0 修复（已实施）**：`src/rag/retriever.py`（租户隔离规则 1）改为「空 tenant 文档默认归 default，跨租户不可见」→ 堵住"漏打 tenant 的文档对所有租户可见"后门。同时修了一处回归：`src/graph/nodes.py` 两处 `state.get("tenant_id", "")` 改 `... or "default"`（WS 匿名聊天 tenant 原本是空串，被 P0 挡在 default 库外，气泡被打挂，兜底修好）。
 
 ### 当前卡在哪
-- **功能不卡**。引用气泡 / 命中测试 / 隔离核查 / P0 修复均已完成并本地验证。
-- 真正未决（非阻塞，产品决策）：多租户仍是「架构就绪、单租户运行」——`tickets.py` 硬编码 `tenant_id="default"`、无「创建/切换租户」端点。要演示「两租户互不可见」还差 P1 运行化（见第 4 节）。
+- **功能不卡**。引用气泡 / 命中测试 / 隔离核查 / P0 修复 / P1 多租户运行化均已完成并验证。
+- 剩余未决（非阻塞）：P2 多租户（RBAC 加租户维度校验、WS 匿名 `tenant_id` 独立化）尚未做；其余均为低优打磨项。
 
 ### 下一步计划（按优先级）
-1. **多租户运行化 P1**：Ticket API 动态取 tenant（`_get_tenant_id(current_user)` 替代硬编码）、加租户管理端点、注册/登录支持归属租户。
-2. **多租户 P2**：RBAC 加租户维度校验；WS 匿名 tenant 独立化。
-3. **收尾小 bug**：`routes.py` 的 `asyncio` 局部变量名 WARNING（WS 握手时打，非阻塞）；加速 milvus→chroma 冷启动 fallback。
-4. **作品集文档**：更新 `resume-project.md` / README / 架构说明，把已完成的全栈能力整理成简历可贴叙事。
-5. **（归用户决策）** 之前遗留的真实云 API 接入那批未提交后端文件（`aliyun_client.py` 等）是否提交。
+1. **多租户 P2**：RBAC 加租户维度校验；WS 匿名 `tenant_id` 独立化。
+2. **收尾小 bug**：`routes.py` 的 `asyncio` 局部变量名 WARNING（WS 握手时打，非阻塞）；加速 milvus→chroma 冷启动 fallback。
+3. **作品集文档**：更新 `resume-project.md` / README（引用气泡 + 命中测试 + 隔离核查 + P0 + P1 多租户 + JWT 已并入，测试数 313→315）已并入并推送。
+4. **真实云 API 接入那批后端文件**：`aliyun_client.py` / `cloud_provider.py` / `resource.py` 等已于 2026-08-07 全量推送（commit `4620860`），无需再决策。
 
 ### 踩过的坑（绝对不要再踩 · 本次会话新增，前端历史坑见第 5 节坑 32-36）
 - **坑 37（气泡根因）**：`search_knowledge_base` 工具返回**格式化字符串**，而 `nodes.py:_extract_retrieved_docs` 只认 `observation` 为 list → `retrieved_docs` 永远空 → 气泡断链。修复是在 rag_node 补检 `retriever.search`。
@@ -110,16 +109,16 @@
 - `src/App.tsx`：Hero 左右分栏（左文案 + 右聊天预览浮动）；`ThemeContext` 默认 `dark`；聊天/RBAC/登录逻辑 100% 保留。
 - `src/components/GeometricBackground.tsx`：纯静态 SVG 暖橙几何色块，作 Hero 背景，零依赖零动画零 glow。
 
-### D2. 本次会话新增（2026-08-07 凌晨 · 引用气泡 + 隔离核查 + P0，本地已验证未推送）
+### D2. 本次会话新增（2026-08-07 · 引用气泡 + 隔离核查 + P0，已推送 GitHub）
 - **引用气泡（citations）全链路打通**：
   - 后端：`src/websocket/protocol.py`（空列表也能挂 `citations` 字段）、`src/graph/nodes.py`（rag_node 补检 `retriever.search` 填结构化 `retrieved_docs`）、`src/websocket/routes.py`（`_build_citations` 规整 + score 兜底）。
   - 前端：`frontend/src/App.tsx`（`ChatCitation` 接口 + `details/summary` 气泡渲染 + `loadSession` 恢复）、`frontend/src/App.css`（玻璃风样式）、`frontend/src/components/AdminDashboard.tsx`（命中测试「采用/低于阈值」徽章 + 标题 + 折叠）。
   - 实测：`.workbuddy/tmp_ws_test.py` 登录→WS 发问，ECS 问题命中 1 条、价格问题 0 条。
-- **多租户 + RBAC 隔离核查**：`docs/多租户-RBAC隔离核查.md`（SQL 级 + 向量级隔离代码已实现并通过走查；生产级运行化未做）。
+- **多租户 + RBAC 隔离核查**：`docs/多租户-RBAC隔离核查.md`（SQL 级 + 向量级隔离代码已实现并通过走查；**P1 运行化已后续完成并推送，两真实租户互不可见已端到端验证**）。
 - **P0 修复**：`src/rag/retriever.py` 空 tenant 文档默认归 default 堵后门；`src/graph/nodes.py` 两处 `tenant_id` 兜底 `or "default"` 修回归。
 
 ### 当前 CI 状态
-- **291 passed / 1 skipped / 0 failed**（GitHub Actions 白名单：`tests/test_agent/ tests/test_mcp_tools/ tests/test_safety/ tests/test_ticket/ tests/test_evaluation/`）。
+- **315 passed / 1 skipped / 0 failed**（GitHub Actions 白名单：`tests/test_agent/ tests/test_mcp_tools/ tests/test_safety/ tests/test_ticket/ tests/test_evaluation/`，含新增两租户隔离测试）。
 - 真实覆盖率约 **17%**（作品集无需硬刷 80%）。
 
 ---
@@ -140,27 +139,26 @@
 - 当前无强制性后端任务。可选低优：更多确定性测试、更多可观测指标、登录鉴权 UI（用户说过"先放一放"，归用户）。
 
 **本次会话（2026-08-07）已自主完成、可继续的方向**：
-- 引用气泡、命中测试精做、多租户/RBAC 隔离核查、P0 修复——均已完成并本地验证（见第 2 节 D2）。**这些改动尚未提交 GitHub**，若要入仓需单独 `git add` 指定路径（勿 `git add .`）。
-- 多租户运行化 P1/P2 属于产品决策，建议先和用户对齐是否要做"两租户互不可见"的端到端演示。
+- 引用气泡、命中测试精做、多租户/RBAC 隔离核查、P0 修复，均已完成并验证，且已推送 GitHub（见第 2 节 D2 与提交记录）。
+- 多租户运行化 P1 已完成并推送（两真实租户互不可见端到端验证）；P2（RBAC 租户维度校验）仍待做。
 
-### 🗂️ 本地未提交 / 勿提交清单（git status 实测，2026-08-06）
-`git status --short`（排除 `.workbuddy/`、`.trae/`）当前显示：
-- **后端改动（未提交，疑似真实云 API 接入，勿碰勿提交）**：
-  - 修改（tracked）：`src/agent/agent.py`、`src/agent/prompt.py`、`src/agent/tools.py`、`tests/test_agent/test_tools.py`、`docker-compose.yml`、`README.md`、`docs/cloud-native-architecture.md`、`docs/resume-project.md`
-  - 新增（untracked）：`src/mcp_tools/aliyun_client.py`、`src/mcp_tools/cloud_provider.py`、`src/mcp_tools/resource.py`、`tests/test_mcp_tools/test_cloud_provider.py`、`tests/test_mcp_tools/test_resource.py`
+### 🗂️ 本地未提交 / 勿提交清单（2026-08-07 晚间状态）
+
+核心后端代码（引用气泡 + P0 修复 + 真实云 API 接入 + P1 多租户运行化）已全部推送 GitHub，工作区与 origin 同步。**以下仅剩个人/垃圾文件提醒，核心代码无需再处理。**
+
 - **个人/垃圾文件（绝对不提交）**：`install.log`、`test_out.log`、`test_out.txt`、`docs/agent-project-roadmap.html`、`docs/需求文档-模仿阿里云AI助理智能体.md`、`改动方案.md`（这些是本会话/更早产生的个人或规划文档）
-- **本交接文档自身**：`HANDOFF.md` 当前是修改态（本会话刚重写），未提交；如需入仓，单独 `git add HANDOFF.md` 提交。
-- **绝对禁止 `git add .`**：上面这些大部分都不该进仓库。
+- **本交接文档自身**：`HANDOFF.md` 本次已更新（同步 P1 状态），修改态未提交；如需入仓，单独 `git add HANDOFF.md` 提交。
+- **绝对禁止 `git add .`**：个人/规划文档不该进仓库。
 
 ---
 
 ## 4. 下一步计划（按优先级）
 
-1. **多租户运行化 P1（产品决策后做）**：Ticket API 动态取 tenant（`_get_tenant_id(current_user)` 替代 `tickets.py` 硬编码 `tenant_id="default"`）、加租户管理端点、注册/登录支持归属租户。→ 才能演示「两租户互不可见」。
+1. **多租户运行化 P1（已完成并推送，commit `d9e34ab`）**：Ticket API 动态取 tenant（`_get_tenant_id(current_user)` 替代 `tickets.py` 硬编码 `tenant_id="default"`）、加租户管理端点、注册/登录支持归属租户。两真实租户互不可见已端到端验证。
 2. **多租户 P2**：RBAC 加租户维度校验；WS 匿名 `tenant_id` 独立化。
 3. **收尾小 bug（低风险可自主）**：`routes.py` 的 `asyncio` 局部变量名 WARNING（WS 握手时打，非阻塞）；加速 milvus→chroma 冷启动 fallback。
-4. **作品集文档**：更新 `docs/resume-project.md` / README / 架构说明，把"引用气泡 + 命中测试 + 隔离核查 + P0"并入全栈叙事。
-5. **【归用户决策】真实云 API 接入那批未提交后端文件**（`aliyun_client.py` / `cloud_provider.py` / `resource.py` 等）是否提交。
+4. **作品集文档（已完成并推送）**：`docs/resume-project.md` / README 已并入引用气泡 + 命中测试 + 隔离核查 + P0 + P1 多租户 + JWT，测试数 313→315。
+5. **真实云 API 接入那批后端文件（已推送，commit `4620860`）**：`aliyun_client.py` / `cloud_provider.py` / `resource.py` 等无需再决策。
 6. **【归用户】本机 Postgres 验证**：若还没跑，按 `POSTGRES_LOCAL_SETUP_GUIDE.md` 验证。
 7. **【可选低优先】少量高价值测试**：补确定性单测涨覆盖率，不专门刷 80%。
 8. **【归用户】登录鉴权 UI**：用户说过"先放一放"。
@@ -243,7 +241,7 @@
 | `frontend/src/App.tsx` | 官网首页 + 登录 + 个人中心 + 浮动聊天(WS)，Hero 左右分栏 | ✅ 已推送 |
 | `frontend/src/components/GeometricBackground.tsx` | Hero 背景纯静态 SVG 暖橙几何色块 | ✅ 已推送（新文件） |
 | `frontend/src/components/AdminDashboard.tsx` | 多 Tab 管理后台（无前缀类名，见坑 32） | ✅ 用户早已写好，本次只补样式 |
-| `docs/多租户-RBAC隔离核查.md` | 多租户 + RBAC 隔离走查报告（含 P0 实施） | ✅ 本次新增，未提交 |
+| `docs/多租户-RBAC隔离核查.md` | 多租户 + RBAC 隔离走查报告（含 P0 实施） | ✅ 本次新增，已推送 |
 | `src/websocket/protocol.py` | WS 消息协议（citations 字段透传） | ✏️ 本次改（空列表挂字段） |
 | `src/graph/nodes.py` | LangGraph 节点（rag_node 补检 + tenant 兜底） | ✏️ 本次改 |
 | `src/rag/retriever.py` | 混合检索（租户隔离规则 1 堵后门） | ✏️ 本次改 |
@@ -306,18 +304,18 @@ docker compose up -d
 
 你这个项目的真实身份：**个人简历作品集，对标阿里云 AI 助理的智能客服仿写，按生产级标准做**（详见第 0 节）。
 
-### 本次会话（2026-08-07 凌晨）做了什么（已本地验证，未推 GitHub）
+### 本次会话（2026-08-07 晚间）做了什么（已验证，已推送 GitHub）
 1. **引用气泡（citations）全链路打通**：AI 回复下方出现「引用知识片段 N」可展开气泡，对标阿里云智能客服坐席引用。改了 protocol / nodes(rag_node 补检) / routes(_build_citations) / 前端 App.tsx+App.css / AdminDashboard 命中测试徽章。
 2. **知识库命中测试做精**：加「采用 / 低于阈值」徽章 + 文档标题 + 内容折叠。
-3. **多租户 + RBAC 隔离核查**：产出 `docs/多租户-RBAC隔离核查.md`，并实施了 P0（堵空 tenant 后门）。
+3. **多租户 + RBAC 隔离核查**：产出 `docs/多租户-RBAC隔离核查.md`，实施了 P0（堵空 tenant 后门）；**P1 运行化后续完成并推送，两真实租户互不可见端到端验证**。
 4. 修了一处回归：P0 把隔离变严后，WS 匿名聊天的空 tenant 看不到 default 库 → 气泡被打挂，用 `or "default"` 兜底修好（见坑 39）。
 
-### 待你决策 / 下一步
-- **多租户要不要做"运行化"（两真实租户互不可见）**：现在架构就绪但单租户运行，要演示端到端还差 P1（Ticket API 动态取 tenant + 租户端点）。
-- 这批引用气泡 / 隔离修复改动**尚未提交 GitHub**，需要我帮你 `git add` 指定路径提交时再说。
-- 之前遗留的「真实云 API 接入那批未提交后端文件」（aliyun_client.py 等）仍待你决策是否提交。
+### 待你下一步
+- **多租户运行化 P1 已完成**：两真实租户互不可见的端到端演示已实现并推送（含 `tests/test_ticket/test_multitenant.py` 验证）。剩余 P2（RBAC 租户维度校验、WS 匿名 tenant 独立化）待做。
+- 引用气泡 / 隔离修复 / 真实云 API 接入 / P1 多租户均已推送 GitHub，工作区与 origin 同步。
+- 之前遗留的「真实云 API 接入那批后端文件」（aliyun_client.py 等）已随全量推送入仓，无需再决策。
 
-**铁律重申**：绝不要 `git add .` / `git add -A`。本会话全程只改了指定文件，未提交。
+**铁律重申**：绝不要 `git add .` / `git add -A`。本会话全程只改了指定文件并已推送指定路径。
 
 <details><summary>📜 历史：2026-08-06 前端 Design System v2 会话（已提交 f2f6ab0 推送）</summary>
 
