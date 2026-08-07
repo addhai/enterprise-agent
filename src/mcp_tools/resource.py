@@ -50,6 +50,21 @@ def _source_note(provider: CloudProvider) -> str:
     return "（数据来源：阿里云实时 API）" if provider.source == "aliyun" else "（演示样本数据）"
 
 
+# 资源类型 → 中文分组标题（查询结果按类型分组，方便坐席快速浏览）
+_RESOURCE_TYPE_LABELS = {
+    "ECS": "云服务器 ECS",
+    "RDS": "云数据库 RDS",
+    "SLB": "负载均衡 SLB",
+    "REDIS": "云数据库 Redis",
+    "OSS": "对象存储 OSS",
+    "MONGODB": "云数据库 MongoDB",
+}
+
+
+def _resource_type_label(rt: str) -> str:
+    return _RESOURCE_TYPE_LABELS.get((rt or "").upper(), rt or "其他资源")
+
+
 def create_resource_tools(
     user_id: str = "",
     tenant_id: str = "",
@@ -115,9 +130,16 @@ def create_resource_tools(
             scope = tenant_id or "演示租户"
             return f"[查询完成] 租户 {scope} 下没有匹配的资源。"
 
-        lines = [f"[查询完成] 共 {len(resources)} 个资源（租户: {tenant_id or '演示租户'}）{_source_note(provider)}:"]
+        # 按资源类型分组，加中文标题：输出即 demo 展示内容，确定性、易读、可溯源
+        groups: dict = {}
         for r in resources:
-            lines.append(_resource_to_line(r))
+            groups.setdefault(r["resource_type"], []).append(r)
+
+        lines = [f"[查询完成] 共 {len(resources)} 个资源（租户: {tenant_id or '演示租户'}）{_source_note(provider)}:"]
+        for rt, items in groups.items():
+            lines.append(f"\n### {_resource_type_label(rt)}（{len(items)} 个）")
+            for r in items:
+                lines.append(_resource_to_line(r))
         lines.append("\n提示：使用 describe_resource(<资源ID>) 查看详情，get_resource_monitor(<资源ID>) 查看监控。")
         return "\n".join(lines)
 
