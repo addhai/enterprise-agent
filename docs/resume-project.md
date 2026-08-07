@@ -44,6 +44,24 @@
 - 设计 `CloudProvider` 抽象 + `FallbackProvider`：有 AK/SK 直连真实云，无密钥（或真实查空）自动回退样本数据，`source` 标记区分 `aliyun` / `aliyun+sample` / `sample` 三档，demo 不空且真实代码全保留
 - 对话中实时操作端到端实测：经 WebSocket 发起「查资源 / 开工单」，资源工具返回真实/样本数据、工单真实落库（跨进程可查），验证 MCP 工具由 LangChain 原生函数调用真正执行（修复了早期 ReAct 文本格式与 tool_calls 机制冲突导致工具架空的缺陷）
 
+**7. 引用可溯源与知识库命中验证**
+
+- 针对智能客服"回复是否有据可依"的可信度问题，实现**引用气泡（citations）全链路**：AI 回复下方出现"引用知识片段 N"可展开气泡，对标阿里云智能客服坐席引用
+- 后端协议层（`protocol.py`）修正空列表挂字段；检索节点（`nodes.py`）补检 `retriever.search` 填结构化 `retrieved_docs`；路由层（`routes.py`）规整并兜底 score 来源，三层缺一不可
+- 前端 `App.tsx` 定义 `ChatCitation` 接口 + `details/summary` 气泡渲染，`loadSession` 从 `metadata.citations` 恢复，刷新 / 重连不丢引用
+- 知识库命中测试做精：AdminDashboard 加"采用 / 低于阈值"徽章 + 文档标题 + 内容折叠，每条召回的质量直观可见
+
+**8. 多租户隔离与 RBAC 权限**
+
+- SQL 级 + 向量级双重隔离：`tenant_id` 由后端从调用上下文强制注入，LLM 无法跨租户读取
+- P0 加固：空 tenant 文档默认归 default 租户，堵住"漏打 tenant 的文档对所有租户可见"后门；`add_documents` 与过滤端统一空 tenant 归一化，避免检索静默过滤掉合法文档
+- RBAC 4 角色（admin / agent / viewer / user）+ 权限点 + 依赖注入 + REST 管理端点 + seed 用户，覆盖工具级 / 参数级 / 审计三层防护
+
+**9. JWT 无状态鉴权**
+
+- 零依赖 HS256（RFC 7519）实现 access token，替代进程内 token 字典
+- 无状态设计使鉴权支持多副本 / 多进程部署（任意副本独立验签，无需共享内存），重启不失效，契合容器化多副本形态
+
 ## 项目成果
 
 **代码规模：**
@@ -52,7 +70,7 @@
 - 基础设施配置：3 个 Dockerfile + 3 个 docker-compose + 11 个 Helm 模板 + 5 个运维脚本
 
 **测试统计：**
-- CI 采用白名单策略（仅跑确定能过的核心目录：`test_agent` / `test_mcp_tools` / `test_safety` / `test_ticket` / `test_evaluation`），**254 个测试全部通过，CI 稳定可绿**
+- CI 采用白名单策略（仅跑确定能过的核心目录：`test_agent` / `test_mcp_tools` / `test_safety` / `test_ticket` / `test_evaluation`），**313 个测试通过 + 1 跳过，CI 稳定可绿**
 - 覆盖模块：agent 工具调用 / MCP 工具 / 安全护栏 / 工单 / 评估追踪器 等核心链路
 - RAG 离线评估 4 项指标（Recall / Precision / MRR / F1）全部通过
 - 安全护栏测试全部通过（输入注入识别 / 已知攻击模式 / 特殊字符清洗 / 正常内容保留）
@@ -78,6 +96,7 @@
 - **单进程即可跑通完整 demo**：`uvicorn src.api.server:app` 在根路径用 `StaticFiles` 同源托管前端 `static/` 目录，一个进程同时提供前端页面 + REST API + **WebSocket 聊天**，无需前端单独起服务或配代理。
 - **聊天主链路为 WebSocket `/ws/chat`**：前端浮动智能客服组件通过该端点与后端 LangGraph 工作流实时流式对话。AI 回复由真实大模型（通义千问）生成，**非 mock**。
 - **实测验证**：`/api/v1/health` 返回 `{"status":"ok"}`；WebSocket 实测可流式返回贴合产品人设的回复（如询问产品功能得到详细答案），未知问题走护栏优雅降级（建议转人工）。
+- **引用气泡实测**：登录 → WebSocket 发问，ECS 类问题命中《ECS 远程连接排障 SOP》并透出"引用知识片段 1"可展开气泡；纯价格类问题 0 命中、不展示引用（正确不误引）。
 - **实时操作链路实测（端到端）**：对话中「查云资源 / 开工单」经 WebSocket 端到端验证通过——资源工具返回代码内真实样本数据（含公网 IP、RDS 连接地址等唯一标记），工单真实落库（SQLite/PG，跨进程可查），确认工具由 LangChain 原生函数调用真正执行，而非模型文本编造。
 - **最轻量启动路径（克隆即可演示）**：配置 `.env`（填 `DASHSCOPE_API_KEY`）→ `cd frontend && npm run build`（产物自动输出到 `static/`）→ `set VECTOR_STORE_BACKEND=chroma && uvicorn src.api.server:app` → 打开 `http://localhost:8000` 即可对话。
 - 完整 12 服务云原生栈（APISIX + 业务服务 + PG/Milvus/Redis/RabbitMQ/MinIO + 监控）亦可经 Docker Compose / K3s + Helm 部署。
@@ -97,7 +116,8 @@
 | 消息队列 | RabbitMQ 4.0（Topic Exchange + DLX 死信） |
 | 存储 | PostgreSQL 16 + Redis 7 + MinIO |
 | 前端 | React + TypeScript + Vite |
-| 云资源查询 | 阿里云 OpenAPI（ECS/RDS/SLB 只读 + 云监控，手写 RPC 签名零依赖） |
+| 云资源查询 | 阿里云 OpenAPI（ECS/RDS/SLB/Redis 只读 + 云监控，手写 RPC 签名零依赖） |
+| 鉴权 | JWT（HS256 零依赖，无状态，支持多副本 / 多进程部署） |
 | 部署 | Docker Compose **多副本**（`--scale`）+ K3s + Helm（生产） |
 | CI/CD | **GitHub Actions**（3 阶段：lint / test / SAST） |
 | 监控 | Prometheus + Grafana（12 面板 + 8 告警） |
