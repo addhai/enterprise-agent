@@ -47,7 +47,14 @@ def _format_metrics(metrics: dict) -> str:
 
 
 def _source_note(provider: CloudProvider) -> str:
-    return "（数据来源：阿里云实时 API）" if provider.source == "aliyun" else "（演示样本数据）"
+    """数据来源标注：真实 / 真实优先回退样本 / 纯样本，避免把演示数据伪装成真实数据。"""
+    src = provider.source
+    if src == "aliyun":
+        return "（数据来源：阿里云实时 API）"
+    if src == "aliyun+sample":
+        # FallbackProvider：先打真实阿里云 API，账号无资源时才回退样本
+        return "（真实阿里云 API 优先，无匹配资源时回退演示样本）"
+    return "（演示样本数据）"
 
 
 # 资源类型 → 中文分组标题（查询结果按类型分组，方便坐席快速浏览）

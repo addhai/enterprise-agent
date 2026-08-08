@@ -44,8 +44,54 @@ from src.websocket.session_manager import (
 from src.websocket.dispatcher import get_dispatcher
 from src.db.engine import _decode_pg_error
 
+# JWT 校验（无状态 HS256，与 REST 鉴权同一套 secret，支持多副本部署）
+from src.api.jwt_utils import (
+    decode_token as _ws_decode_token,
+    JWTExpired as _WS_JWTExpired,
+    JWTInvalid as _WS_JWTInvalid,
+)
+from src.config import settings as _ws_settings
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _resolve_ws_identity(websocket, session_id: str):
+    """解析 WS 连接身份，返回 (user_id, tenant_id, user_plan, role, is_authed)。
+
+    Token 来源：URL query ``?token=``（浏览器 WebSocket 无法设 Authorization 头，用 query 最稳）。
+    行为：
+        - 携带有效 JWT：解码得到 sub(user_id)，再查库取真实 tenant_id / role。
+          租户与身份以服务端解析为准，客户端无法伪造（防越权串租户）。
+        - 匿名（无有效 token）：按「连接粒度」隔离租户（``anon-<session_id>``），
+          保证不同匿名会话的数据互不串台；匿名默认禁止查询云资源（resource.py 已拦截）。
+    """
+    token = None
+    try:
+        token = websocket.query_params.get("token")
+    except Exception:
+        token = None
+
+    if token:
+        try:
+            from src.db.repositories import user_get_by_id
+            payload = _ws_decode_token(token, _ws_settings.jwt_secret)
+            uid = payload.get("sub")
+            if uid:
+                u = user_get_by_id(uid)
+                if u:
+                    return (
+                        u.get("user_id", uid),
+                        u.get("tenant_id", "default"),
+                        "free",  # 用户表未存订阅计划，默认 free
+                        u.get("role", "agent"),
+                        True,
+                    )
+        except (_WS_JWTExpired, _WS_JWTInvalid, Exception):
+            logger.warning("WS token 校验失败，降级为匿名隔离会话")
+
+    # 匿名隔离：每个连接独立租户命名空间，避免跨会话数据串台
+    return ("anonymous", f"anon-{session_id}", "free", "", False)
 
 
 # ====================================================================
@@ -64,9 +110,11 @@ async def websocket_chat(websocket: WebSocket):
         5. 心跳保活
     """
     session_id = str(uuid.uuid4())
-    user_id = "anonymous"
-    tenant_id = ""
-    user_plan = "free"
+    # 解析 WS 身份：携带有效 JWT 则按 token 派生真实租户；否则按连接粒度隔离租户
+    _auth_user_id, _auth_tenant_id, _auth_plan, _auth_role, _is_authed = _resolve_ws_identity(websocket, session_id)
+    user_id = _auth_user_id
+    tenant_id = _auth_tenant_id
+    user_plan = _auth_plan
 
     # 接受连接
     await websocket.accept()
@@ -116,8 +164,6 @@ async def websocket_chat(websocket: WebSocket):
             # --- resume_session 握手（前端连接后第一条消息，用于跨连接/重启续接历史）---
             if msg_type == "resume_session":
                 incoming_session = msg.get("session_id")
-                incoming_user_id = msg.get("user_id", "anonymous")
-                incoming_tenant = msg.get("tenant_id", "")
                 incoming_plan = msg.get("user_plan", "free")
 
                 if not incoming_session:
@@ -133,16 +179,13 @@ async def websocket_chat(websocket: WebSocket):
 
                 existing = session_mgr.get_session(incoming_session)
                 if existing:
-                    # 内存仍有该会话（同生命周期内的重连）→ 直接复用，更新连接引用与可选身份
+                    # 内存仍有该会话（同生命周期内的重连）→ 直接复用，更新连接引用；
+                    # 租户/身份以服务端解析为准（防客户端伪造 tenant_id 越权串台）
                     session_id = incoming_session
-                    if incoming_user_id and incoming_user_id != "anonymous":
-                        existing.user_id = incoming_user_id
-                    if incoming_plan:
-                        existing.user_plan = incoming_plan
                     existing._websocket_ref = websocket
-                    user_id = existing.user_id
-                    tenant_id = incoming_tenant or existing.tenant_id
-                    user_plan = existing.user_plan
+                    user_id = _auth_user_id
+                    tenant_id = _auth_tenant_id
+                    user_plan = existing.user_plan or _auth_plan
                     restored_count = len(getattr(existing, "conversation_history", []))
                     await websocket.send_json({
                         "type": "session_resumed",
@@ -153,11 +196,12 @@ async def websocket_chat(websocket: WebSocket):
                         "timestamp": time.time(),
                     })
                 else:
-                    # 内存无此会话（如服务重启）→ 以该 id 重建，并从 DB 恢复历史
+                    # 内存无此会话（如服务重启）→ 以该 id 重建，并从 DB 恢复历史；
+                    # 租户/身份以服务端解析为准
                     session_id = incoming_session
-                    user_id = incoming_user_id
-                    tenant_id = incoming_tenant
-                    user_plan = incoming_plan
+                    user_id = _auth_user_id
+                    tenant_id = _auth_tenant_id
+                    user_plan = incoming_plan or _auth_plan
                     session_mgr.create_session(
                         session_id=session_id,
                         user_id=user_id,
@@ -269,29 +313,27 @@ async def websocket_chat(websocket: WebSocket):
                     ))
                     continue
 
-                # 提取可选参数
+                # 提取可选参数（仅 session_id / user_plan 用于续接；租户与身份由服务端按 token 解析，不接受客户端伪造）
                 incoming_session = msg.get("session_id")
-                incoming_user_id = msg.get("user_id", "anonymous")
-                incoming_tenant = msg.get("tenant_id", "")
                 incoming_plan = msg.get("user_plan", "free")
 
                 # 优先使用客户端携带的 session_id（支持跨连接 / 重启续接历史）
                 if incoming_session:
                     existing = session_mgr.get_session(incoming_session)
                     if existing:
-                        # 内存中仍有该会话（同生命周期内的重连）→ 直接复用
+                        # 内存中仍有该会话（同生命周期内的重连）→ 直接复用；
+                        # 租户/身份以服务端解析为准（防客户端伪造 tenant_id 越权串台）
                         session_id = incoming_session
-                        if incoming_user_id and incoming_user_id != "anonymous":
-                            existing.user_id = incoming_user_id
-                        user_id = existing.user_id
-                        tenant_id = incoming_tenant or existing.tenant_id
-                        user_plan = incoming_plan or existing.user_plan
+                        user_id = _auth_user_id
+                        tenant_id = _auth_tenant_id
+                        user_plan = existing.user_plan or _auth_plan
                     else:
-                        # 内存无此会话（如服务重启）→ 以该 id 重建，稍后从 DB 恢复历史
+                        # 内存无此会话（如服务重启）→ 以该 id 重建，稍后从 DB 恢复历史；
+                        # 租户/身份以服务端解析为准
                         session_id = incoming_session
-                        user_id = incoming_user_id
-                        tenant_id = incoming_tenant
-                        user_plan = incoming_plan
+                        user_id = _auth_user_id
+                        tenant_id = _auth_tenant_id
+                        user_plan = incoming_plan or _auth_plan
                         session_mgr.create_session(
                             session_id=session_id,
                             user_id=user_id,
@@ -301,21 +343,17 @@ async def websocket_chat(websocket: WebSocket):
                         # 保存 WebSocket 引用（关键！）
                         session_mgr.get_session(session_id)._websocket_ref = websocket
                 elif session_id and session_mgr.get_session(session_id):
-                    # 客户端未带 session_id，复用本连接自动创建的会话
-                    state = session_mgr.get_session(session_id)
-                    if incoming_user_id and incoming_user_id != "anonymous":
-                        state.user_id = incoming_user_id
-                    if incoming_plan:
-                        state.user_plan = incoming_plan
-                    user_id = state.user_id
-                    tenant_id = state.tenant_id
-                    user_plan = state.user_plan
+                    # 客户端未带 session_id，复用本连接自动创建的会话；
+                    # 租户/身份以服务端解析为准
+                    user_id = _auth_user_id
+                    tenant_id = _auth_tenant_id
+                    user_plan = _auth_plan
                 else:
-                    # 兜底：新建会话
+                    # 兜底：新建会话；租户/身份以服务端解析为准
                     session_id = str(uuid.uuid4())
-                    user_id = incoming_user_id
-                    tenant_id = incoming_tenant
-                    user_plan = incoming_plan
+                    user_id = _auth_user_id
+                    tenant_id = _auth_tenant_id
+                    user_plan = _auth_plan
                     session_mgr.create_session(
                         session_id=session_id,
                         user_id=user_id,

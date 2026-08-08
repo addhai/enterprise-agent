@@ -839,7 +839,10 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
 
   useEffect(() => {
     if (!userId) return
-    const ws = new WebSocket(WS_URL)
+    // 已登录则把 JWT 拼到 WS URL（浏览器 WebSocket 无法设 Authorization 头，用 query 最稳）；
+    // 后端 /ws/chat 会解码 token 派生真实租户，未带 token 则按连接隔离租户。
+    const wsUrl = token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL
+    const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
     ws.onopen = () => {
