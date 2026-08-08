@@ -21,24 +21,40 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
+          # pytest-github-actions-annotate-failures：把失败用例输出为 GitHub
+          # annotation（::error file=...,line=...）。annotation 通过公开的
+          # checks API 即可匿名读取，而下载完整 job 日志需要仓库 admin 权限，
+          # 因此这是让 CI 失败原因"对外可诊断"的关键一环。
+          pip install pytest pytest-cov pytest-asyncio pytest-github-actions-annotate-failures
 
-      - name: Run tests with coverage
+      - name: Run tests
         run: |
           # 全量跑 tests/ 目录。GitHub 公开仓库无 API Key、无 .env，
           # 所有需要真实 LLM / Embedding 的用例（标了 requires_llm marker）
           # 由 tests/conftest.py 在未设置 RUN_LLM_TESTS=1 时自动跳过，
           # 因此 CI 只执行确定性测试（FakeLLM / mock / 内存 SQLite），稳定且快速。
           #
-          # 覆盖率门禁：实测 CI 裸环境覆盖率为 ~48%（828 passed / 17 skipped）。
-          # 取 40 作为门槛，预留约 8 个点的环境波动余量（Ubuntu vs 本地 Windows
-          # 的行数/平台分支差异），既不让覆盖率无声塌缩，又避免偶发波动把 CI 打红。
-          pytest \
-            tests/ \
-            -v --cov=src --cov-report=term --cov-report=xml \
+          # 这一步只判定"测试是否通过"，覆盖率门禁拆到下一步。
+          # 拆分理由：两类失败（用例挂 / 覆盖率塌）会落在不同 step 上，
+          # 而 step 级别的成败通过公开 jobs API 就能读到，无需 admin 日志权限。
+          # --cov-fail-under=0 用于覆盖 pyproject.toml addopts 中的 40，
+          # 避免覆盖率在此步提前触发失败、掩盖真正的用例失败。
+          pytest tests/ \
+            -ra --tb=short \
+            --cov=src --cov-report=term --cov-report=xml \
             -m "not integration" \
-            --cov-fail-under=40 \
+            --cov-fail-under=0 \
             -W "ignore::DeprecationWarning"
+
+      - name: Coverage gate (>=40%)
+        # always(): 即使上一步用例失败，也报告当前覆盖率，便于一次性看清全貌
+        if: always()
+        run: |
+          # 覆盖率门禁：实测裸环境（无 Key、无 .env、requires_llm 自动跳过）
+          # 覆盖率约 48%（828 passed / 17 skipped）。取 40 作为门槛，
+          # 预留约 8 个点的环境波动余量（Ubuntu vs 本地 Windows 的行数差异），
+          # 既不让覆盖率无声塌缩，又避免偶发波动把 CI 打红。
+          coverage report --fail-under=40
 
       - name: Upload coverage report
         if: always()
