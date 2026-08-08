@@ -13,7 +13,7 @@
 #   make migrate       — 执行 Chroma→Milvus 迁移
 # =============================================================================
 
-.PHONY: help up down restart build build-api build-rag build-worker \
+.PHONY: help up down restart build build-frontend build-api build-rag build-worker \
         logs ps clean test test-cov test-api test-rag lint lint-fix \
         format migrate-dry migrate migrate-verify \
         shell-api shell-worker shell-rag \
@@ -34,11 +34,14 @@ help: ## 显示所有可用命令
 # Docker Compose — 服务管理
 # =========================================================================
 
-up: ## 启动全部服务 (docker compose up -d)
+up: build-frontend ## 启动全部服务（含前端构建，真正一键）
 	docker compose up -d
 	@echo ""
 	@echo "服务已启动:"
 	@docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+
+build-frontend: ## 构建前端静态产物到 static/（docker 前端服务挂载用）
+	cd frontend && npm install && npm run build
 
 down: ## 停止全部服务
 	docker compose down
