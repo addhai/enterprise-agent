@@ -36,7 +36,7 @@
 **5. 云原生部署体系**
 
 - 完整基础设施配置：APISIX 网关（路由分发/限流/熔断/鉴权/Prometheus 指标）+ RabbitMQ 任务队列拓扑（4 队列 + DLQ 死信）+ PostgreSQL 9 表 Schema（租户隔离 + 对话记录 + 审计日志）+ Prometheus + Grafana 监控面板（12 面板 + 8 告警规则）
-- **GitHub Actions 3 阶段流水线**：lint（ruff + oxlint）→ test（pytest 白名单覆盖 agent/mcp_tools/safety/ticket/evaluation）→ SAST（Bandit + Semgrep）→ 构建与部署（Docker Compose / Helm）
+- **GitHub Actions 3 阶段流水线**：代码检查（ruff lint + format）→ 确定性测试（pytest 全量 `tests/` + 覆盖率门禁 40%）+ SAST（Bandit 中高危阻断 + Semgrep ERROR 级）→ 构建与部署（Docker Compose / Helm）。测试靠 `requires_llm` / `integration` marker 自动跳过需真实密钥的用例，无 Key 即可稳定转绿
 
 **6. 真实云 API 资源查询适配层**
 
@@ -68,14 +68,14 @@
 **代码规模：**
 - 核心业务代码 **14,707 行** Python（90 个模块，24 个子包）
 - 部署配置 **2,471 行**（30 个 YAML/SQL/JSON 文件）
-- 基础设施配置：3 个 Dockerfile + 3 个 docker-compose + 11 个 Helm 模板 + 5 个运维脚本
+- 基础设施配置：4 个 Dockerfile（legacy + api / worker / rag）+ 3 个 docker-compose + 11 个 Helm 模板 + 5 个运维脚本
 
-**测试统计：**
-- CI 采用白名单策略（仅跑确定能过的核心目录：`test_agent` / `test_mcp_tools` / `test_safety` / `test_ticket` / `test_evaluation`），**315 个测试通过 + 1 跳过，CI 稳定可绿**
-- 覆盖模块：agent 工具调用 / MCP 工具 / 安全护栏 / 工单 / 评估追踪器 等核心链路
+**测试统计（CI 裸环境真实运行：无 API Key / 无 .env）：**
+- **828 个测试通过 + 17 跳过**，运行全量 `tests/`（不再用白名单，覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / API 接线守卫等）
+- 覆盖率 **~48%**（门禁 40%，`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致）
+- 应用接线守卫（`tests/test_api/test_app_wiring.py`）：19 个 router 模块逐个导入探测 + 鉴权关键路由存在性断言，任一 router 静默消失立即红灯（曾因 `auth` 路由在 Python 3.11 因前向引用 `NameError` 被静默吞掉导致 `/auth/*` 404，由此守卫测试堵住同类缺陷）
 - RAG 离线评估 4 项指标（Recall / Precision / MRR / F1）全部通过
 - 安全护栏测试全部通过（输入注入识别 / 已知攻击模式 / 特殊字符清洗 / 正常内容保留）
-- 真实覆盖率约 **17%**（基线，作为作品集以「CI 绿 + demo 一键可跑」为质量目标，不硬刷覆盖率）
 
 **RAG 检索质量（评估模块模拟测试）：**
 | 场景 | Recall | Precision | MRR | F1 |
@@ -106,7 +106,7 @@
 
 | 层 | 技术 |
 |----|------|
-| 语言 | Python 3.11+ |
+| 语言 | Python 3.11+（部署 Dockerfile 与 CI 均锁定 3.11，本地开发对齐以消除「本地绿 CI 红」） |
 | 编排 | LangGraph（多节点 DAG） |
 | Agent | LangChain (create_agent, ReAct) |
 | LLM | 阿里百炼 Qwen-Plus / Qwen-Max（兼容 OpenAI 格式） |
@@ -120,9 +120,9 @@
 | 云资源查询 | 阿里云 OpenAPI（ECS/RDS/SLB/Redis 只读 + 云监控，手写 RPC 签名零依赖） |
 | 鉴权 | JWT（HS256 零依赖，无状态，支持多副本 / 多进程部署） |
 | 部署 | Docker Compose **多副本**（`--scale`）+ K3s + Helm（生产） |
-| CI/CD | **GitHub Actions**（3 阶段：lint / test / SAST） |
+| CI/CD | **GitHub Actions**（3 阶段：ruff lint/format · pytest 全量 + 覆盖率门禁 · SAST） |
 | 监控 | Prometheus + Grafana（12 面板 + 8 告警） |
-| 代码质量 | Ruff + Bandit + Semgrep |
+| 代码质量 | Ruff（line-length 88，target py311）+ Bandit + Semgrep |
 
 ## 相关技能标签
 
