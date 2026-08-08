@@ -73,7 +73,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "PYTHON: $(python --version 2>&1)" | tee ci_diag.txt
+          echo "RUN_SHA: $GITHUB_SHA" | tee ci_diag.txt
+          echo "PYTHON: $(python --version 2>&1)" | tee -a ci_diag.txt
           python -c "
           import traceback
           try:
