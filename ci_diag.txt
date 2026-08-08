@@ -1,0 +1,41 @@
+PYTHON: Python 3.11.15
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+  File "/home/runner/work/enterprise-agent/enterprise-agent/src/api/auth.py", line 123, in <module>
+    def _to_user_response(u: Dict[str, Any]) -> UserResponse:
+                                                ^^^^^^^^^^^^
+NameError: name 'UserResponse' is not defined
+AUTH_IMPORT: FAIL
+2026-08-08 15:36:53,769 [INFO] src.api.server: Registered main API router
+2026-08-08 15:36:53,769 [INFO] src.api.server: Registered WebSocket router
+2026-08-08 15:36:53,772 [INFO] src.api.server: Registered monitoring router
+2026-08-08 15:36:53,773 [INFO] src.api.server: Registered chatwoot router
+2026-08-08 15:36:53,787 [ERROR] src.api.server: Failed to register auth router: name 'UserResponse' is not defined
+Traceback (most recent call last):
+  File "/home/runner/work/enterprise-agent/enterprise-agent/src/api/server.py", line 265, in create_app
+    from src.api.auth import router as auth_router
+  File "/home/runner/work/enterprise-agent/enterprise-agent/src/api/auth.py", line 123, in <module>
+    def _to_user_response(u: Dict[str, Any]) -> UserResponse:
+                                                ^^^^^^^^^^^^
+NameError: name 'UserResponse' is not defined
+2026-08-08 15:36:53,808 [INFO] src.api.server: Registered admin router
+2026-08-08 15:36:53,809 [INFO] src.api.server: Registered rbac router
+2026-08-08 15:36:53,817 [INFO] src.api.server: Registered customers router
+2026-08-08 15:36:53,832 [INFO] src.api.server: Registered tickets router
+2026-08-08 15:36:53,838 [INFO] src.api.server: Registered satisfaction router
+2026-08-08 15:36:53,841 [INFO] src.api.server: Registered conversations router
+2026-08-08 15:36:53,845 [INFO] src.api.server: Registered notifications router
+2026-08-08 15:36:53,847 [INFO] src.api.server: Registered dashboard router
+2026-08-08 15:36:53,851 [INFO] src.api.server: Registered HITL router
+2026-08-08 15:36:53,853 [INFO] src.api.server: Registered health router
+2026-08-08 15:36:53,869 [INFO] src.api.server: Registered knowledge router
+2026-08-08 15:36:53,887 [INFO] src.api.server: Registered workflow router
+2026-08-08 15:36:53,900 [INFO] src.api.server: Registered evaluation router
+2026-08-08 15:36:53,905 [INFO] src.api.server: Registered config router
+2026-08-08 15:36:53,905 [WARNING] src.api.server: 未找到 static/ 目录，跳过前端挂载，仅提供 API。需要前端请先执行 `cd frontend && npm run build`
+APP_ROUTES_TOTAL: 96
+AUTH_ROUTES: []
+REG_ERRORS: [('auth', "NameError: name 'UserResponse' is not defined")]
+bcrypt 5.0.0
+pydantic 2.13.4
+fastapi 0.141.1
