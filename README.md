@@ -4,9 +4,18 @@
 > 覆盖 LangGraph 工作流编排、RAG 检索增强、工具调用（MCP）、多租户隔离、RBAC 权限、5 层安全护栏与评估监控。
 
 [![CI](https://github.com/addhai/enterprise-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/addhai/enterprise-agent/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Coverage](https://img.shields.io/badge/coverage-48%25-brightgreen.svg)](https://github.com/addhai/enterprise-agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
+
+## 🔧 环境要求
+
+- **Python 3.11+**（部署与 CI 基准锁定 3.11，见 `Dockerfile` / `.github/workflows/ci.yml`；本地开发建议 3.11 以与部署完全一致）
+- **Node.js 22+**（前端 Vite 构建）
+- **Docker 20.10+ / Compose v2**（可选，用于全栈云原生部署；`docker compose up -d` 一键起网关 + 双副本 api/ws + 监控）
+- 真实大模型密钥 `DASHSCOPE_API_KEY`（通义千问）；缺失时部分 AI 能力降级，系统仍可启动与演示
 
 ## ✨ 项目亮点（为什么值得看）
 
@@ -232,15 +241,22 @@ result = await client.call_tool("api_key_generate", name="my-app-key")
 
 ## 🧪 测试与 CI
 
-GitHub Actions 运行 3 个阶段：代码检查（lint / 格式化）、确定性单元测试、SAST（Bandit + Semgrep）。
+GitHub Actions 运行 3 个阶段：代码检查（ruff lint / format）、确定性单元测试（pytest + 覆盖率）、SAST（Bandit + Semgrep）。
 
 ```bash
-make test            # 运行全部测试
+make test            # 运行全部测试（带覆盖率门槛）
 make test-cov        # 测试 + 覆盖率报告
 make ci-full         # 本地跑完整 CI 流水线
+make lint            # ruff 检查 + 格式化
 ```
 
-> 测试采用白名单策略，覆盖 `test_agent / test_mcp_tools / test_safety / test_ticket / test_evaluation` 等确定能通过的核心目录，保证 CI 稳定可绿。
+**可验证指标（CI 裸环境真实运行：无 API Key / 无 .env）：**
+- 测试：**828 passed / 17 skipped**，覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / API 接线守卫等
+- 覆盖率：**~48%**（门禁 40%），`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致
+- 应用接线守卫（`tests/test_api/test_app_wiring.py`）：19 个 router 模块逐个导入探测 + 鉴权关键路由存在性断言，任一 router 静默消失立即红灯
+- 类型 / lint：ruff（line-length 88，target py311）；安全：Bandit 中高危阻断 + Semgrep ERROR 级
+
+> 测试运行全量 `tests/`，靠 `requires_llm` / `integration` marker 自动跳过需真实 LLM / 外部依赖的用例（默认 skip，设 `RUN_LLM_TESTS=1` 且配 Key 才跑）。无需真实密钥即可稳定转绿。
 
 ---
 

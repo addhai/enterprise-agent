@@ -4,10 +4,18 @@
 # 让 `make lint` / `make test` / CI 读取同一份真相，避免配置漂移。
 # =============================================================================
 
+[project]
+# 版本基准：部署（Dockerfile 四个镜像）与 CI 均锁定 Python 3.11；
+# 本地开发建议 3.11，与部署 / CI 完全一致，从源头消除「本地绿 CI 红」。
+# 代码已通过 `from __future__ import annotations` 兼容 3.11 的注解即时求值语义。
+name = "enterprise-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+
 [tool.ruff]
 # 行宽对齐 black 默认值，团队统一
 line-length = 88
-target-version = "py310"
+target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
