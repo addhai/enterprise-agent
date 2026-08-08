@@ -71,6 +71,39 @@ OPENAPI_TAGS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# 路由注册异常处理
+#
+# 背景（真实事故）：原先每个 include_router 都被 `except Exception: logger.error(...)`
+# 包住，异常只留一行没有堆栈的日志。结果是 auth router 在 CI 环境导入失败后被静默
+# 跳过，服务照常启动、/health 照常返回 ok，但 /api/v1/auth/* 全部 404，
+# 排查时完全看不到原因。这属于「表面健康、实际残缺」的生产级缺陷。
+#
+# 现在的策略：
+#   1. 永远记录完整 traceback（logger.exception），让根因可见；
+#   2. 把失败清单挂到 app.state，供 /health 与守卫测试读取；
+#   3. 严格模式（STRICT_ROUTER_REGISTRATION=1，建议 CI/生产开启）下，
+#      收集完所有失败后一次性抛出，让启动 fail fast，而不是带病上线。
+# ---------------------------------------------------------------------------
+_ROUTER_REGISTRATION_ERRORS: list[tuple[str, str]] = []
+
+
+def _strict_router_registration() -> bool:
+    """是否开启「路由注册失败即启动失败」的严格模式。"""
+    return os.getenv("STRICT_ROUTER_REGISTRATION", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _on_router_error(name: str, exc: Exception) -> None:
+    """统一记录路由注册失败：完整堆栈 + 失败清单（不在此处中断，便于一次暴露全部问题）。"""
+    logger.exception("Failed to register %s router: %s", name, exc)
+    _ROUTER_REGISTRATION_ERRORS.append((name, f"{type(exc).__name__}: {exc}"))
+
+
 def create_app() -> FastAPI:
     """创建 FastAPI 应用"""
     app = FastAPI(
@@ -197,14 +230,14 @@ def create_app() -> FastAPI:
         app.include_router(router, prefix="/api/v1", tags=["对话与系统"])
         logger.info("Registered main API router")
     except Exception as e:
-        logger.error("Failed to register main API router: %s", e)
+        _on_router_error("main API", e)
 
     # 注册 WebSocket 路由（无前缀，直接挂载到根路径）
     try:
         app.include_router(websocket_router)
         logger.info("Registered WebSocket router")
     except Exception as e:
-        logger.error("Failed to register WebSocket router: %s", e)
+        _on_router_error("WebSocket", e)
 
     # 注册监控路由
     try:
@@ -213,7 +246,7 @@ def create_app() -> FastAPI:
                 app.add_api_route(f"/api/v1{route.path}", route.endpoint, methods=list(route.methods or ["GET"]), tags=route.tags)
         logger.info("Registered monitoring router")
     except Exception as e:
-        logger.error("Failed to register monitoring router: %s", e)
+        _on_router_error("monitoring", e)
 
     # 注册 Chatwoot webhook 路由
     try:
@@ -221,7 +254,7 @@ def create_app() -> FastAPI:
         app.include_router(chatwoot_router, prefix="/api/v1", tags=["Chatwoot 集成"])
         logger.info("Registered chatwoot router")
     except Exception as e:
-        logger.error("Failed to register chatwoot router: %s", e)
+        _on_router_error("chatwoot", e)
 
     # 注册用户认证路由
     try:
@@ -229,7 +262,7 @@ def create_app() -> FastAPI:
         app.include_router(auth_router, prefix="/api/v1", tags=["认证 Auth"])
         logger.info("Registered auth router")
     except Exception as e:
-        logger.error("Failed to register auth router: %s", e)
+        _on_router_error("auth", e)
 
     # 注册管理后台路由
     try:
@@ -237,7 +270,7 @@ def create_app() -> FastAPI:
         app.include_router(admin_router, prefix="/api/v1", tags=["管理后台 Admin"])
         logger.info("Registered admin router")
     except Exception as e:
-        logger.error("Failed to register admin router: %s", e)
+        _on_router_error("admin", e)
 
     # 注册 RBAC 路由
     try:
@@ -245,7 +278,7 @@ def create_app() -> FastAPI:
         app.include_router(rbac_router, prefix="/api/v1", tags=["权限 RBAC"])
         logger.info("Registered rbac router")
     except Exception as e:
-        logger.error("Failed to register rbac router: %s", e)
+        _on_router_error("rbac", e)
 
     # 注册客户管理路由
     try:
@@ -253,7 +286,7 @@ def create_app() -> FastAPI:
         app.include_router(customers_router, prefix="/api/v1", tags=["客户 Customers"])
         logger.info("Registered customers router")
     except Exception as e:
-        logger.error("Failed to register customers router: %s", e)
+        _on_router_error("customers", e)
 
     # 注册工单管理路由
     try:
@@ -261,7 +294,7 @@ def create_app() -> FastAPI:
         app.include_router(tickets_router, prefix="/api/v1", tags=["工单 Tickets"])
         logger.info("Registered tickets router")
     except Exception as e:
-        logger.error("Failed to register tickets router: %s", e)
+        _on_router_error("tickets", e)
 
     # 注册满意度路由
     try:
@@ -269,7 +302,7 @@ def create_app() -> FastAPI:
         app.include_router(satisfaction_router, prefix="/api/v1", tags=["满意度 Satisfaction"])
         logger.info("Registered satisfaction router")
     except Exception as e:
-        logger.error("Failed to register satisfaction router: %s", e)
+        _on_router_error("satisfaction", e)
 
     # 注册会话历史路由
     try:
@@ -277,7 +310,7 @@ def create_app() -> FastAPI:
         app.include_router(conversations_router, prefix="/api/v1", tags=["会话历史 Conversations"])
         logger.info("Registered conversations router")
     except Exception as e:
-        logger.error("Failed to register conversations router: %s", e)
+        _on_router_error("conversations", e)
 
     # 注册通知中心路由
     try:
@@ -285,7 +318,7 @@ def create_app() -> FastAPI:
         app.include_router(notifications_router, prefix="/api/v1", tags=["通知 Notifications"])
         logger.info("Registered notifications router")
     except Exception as e:
-        logger.error("Failed to register notifications router: %s", e)
+        _on_router_error("notifications", e)
 
     # 注册仪表盘路由
     try:
@@ -293,7 +326,7 @@ def create_app() -> FastAPI:
         app.include_router(dashboard_router, prefix="/api/v1", tags=["仪表盘 Dashboard"])
         logger.info("Registered dashboard router")
     except Exception as e:
-        logger.error("Failed to register dashboard router: %s", e)
+        _on_router_error("dashboard", e)
 
     # 注册 HITL (Human-in-the-loop) 路由
     try:
@@ -301,7 +334,7 @@ def create_app() -> FastAPI:
         app.include_router(hitl_router, prefix="/api/v1", tags=["人工介入 HITL"])
         logger.info("Registered HITL router")
     except Exception as e:
-        logger.error("Failed to register HITL router: %s", e)
+        _on_router_error("HITL", e)
 
     # 注册 Agent 健康检查路由
     try:
@@ -309,7 +342,7 @@ def create_app() -> FastAPI:
         app.include_router(health_router, prefix="/api/v1", tags=["智能体健康 Health"])
         logger.info("Registered health router")
     except Exception as e:
-        logger.error("Failed to register health router: %s", e)
+        _on_router_error("health", e)
 
     # 注册知识库管理路由
     try:
@@ -317,7 +350,7 @@ def create_app() -> FastAPI:
         app.include_router(knowledge_router, prefix="/api/v1", tags=["知识库 Knowledge"])
         logger.info("Registered knowledge router")
     except Exception as e:
-        logger.error("Failed to register knowledge router: %s", e)
+        _on_router_error("knowledge", e)
 
     # 注册工作流管理路由
     try:
@@ -325,7 +358,7 @@ def create_app() -> FastAPI:
         app.include_router(workflow_router, prefix="/api/v1", tags=["工作流 Workflow"])
         logger.info("Registered workflow router")
     except Exception as e:
-        logger.error("Failed to register workflow router: %s", e)
+        _on_router_error("workflow", e)
 
     # 注册评估管理路由
     try:
@@ -333,7 +366,7 @@ def create_app() -> FastAPI:
         app.include_router(evaluation_router, prefix="/api/v1", tags=["质量评估 Evaluation"])
         logger.info("Registered evaluation router")
     except Exception as e:
-        logger.error("Failed to register evaluation router: %s", e)
+        _on_router_error("evaluation", e)
 
     # 注册配置中心路由
     try:
@@ -341,7 +374,7 @@ def create_app() -> FastAPI:
         app.include_router(config_router, prefix="/api/v1", tags=["配置中心 Config"])
         logger.info("Registered config router")
     except Exception as e:
-        logger.error("Failed to register config router: %s", e)
+        _on_router_error("config", e)
 
     # 注册静态文件（必须在所有路由之后，否则会拦截 /api 请求）
     #
@@ -366,6 +399,15 @@ def create_app() -> FastAPI:
         logger.warning(
             "未找到 static/ 目录，跳过前端挂载，仅提供 API。"
             "需要前端请先执行 `cd frontend && npm run build`"
+        )
+
+    # 把路由注册失败清单挂到 app.state：/health 可据此降级，守卫测试可据此断言
+    app.state.router_registration_errors = list(_ROUTER_REGISTRATION_ERRORS)
+
+    if _ROUTER_REGISTRATION_ERRORS and _strict_router_registration():
+        detail = "; ".join(f"{n} -> {m}" for n, m in _ROUTER_REGISTRATION_ERRORS)
+        raise RuntimeError(
+            f"严格模式启动失败：{len(_ROUTER_REGISTRATION_ERRORS)} 个路由注册失败 -> {detail}"
         )
 
     return app
