@@ -2,6 +2,10 @@ import pytest
 import os
 from src.rag.embedder import Embedder
 
+# 全部用例需要真实 Embedding API（OpenAI / DashScope），默认跳过；
+# 设 RUN_LLM_TESTS=1 且配置好 Key 后运行。
+pytestmark = pytest.mark.requires_llm
+
 
 @pytest.fixture
 def embedder():

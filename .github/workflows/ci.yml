@@ -25,25 +25,19 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          # GitHub 公开仓库无 API Key，只跑确定性测试（FakeLLM / mock）。
-          # 采用"白名单"策略：只列确定能跑的目录，避免有问题的 conftest.py
-          # 在 import 阶段就崩掉（exit code 4）。
-          # 已验证以下目录无危险导入且源码已同步：
-          #   test_agent     → FakeLLM 注入式测试 ✅
-          #   test_mcp_tools  → MCP 工具测试 ✅
-          #   test_safety     → 安全检查测试 ✅
-          #   test_ticket     → 工单测试 ✅
-          #   test_evaluation → 评测测试 ✅（src/evaluation/tracker.py 已全量同步，
-          #       total_sessions 等字段已补齐，根因已消除）
+          # 全量跑 tests/ 目录。GitHub 公开仓库无 API Key、无 .env，
+          # 所有需要真实 LLM / Embedding 的用例（标了 requires_llm marker）
+          # 由 tests/conftest.py 在未设置 RUN_LLM_TESTS=1 时自动跳过，
+          # 因此 CI 只执行确定性测试（FakeLLM / mock / 内存 SQLite），稳定且快速。
+          #
+          # 覆盖率门禁：实测 CI 裸环境覆盖率为 ~48%（828 passed / 17 skipped）。
+          # 取 40 作为门槛，预留约 8 个点的环境波动余量（Ubuntu vs 本地 Windows
+          # 的行数/平台分支差异），既不让覆盖率无声塌缩，又避免偶发波动把 CI 打红。
           pytest \
-            tests/test_agent/ \
-            tests/test_mcp_tools/ \
-            tests/test_safety/ \
-            tests/test_ticket/ \
-            tests/test_evaluation/ \
+            tests/ \
             -v --cov=src --cov-report=term --cov-report=xml \
             -m "not integration" \
-            --cov-fail-under=0 \
+            --cov-fail-under=40 \
             -W "ignore::DeprecationWarning"
 
       - name: Upload coverage report

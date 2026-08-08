@@ -36,6 +36,22 @@ from src.agent.prompt import detect_prompt_injection
 
 logger = logging.getLogger(__name__)
 
+
+# 英文「转人工」意图识别正则。
+#
+# 设计取舍：纯字面子串列表维护成本低但召回差 —— "speak to agent" 无法命中
+# "speak to a human agent"。这里用两条模式覆盖绝大多数自然表达，同时保持
+# 零依赖、可预测（不引入分类模型的不确定性）：
+#   1. 动词 + 若干插入词 + 人工角色名词（speak to a human agent / connect me with a rep）
+#   2. 限定词 + 角色名词（live agent / real person / human representative）
+_ENGLISH_HANDOFF_RE = re.compile(
+    r"(?:\b(?:speak|talk|chat|connect|transfer|escalate|forward)\b[\w\s,']{0,30}?"
+    r"\b(?:human|agent|representative|rep|person|operator|advisor|staff)\b)"
+    r"|(?:\b(?:live|real|actual|human|physical)\s+"
+    r"(?:agent|person|representative|rep|operator|human|support|advisor)\b)",
+    re.IGNORECASE,
+)
+
 # 共享的 LLM 实例（用于意图分类，延迟初始化以避免无 API Key 时导入失败）
 _intent_llm: Optional[ChatOpenAI] = None
 _clarify_llm: Optional[ChatOpenAI] = None
@@ -493,6 +509,12 @@ def router_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     if any(kw in content.lower() for kw in force_human_keywords):
+        return {"intent": "human", "effective_max_turns": settings.max_turns_faq}
+
+    # 英文转人工请求：字面子串匹配太脆（例如 "speak to agent" 匹配不到
+    # "speak to a human agent"，中间插了冠词与形容词）。改用容忍插入词的正则，
+    # 覆盖 "connect me with a live representative" 这类自然表达。
+    if _ENGLISH_HANDOFF_RE.search(content_lower):
         return {"intent": "human", "effective_max_turns": settings.max_turns_faq}
 
     # 情绪激动检测（按场景分级转人工：情绪激动自动转人工）

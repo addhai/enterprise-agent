@@ -34,7 +34,11 @@ class TestHealthEndpoint:
 # /chat
 # ============================================================
 
+# /chat 会真实走一遍 Agent 编排并调用 LLM，无凭据环境（如 GitHub Actions 公开仓库）
+# 必然 500。只把「真正触发 LLM 调用」的用例标 requires_llm，由 tests/conftest.py
+# 在未设置 RUN_LLM_TESTS=1 时统一跳过；请求体校验（422）类用例不触 LLM，保留在 CI 中。
 class TestChatEndpoint:
+    @pytest.mark.requires_llm
     def test_chat_with_valid_message(self, client):
         """有效消息应返回 200"""
         resp = client.post("/api/v1/chat", json={
@@ -47,6 +51,7 @@ class TestChatEndpoint:
         assert "reply" in data
         assert "needs_human" in data
 
+    @pytest.mark.requires_llm
     def test_chat_with_session_id(self, client):
         """传入 session_id 应被使用"""
         resp = client.post("/api/v1/chat", json={
@@ -59,7 +64,7 @@ class TestChatEndpoint:
         assert data["session_id"] == "test-session-123"
 
     def test_chat_empty_message_rejected(self, client):
-        """空消息应返回 422"""
+        """空消息应返回 422（请求体校验，不触 LLM）"""
         resp = client.post("/api/v1/chat", json={
             "message": "",
             "user_id": "test-user",
@@ -67,12 +72,13 @@ class TestChatEndpoint:
         assert resp.status_code == 422
 
     def test_chat_missing_message_rejected(self, client):
-        """缺少 message 字段应返回 422"""
+        """缺少 message 字段应返回 422（请求体校验，不触 LLM）"""
         resp = client.post("/api/v1/chat", json={
             "user_id": "test-user",
         })
         assert resp.status_code == 422
 
+    @pytest.mark.requires_llm
     def test_chat_reply_is_string(self, client):
         """reply 应为非空字符串"""
         resp = client.post("/api/v1/chat", json={
@@ -82,6 +88,7 @@ class TestChatEndpoint:
         data = resp.json()
         assert isinstance(data["reply"], str)
 
+    @pytest.mark.requires_llm
     def test_chat_default_user_id(self, client):
         """不传 user_id 应为 anonymous"""
         resp = client.post("/api/v1/chat", json={

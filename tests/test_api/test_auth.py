@@ -212,7 +212,9 @@ class TestMyPermissionsApi:
     """/rbac/me/permissions 接口测试"""
 
     def test_admin_permissions(self, client, admin_token):
-        """admin（实际角色 super_admin）应有 21 个权限，包含 config:manage"""
+        """admin（实际角色 super_admin）应拥有全部权限，且包含 config:manage"""
+        from src.api.rbac import Permission
+
         resp = client.get(
             "/api/v1/rbac/me/permissions",
             headers={"Authorization": f"Bearer {admin_token}"},
@@ -221,14 +223,21 @@ class TestMyPermissionsApi:
         data = resp.json()
         assert data["role"] == "super_admin"
         perms = data["permissions"]
-        assert len(perms) == 21
+        # super_admin = 全量权限，与枚举同步而非硬编码数量
+        assert len(perms) == len(Permission)
         assert "config:view" in perms
         assert "config:manage" in perms
         assert "evaluation:manage" in perms
         assert "workflow:manage" in perms
 
     def test_agent_permissions(self, client, agent_token):
-        """agent 应有 10 个权限，只有 view 没有 manage（新增模块）"""
+        """agent 权限集合应与 ROLE_PERMISSIONS 一致，且不含任何 manage 类写权限。
+
+        断言「集合 + 不变量」而非数量：数量会随业务扩展漂移，而「坐席不得拥有
+        配置/评估/工作流的写权限」是恒定的安全契约，必须被精确守住。
+        """
+        from src.api.rbac import ROLE_PERMISSIONS, UserRole
+
         resp = client.get(
             "/api/v1/rbac/me/permissions",
             headers={"Authorization": f"Bearer {agent_token}"},
@@ -236,15 +245,20 @@ class TestMyPermissionsApi:
         assert resp.status_code == 200
         data = resp.json()
         assert data["role"] == "agent"
-        perms = data["permissions"]
-        assert len(perms) == 10
+        perms = set(data["permissions"])
+
+        expected = {p.value for p in ROLE_PERMISSIONS[UserRole.AGENT]}
+        assert perms == expected, f"agent 权限与配置不一致，差异: {perms ^ expected}"
+
+        # 安全不变量：坐席只读新增模块
         assert "config:view" in perms
-        assert "config:manage" not in perms
-        assert "evaluation:view" in perms
-        assert "evaluation:manage" not in perms
+        for forbidden in ("config:manage", "evaluation:manage", "workflow:manage", "user:manage"):
+            assert forbidden not in perms, f"agent 不应拥有 {forbidden}"
 
     def test_viewer_permissions(self, client, viewer_token):
-        """viewer 应有 11 个权限，只有 view"""
+        """viewer 应为纯只读角色：集合与配置一致，且不含任何 :manage 权限。"""
+        from src.api.rbac import ROLE_PERMISSIONS, UserRole
+
         resp = client.get(
             "/api/v1/rbac/me/permissions",
             headers={"Authorization": f"Bearer {viewer_token}"},
@@ -252,10 +266,14 @@ class TestMyPermissionsApi:
         assert resp.status_code == 200
         data = resp.json()
         assert data["role"] == "viewer"
-        perms = data["permissions"]
-        assert len(perms) == 11
-        assert "config:view" in perms
-        assert "config:manage" not in perms
+        perms = set(data["permissions"])
+
+        expected = {p.value for p in ROLE_PERMISSIONS[UserRole.VIEWER]}
+        assert perms == expected, f"viewer 权限与配置不一致，差异: {perms ^ expected}"
+
+        # 安全不变量：只读角色不得持有任何写权限
+        writable = [p for p in perms if p.endswith(":manage") or p.endswith(":assign")]
+        assert not writable, f"viewer 不应拥有写权限: {writable}"
 
     def test_permissions_endpoint_requires_auth(self, client):
         """/rbac/me/permissions 应需要认证"""

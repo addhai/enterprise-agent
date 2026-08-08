@@ -49,10 +49,10 @@ addopts = [
     "--cov=src",
     "--cov-report=term-missing",
     "--cov-report=xml",
-    # 失败门槛：当前为"起步基线"，请先 `make test-cov` 测出真实覆盖率后，
-    # 在测试重构阶段(Phase 2)逐步上调至 80%（改动方案目标）。
-    # 直接设为 80 会在未达标时阻断 CI —— 这是门禁的本意，但需先校准基线。
-    "--cov-fail-under=35",
+    # 失败门槛：实测 CI 裸环境（无 Key、无 .env、requires_llm 自动跳过）覆盖率
+    # 约 48%（828 passed / 17 skipped）。取 40 作为基线，预留环境波动余量；
+    # 测试逐步补全后再上调。CI 用同样的 --cov-fail-under，本地 make test 与 CI 一致。
+    "--cov-fail-under=40",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -65,21 +65,12 @@ filterwarnings = [
 ]
 markers = [
     "integration: 真实 LLM/外部依赖端到端测试；默认跳过，需 RUN_INTEGRATION_TESTS=1 且配置 API Key 才运行",
+    "requires_llm: 需要真实 LLM / Embedding API Key 才能运行；默认跳过，需设置 RUN_LLM_TESTS=1 且配置 API Key 才运行（见 tests/conftest.py）",
 ]
-# 收集时忽略：这些目录的 conftest 会导入不存在的模块或需要真实服务。
-# 放在 pyproject.toml（而非 conftest.py）是因为 pytest 读取此配置的时间点
-# 早于任何 conftest 的加载，能真正避免 import 崩溃（exit code 4）。
-collect_ignore = [
-    "tests/test_graph",
-    "tests/test_rag",
-    "tests/test_api",
-    "tests/test_memory",
-    "tests/test_protocols",
-    "tests/test_langchain",
-    "tests/security",
-    "tests/test_integrations",
-    "tests/test_websocket",
-]
+# 说明：此处曾有一份 collect_ignore 清单，屏蔽 test_api/test_graph/test_websocket 等九个目录。
+# 但 collect_ignore 并不是 pytest 的 ini 选项（仅在 conftest.py 中作为模块级变量生效），
+# 该配置从未真正起作用，pytest 每次运行都会以 "Unknown config option" 告警。
+# 2026-08-08 逐目录体检并修复后，全部目录可正常运行，清单已删除，测试范围回归 testpaths。
 
 [tool.coverage.run]
 branch = true
@@ -91,7 +82,7 @@ omit = [
 
 [tool.coverage.report]
 # 显式声明目标，配合 --cov-fail-under 作为单一真相
-fail_under = 35
+fail_under = 40
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

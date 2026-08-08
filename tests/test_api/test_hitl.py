@@ -15,8 +15,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client():
     from src.api.server import app
-    from src.api.auth import _init_default_admin
-    _init_default_admin()
+    # 默认账号由 tests/conftest.py 的 _init_test_database 在 session 级 seed
     return TestClient(app)
 
 

@@ -4,6 +4,10 @@ import tempfile
 from langchain_core.documents import Document
 from src.rag.retriever import HybridRetriever
 
+# 全部用例需要真实 Embedding API（OpenAI / DashScope），默认跳过；
+# 设 RUN_LLM_TESTS=1 且配置好 Key 后运行。
+pytestmark = pytest.mark.requires_llm
+
 
 @pytest.fixture
 def retriever():

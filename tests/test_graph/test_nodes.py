@@ -53,12 +53,47 @@ def test_faq_node_attempts_match():
     assert result.get("faq_match") is not None
 
 
-def test_human_node_sets_flag():
-    """human_node 应设置转人工标记"""
-    state = _make_state()
-    result = human_node(state)
+def test_human_node_interrupts_and_applies_human_reply():
+    """human_node 的 HITL 契约：暂停工作流 → 推送上下文 → 恢复后采用人工回复。
 
-    assert result["needs_human"] is True
+    该节点已重构为使用 LangGraph 的 `interrupt()`，因此不能裸调
+    （会抛 "Called get_config outside of a runnable context"）。
+    必须放进带 checkpointer 的最小图里，才能验证真实行为。
+    """
+    from langgraph.graph import StateGraph, START, END
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.types import Command
+
+    graph = StateGraph(AgentState)
+    graph.add_node("human", human_node)
+    graph.add_edge(START, "human")
+    graph.add_edge("human", END)
+    app = graph.compile(checkpointer=MemorySaver())
+
+    config = {"configurable": {"thread_id": "hitl-unit-test"}}
+    state = _make_state("我要转人工")
+
+    # 第一次 invoke：应在 human 节点中断，而非直接跑完
+    result = app.invoke(state, config=config)
+    interrupts = result.get("__interrupt__")
+    assert interrupts, "human_node 应触发 interrupt 暂停工作流"
+
+    payload = interrupts[0].value
+    assert payload["type"] == "human_handoff"
+    # 转接上下文应带上原始用户消息，供人工客服判断
+    assert payload["context"]["user_message"] == "我要转人工"
+    assert payload["context"]["reason"] == "用户主动要求人工客服"
+
+    # 恢复：人工提交回复后，应覆盖 final_response 并清掉待处理标记
+    resumed = app.invoke(
+        Command(resume={"response": "您好，已由人工为您处理。", "agent_id": "agent-007"}),
+        config=config,
+    )
+    assert resumed["final_response"] == "您好，已由人工为您处理。"
+    assert resumed["human_agent_id"] == "agent-007"
+    assert resumed["human_handled"] is True
+    # 人工已介入，不应再标记「需要转人工」
+    assert resumed["needs_human"] is False
 
 
 def test_reply_node_assembles_response():

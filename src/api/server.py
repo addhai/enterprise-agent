@@ -344,8 +344,29 @@ def create_app() -> FastAPI:
         logger.error("Failed to register config router: %s", e)
 
     # 注册静态文件（必须在所有路由之后，否则会拦截 /api 请求）
+    #
+    # ⚠️ static/ 是前端构建产物，已被 .gitignore 忽略，因此在 CI、纯后端开发、
+    #    刚 clone 的环境下都不存在。此处若无条件 mount，StaticFiles 会在
+    #    create_app() 阶段直接抛 RuntimeError("Directory 'static' does not exist")，
+    #    导致 `import src.api.server` 失败、整个测试模块 collect 崩溃。
+    #    （GitHub Actions 曾因此连续多次红灯，本地却因构建过前端而始终看不到。）
+    # 同时把路径从「依赖当前工作目录」改为基于仓库根解析，避免换 cwd 启动时挂载失效。
+    from pathlib import Path
     from fastapi.staticfiles import StaticFiles
-    app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    static_dir = repo_root / "static"
+    if not static_dir.is_dir():
+        static_dir = Path("static")  # 兼容自定义工作目录的部署方式
+
+    if static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+        logger.info("Mounted static frontend: %s", static_dir)
+    else:
+        logger.warning(
+            "未找到 static/ 目录，跳过前端挂载，仅提供 API。"
+            "需要前端请先执行 `cd frontend && npm run build`"
+        )
 
     return app
 

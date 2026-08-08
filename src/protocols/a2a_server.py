@@ -335,14 +335,21 @@ async def delegate_to_perf_expert(
     """将性能问题委托给性能诊断专家 Agent。
 
     复用 delegate_to_expert() 的 A2A Client 模式。
-    a2a-sdk 不可用时回退到本地诊断逻辑。
+    降级链：远端专家 Agent -> 本地诊断逻辑。
+    a2a-sdk 未安装、远端未启动、网络异常，三种情况都会回退本地，保证客服链路不断。
     """
     url = expert_agent_url or PERF_EXPERT_URL
-    if not _A2A_AVAILABLE:
-        # a2a-sdk 未安装时回退到本地诊断逻辑
-        from src.protocols.perf_agent import _diagnose
-        return _diagnose(query)
-    return await delegate_to_expert(query, url, timeout)
+    if _A2A_AVAILABLE:
+        try:
+            result = await delegate_to_expert(query, url, timeout)
+            if result:
+                return result
+            logger.warning("性能专家 Agent(%s) 无响应，回退本地诊断", url)
+        except Exception as e:  # 网络不通/远端异常都不应让客服链路断掉
+            logger.warning("委托性能专家失败(%s): %s，回退本地诊断", url, e)
+    # 兜底：SDK 未安装 或 远端不可达，均退回本地诊断逻辑
+    from src.protocols.perf_agent import _diagnose
+    return _diagnose(query)
 
 
 async def delegate_to_security_expert(
@@ -353,14 +360,21 @@ async def delegate_to_security_expert(
     """将安全问题委托给安全审计专家 Agent。
 
     复用 delegate_to_expert() 的 A2A Client 模式。
-    a2a-sdk 不可用时回退到本地分析逻辑。
+    降级链：远端专家 Agent -> 本地分析逻辑。
+    a2a-sdk 未安装、远端未启动、网络异常，三种情况都会回退本地，保证客服链路不断。
     """
     url = expert_agent_url or SECURITY_EXPERT_URL
-    if not _A2A_AVAILABLE:
-        # a2a-sdk 未安装时回退到本地分析逻辑
-        from src.protocols.security_agent import _security_analyze
-        return _security_analyze(query)
-    return await delegate_to_expert(query, url, timeout)
+    if _A2A_AVAILABLE:
+        try:
+            result = await delegate_to_expert(query, url, timeout)
+            if result:
+                return result
+            logger.warning("安全审计专家 Agent(%s) 无响应，回退本地分析", url)
+        except Exception as e:  # 网络不通/远端异常都不应让客服链路断掉
+            logger.warning("委托安全专家失败(%s): %s，回退本地分析", url, e)
+    # 兜底：SDK 未安装 或 远端不可达，均退回本地分析逻辑
+    from src.protocols.security_agent import _security_analyze
+    return _security_analyze(query)
 
 
 # ---------------------------------------------------------------------------

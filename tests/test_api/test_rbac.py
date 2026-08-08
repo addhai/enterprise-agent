@@ -26,9 +26,34 @@ from src.api.rbac import (
 class TestPermissionEnum:
     """Permission 枚举完整性测试"""
 
-    def test_permission_count(self):
-        """应包含 21 个权限点（P0-P6 全部）"""
-        assert len(Permission) == 21
+    def test_permission_set_is_expected(self):
+        """权限点集合应与预期完全一致。
+
+        用「显式集合」而非「魔数数量」做哨兵：新增/删除权限时，失败信息会
+        直接指出多了或少了哪一个，而不是让人无脑把数字 +1，从而保留了
+        「权限变更必须是有意识决定」这一契约的真实信号。
+        """
+        expected = {
+            # P0 基础
+            "dashboard:view",
+            "customer:view", "customer:manage",
+            "ticket:view", "ticket:manage", "ticket:assign",
+            "agent:workspace",
+            "satisfaction:view",
+            "knowledge:view", "knowledge:manage",
+            "channel:view", "channel:manage",
+            "user:view", "user:manage",
+            "notification:view",
+            # P3-P6 扩展
+            "config:view", "config:manage",
+            "evaluation:view", "evaluation:manage",
+            "workflow:view", "workflow:manage",
+            "monitor:view",
+        }
+        actual = {p.value for p in Permission}
+        assert actual == expected, (
+            f"权限集合发生变化 — 新增: {actual - expected} / 移除: {expected - actual}"
+        )
 
     def test_basic_permissions_exist(self):
         """基础权限点应存在"""
@@ -63,13 +88,16 @@ class TestRolePermissions:
         assert len(ROLE_PERMISSIONS[UserRole.SUPER_ADMIN]) == len(Permission)
 
     def test_admin_has_all_except_user_manage_limitation(self):
-        """admin 应拥有 20 个权限（接近全部）"""
-        admin_perms = ROLE_PERMISSIONS[UserRole.ADMIN]
-        assert len(admin_perms) == 20
-        # admin 应有所有新增权限
-        assert Permission.CONFIG_MANAGE in admin_perms
-        assert Permission.EVALUATION_MANAGE in admin_perms
-        assert Permission.WORKFLOW_MANAGE in admin_perms
+        """admin 应拥有除 user:manage 外的全部权限。
+
+        断言「缺失集合」而非「数量」：这才是该角色真正的契约 —— 只有用户管理
+        属于 super_admin 专属。新增任何权限点若忘记授予 admin，这里会精确报出。
+        """
+        admin_perms = set(ROLE_PERMISSIONS[UserRole.ADMIN])
+        missing = set(Permission) - admin_perms
+        assert missing == {Permission.USER_MANAGE}, (
+            f"admin 权限缺口不符合预期，实际缺失: {[p.value for p in missing]}"
+        )
 
     def test_agent_has_view_only_for_new_modules(self):
         """agent 对新增模块应只有 view 权限"""
@@ -226,7 +254,8 @@ class TestRbacPermissionsApi:
         resp = client.get("/api/v1/rbac/permissions")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data["permissions"]) == 21
+        # 与枚举保持同步（避免魔数），接口应完整暴露全部权限点
+        assert len(data["permissions"]) == len(Permission)
         labels = [p["label"] for p in data["permissions"]]
         assert "查看配置" in labels
         assert "管理工作流" in labels

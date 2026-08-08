@@ -16,13 +16,41 @@ from langchain_core.documents import Document
 # 检索器：增量入库 + kb_id 隔离
 # ---------------------------------------------------------------------------
 
+class _FakeEmbedder:
+    """零依赖的假向量化器：固定维度、不触网、不需要任何 API Key。"""
+
+    dimensions = 8
+
+    def embed_text(self, text: str):
+        return [0.0] * self.dimensions
+
+    def embed_texts(self, texts):
+        return [[0.0] * self.dimensions for _ in texts]
+
+    # 兼容 LangChain Embeddings 接口
+    def embed_query(self, text: str):
+        return self.embed_text(text)
+
+    def embed_documents(self, texts):
+        return self.embed_texts(texts)
+
+
 @pytest.fixture
-def isolated_retriever():
-    """构造一个离线检索器：屏蔽真实向量库，只保留 BM25 + 元数据过滤路径。"""
+def isolated_retriever(monkeypatch):
+    """构造一个离线检索器：屏蔽真实向量库，只保留 BM25 + 元数据过滤路径。
+
+    ⚠️ Embedder 必须在构造 HybridRetriever *之前* 替换。
+    VectorStoreManager.__init__ 会立即 `Embedder()`，无 API Key 时当场抛
+    openai.OpenAIError；等对象构造完再给 add_documents 打桩已经来不及
+    （本 fixture 早期版本正是这样，导致本文件在无 Key 环境下 5 个用例直接 error，
+    与文件开头声称的"全部离线"不符）。
+    """
+    monkeypatch.setattr("src.rag.vector_store.Embedder", _FakeEmbedder)
+
     from src.rag.retriever import HybridRetriever
 
     retriever = HybridRetriever(collection_name=None)
-    # 屏蔽真实向量库（Chroma/Embedder 需要 key 或联网）
+    # 屏蔽真实向量库检索路径（只保留 BM25 + 元数据过滤）
     retriever.vector_store.add_documents = lambda *a, **k: []
     retriever.vector_store.search_with_scores = lambda *a, **k: []
     if retriever.sentence_store is not None:

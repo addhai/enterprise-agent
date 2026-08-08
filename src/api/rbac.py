@@ -382,4 +382,5 @@ def _perm_label(perm: Permission) -> str:
         Permission.EVALUATION_MANAGE: "管理评估",
         Permission.WORKFLOW_VIEW: "查看工作流",
         Permission.WORKFLOW_MANAGE: "管理工作流",
+        Permission.MONITOR_VIEW: "查看监控大屏",
     }.get(perm, perm.value)
