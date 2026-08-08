@@ -71,8 +71,8 @@
 - 基础设施配置：4 个 Dockerfile（legacy + api / worker / rag）+ 3 个 docker-compose + 11 个 Helm 模板 + 5 个运维脚本
 
 **测试统计（CI 裸环境真实运行：无 API Key / 无 .env）：**
-- **828 个测试通过 + 17 跳过**，运行全量 `tests/`（不再用白名单，覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / API 接线守卫等）
-- 覆盖率 **~48%**（门禁 40%，`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致）
+- **852 个测试通过 + 17 跳过**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / API 接线守卫等
+- 覆盖率 **48.83%**（门禁 40%，`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致）
 - 应用接线守卫（`tests/test_api/test_app_wiring.py`）：19 个 router 模块逐个导入探测 + 鉴权关键路由存在性断言，任一 router 静默消失立即红灯（曾因 `auth` 路由在 Python 3.11 因前向引用 `NameError` 被静默吞掉导致 `/auth/*` 404，由此守卫测试堵住同类缺陷）
 - RAG 离线评估 4 项指标（Recall / Precision / MRR / F1）全部通过
 - 安全护栏测试全部通过（输入注入识别 / 已知攻击模式 / 特殊字符清洗 / 正常内容保留）

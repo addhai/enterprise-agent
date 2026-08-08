@@ -251,8 +251,8 @@ make lint            # ruff 检查 + 格式化
 ```
 
 **可验证指标（CI 裸环境真实运行：无 API Key / 无 .env）：**
-- 测试：**828 passed / 17 skipped**，覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / API 接线守卫等
-- 覆盖率：**~48%**（门禁 40%），`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致
+- 测试：**852 passed / 17 skipped**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / API 接线守卫等
+- 覆盖率：**48.83%**（门禁 40%），`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致
 - 应用接线守卫（`tests/test_api/test_app_wiring.py`）：19 个 router 模块逐个导入探测 + 鉴权关键路由存在性断言，任一 router 静默消失立即红灯
 - 类型 / lint：ruff（line-length 88，target py311）；安全：Bandit 中高危阻断 + Semgrep ERROR 级
 
