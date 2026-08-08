@@ -106,6 +106,10 @@ def _on_router_error(name: str, exc: Exception) -> None:
 
 def create_app() -> FastAPI:
     """创建 FastAPI 应用"""
+    # 每次构建应用都从干净状态开始，避免多次调用 create_app() 时
+    # 上一次的注册失败残留在清单里造成误报
+    _ROUTER_REGISTRATION_ERRORS.clear()
+
     app = FastAPI(
         title="Enterprise Customer Service Agent",
         description=(
