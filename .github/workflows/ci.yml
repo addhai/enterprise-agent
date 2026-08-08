@@ -9,8 +9,6 @@ jobs:
   python-test:
     name: Tests + Coverage
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -64,52 +62,6 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
-
-      # 临时诊断：把 CI 环境的真实 import / 路由状态写到公开可读的 ci-diag 分支，
-      # 因为 job 完整日志需仓库 admin 权限、annotation API 匿名 404，无法直接读取。
-      # 定位根因后会删除本 step。
-      - name: Diagnose CI (publish to ci-diag branch)
-        if: always()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "RUN_SHA: $GITHUB_SHA" | tee ci_diag.txt
-          echo "PYTHON: $(python --version 2>&1)" | tee -a ci_diag.txt
-          python -c "
-          import traceback
-          try:
-              from src.api.auth import router
-              print('AUTH_IMPORT: OK')
-          except Exception as e:
-              print('AUTH_IMPORT: FAIL')
-              traceback.print_exc()
-          " 2>&1 | tee -a ci_diag.txt
-          python -c "
-          import traceback
-          try:
-              from src.api.server import app
-              paths = app.openapi()['paths']
-              print('APP_ROUTES_TOTAL:', len(paths))
-              print('AUTH_ROUTES:', [p for p in paths if '/auth' in p])
-              print('REG_ERRORS:', getattr(app.state, 'router_registration_errors', 'N/A'))
-          except Exception as e:
-              print('SERVER_IMPORT: FAIL')
-              traceback.print_exc()
-          " 2>&1 | tee -a ci_diag.txt
-          python -c "
-          import importlib
-          for m in ('bcrypt','pydantic','fastapi'):
-              try:
-                  mod = importlib.import_module(m)
-                  print(m, getattr(mod,'__version__','?'))
-              except Exception as e:
-                  print(m, 'IMPORT FAIL', repr(e))
-          " 2>&1 | tee -a ci_diag.txt
-          git config user.email "ci@local"
-          git config user.name "ci-diag"
-          git add ci_diag.txt
-          git commit -m "ci: publish diagnostics [skip ci]" || echo "nothing"
-          git push origin HEAD:ci-diag || echo "push failed"
 
   python-security:
     name: SAST Security Scan
