@@ -89,7 +89,7 @@ flowchart TB
 python -m venv venv
 venv/Scripts/activate              # Windows；macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env               # 编辑 .env，填入 DASHSCOPE_API_KEY（通义千问）
+cp .env.example .env               # 编辑 .env，填入 OPENAI_API_KEY（DashScope 兼容模式，见 .env.example 的 OPENAI_API_BASE）
 
 # 2. 构建前端（产物自动输出到后端托管的 static/ 目录）
 cd frontend
@@ -111,7 +111,7 @@ make demo                            # 或：python scripts/run_demo.py
 适合完整体验网关 / 消息队列 / 监控等云原生组件（较重，需构建多个镜像）：
 
 ```bash
-cp .env.example .env               # 填入 DASHSCOPE_API_KEY
+cp .env.example .env               # 填入 OPENAI_API_KEY（DashScope 兼容模式）
 make up                            # = docker compose up -d（apisix + 4 业务服务 + pg/milvus/minio/redis/rabbitmq + nginx）
 make ingest                        # 知识库文档入库
 bash scripts/smoke-test.sh         # 冒烟验证
