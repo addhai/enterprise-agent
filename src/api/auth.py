@@ -4,6 +4,11 @@
 用户/角色数据持久化到数据库（Postgres / SQLite，见 src/db/）。
 password 用 bcrypt 哈希；会话 token 用 JWT（无状态，HS256，支持多副本部署，重启不失效）。
 """
+# 关键：使所有注解延迟求值（字符串化），与 Python 3.11/3.13 的「注解即时求值」语义兼容。
+# 否则下面 `_to_user_response(...) -> UserResponse` 会在模块加载时引用尚未定义的 UserResponse
+# 而 NameError（Python 3.14 已改为延迟求值，所以本地能跑、CI 3.11 崩）。
+from __future__ import annotations
+
 import os
 import time
 import uuid
