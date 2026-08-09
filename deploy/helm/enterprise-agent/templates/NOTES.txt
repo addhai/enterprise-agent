@@ -40,8 +40,10 @@ External Services:
 
 Access:
 {{- if .Values.apisix.enabled }}
-  HTTP:  http://<node-ip>:{{ .Values.apisix.service.httpPort | default 80 }}
-  HTTPS: https://<node-ip>:{{ .Values.apisix.service.httpsPort | default 443 }}
+  {{- /* 圆括号安全取值：即便用户的 values 覆盖掉整个 apisix 段导致
+         service 为 nil，也只会得到 nil 再走 default，而不会 nil pointer 报错 */}}
+  HTTP:  http://<node-ip>:{{ (.Values.apisix.service).httpPort | default 80 }}
+  HTTPS: https://<node-ip>:{{ (.Values.apisix.service).httpsPort | default 443 }}
 {{- else if .Values.ingress.enabled }}
 {{- range .Values.ingress.hosts }}
   URL: https://{{ .host }}

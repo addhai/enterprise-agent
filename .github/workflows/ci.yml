@@ -117,3 +117,84 @@ jobs:
         # 类型检查（tsc -b）是核心闸门：曾因 BotIcon 类型错误在本地修好、
         # 但 CI 只跑 Python 完全没拦到。vite build 产物输出到 ../static（已 gitignore）。
         run: npm run build
+
+  infra-validate:
+    name: Infra Validate (Compose + Images + Helm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose files
+        run: |
+          # 校验 4 个 compose 文件的语法、服务定义与变量插值。
+          # 开发机上 Docker Desktop daemon 未必常开，但 `config` 只需 CLI，
+          # 因此这一步能在任何 runner 上稳定拦住 compose 写崩的情况。
+          for f in docker-compose.yml docker-compose.dev.yml \
+                   docker-compose.milvus.yml docker-compose.monitoring.yml; do
+            echo "--- validating $f ---"
+            docker compose -f "$f" config --quiet
+          done
+          echo "services in docker-compose.yml:"
+          docker compose -f docker-compose.yml config --services
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build api image
+        # 真构建（不 push），确保三个生产镜像的 Dockerfile 始终可用。
+        # 此前这些 Dockerfile 从未在流水线中构建过，属于"代码齐全但没跑过"的盲区。
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api/Dockerfile
+          push: false
+          tags: enterprise-agent-api:ci
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/worker/Dockerfile
+          push: false
+          tags: enterprise-agent-worker:ci
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,scope=worker,mode=max
+
+      - name: Build rag image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/rag/Dockerfile
+          push: false
+          tags: enterprise-agent-rag:ci
+          cache-from: type=gha,scope=rag
+          cache-to: type=gha,scope=rag,mode=max
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Helm lint & template (default / staging / prod)
+        run: |
+          # lint 检查 chart 结构；template 对三套 values 分别做真实渲染。
+          #
+          # 必须三套都渲染：曾有 NOTES.txt 读取 .Values.apisix.service.httpPort，
+          # 而默认 values 缺少 apisix.service 结构；因为默认/staging 的
+          # apisix.enabled=false 被 if 短路，只有 prod（enabled=true）才会
+          # 触发 nil pointer，导致 `helm install -f values-prod.yaml` 当场失败。
+          # 单跑默认 values 完全拦不住这类"仅生产配置触发"的问题。
+          helm lint deploy/helm/enterprise-agent
+          for v in "" "values-staging.yaml" "values-prod.yaml"; do
+            if [ -z "$v" ]; then
+              echo "--- rendering with default values ---"
+              helm template enterprise-agent deploy/helm/enterprise-agent > /tmp/rendered.yaml
+            else
+              echo "--- rendering with $v ---"
+              helm template enterprise-agent deploy/helm/enterprise-agent \
+                -f "deploy/helm/enterprise-agent/$v" > /tmp/rendered.yaml
+            fi
+            echo "  rendered $(grep -c '^kind:' /tmp/rendered.yaml) kubernetes resources"
+          done

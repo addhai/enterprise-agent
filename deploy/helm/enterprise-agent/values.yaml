@@ -164,6 +164,12 @@ apisix:
   image:
     repository: apache/apisix
     tag: 3.14.1-debian
+  # 网关对外暴露端口。此结构必须保留在默认 values 中：
+  # NOTES.txt 会读取 apisix.service.*，缺失时一旦 apisix.enabled=true
+  # （如 values-prod.yaml），渲染会因 nil map 取子键而直接失败。
+  service:
+    httpPort: 80
+    httpsPort: 443
   resources:
     requests:
       cpu: 250m
