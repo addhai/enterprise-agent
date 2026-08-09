@@ -138,6 +138,17 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Prometheus 指标采集中间件
+    # 此前该中间件虽已实现却从未挂载，导致 http_requests_total /
+    # http_request_duration_seconds 永远为空，Grafana 对应面板全是 No data。
+    try:
+        from src.api.metrics import MetricsMiddleware
+
+        app.add_middleware(MetricsMiddleware)
+        logger.info("Registered Prometheus metrics middleware")
+    except Exception as e:  # pragma: no cover - 指标不应影响主流程
+        logger.warning("Metrics middleware not registered: %s", e)
+
     # 生命周期事件
     @app.on_event("startup")
     async def startup():

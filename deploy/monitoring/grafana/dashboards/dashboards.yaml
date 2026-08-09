@@ -1,0 +1,22 @@
+# Grafana Dashboard Provider — 自动加载本目录下的 dashboard JSON
+#
+# 背景（曾经的坑）：
+#   docker-compose 把本目录挂到 /etc/grafana/provisioning/dashboards，
+#   但该目录下只有 dashboard JSON、没有 provider 配置文件，
+#   Grafana 因此不会加载任何面板（provisioning 要求先声明 provider）。
+#
+# 注意：Grafana 只把本目录下的 *.yaml 当作 provider 配置，
+#       *.json 由 options.path 指定的路径扫描加载，两者可同目录共存。
+apiVersion: 1
+
+providers:
+  - name: enterprise-agent
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

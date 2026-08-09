@@ -20,15 +20,44 @@ try:
 except ImportError:
     get_evaluation_tracker = None  # type: ignore
 
-from src.api.metrics import render_metrics
+from src.api.metrics import gauge_set, render_metrics
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/metrics", tags=["monitoring"])
 
 
+def _refresh_business_gauges() -> None:
+    """抓取时刷新业务侧 gauge（Prometheus collect-on-scrape 模式）
+
+    评估数据原本只存在 evaluation tracker 内存里、仅通过 JSON 端点暴露，
+    Prometheus 抓不到，导致 Grafana 的质量/解决率面板永远 No data。
+    这里在每次 scrape 时把 tracker 统计同步成 gauge。
+    """
+    if get_evaluation_tracker is None:
+        return
+    try:
+        stats = get_evaluation_tracker().stats()
+    except Exception as e:  # pragma: no cover - 指标不应影响抓取
+        logger.debug("refresh business gauges failed: %s", e)
+        return
+
+    mapping = {
+        "agent_quality_score_avg": stats.get("avg_quality_score", 0) or 0,
+        "agent_resolution_rate": stats.get("resolution_rate", 0) or 0,
+        "agent_escalation_rate": stats.get("escalation_rate", 0) or 0,
+        "agent_requests_tracked_total": stats.get("total_requests", 0) or 0,
+    }
+    for name, value in mapping.items():
+        try:
+            gauge_set(name, float(value))
+        except (TypeError, ValueError):
+            continue
+
+
 @router.get("/prometheus")
 async def prometheus_metrics():
     """Prometheus text format /metrics 端点（K8s prometheus.io 注解抓取此路径）"""
+    _refresh_business_gauges()
     return Response(content=render_metrics(), media_type="text/plain; charset=utf-8")
 
 

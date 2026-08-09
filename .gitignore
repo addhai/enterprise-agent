@@ -33,3 +33,9 @@ test_agent.db
 
 # dev/demo 随机 JWT 密钥（由 config 自动生成，禁止入库）
 .jwt_secret
+
+# ---- 非作品集交付物（内部/团队文档，不进作品集仓库）----
+# 团队技术提升方案是按「团队带练/8 周路线图」假设写的，对单人作品集不适用
+团队技术提升方案.md
+# 内部项目路线图 HTML，非对外展示材料
+docs/agent-project-roadmap.html

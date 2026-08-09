@@ -34,7 +34,7 @@ scrape_configs:
 
   # ---- API Service ----
   - job_name: api-service
-    metrics_path: /api/v1/metrics
+    metrics_path: /api/v1/metrics/prometheus
     static_configs:
       - targets: ['api-service:8000']
         labels:

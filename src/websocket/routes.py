@@ -120,6 +120,15 @@ async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
     logger.info("WebSocket connected: session=%s", session_id)
 
+    # 活跃连接数 +1 —— Grafana「Active WebSocket Connections」面板依赖此 gauge。
+    # 与下方 finally 中的 gauge_dec 严格配对，保证异常断开也能正确递减。
+    try:
+        from src.api.metrics import SERVICE_NAME as _METRICS_SVC, gauge_inc
+
+        gauge_inc("ws_active_connections", 1, {"service": _METRICS_SVC})
+    except Exception:  # pragma: no cover - 指标不应影响连接
+        pass
+
     # 创建会话
     session_mgr = get_session_manager()
     session_mgr.create_session(
@@ -426,6 +435,15 @@ async def websocket_chat(websocket: WebSocket):
         except Exception:
             pass
         session_mgr.remove_session(session_id)
+    finally:
+        # 活跃连接数 -1 —— 与 accept 后的 gauge_inc 配对，
+        # 放在 finally 保证正常断开 / 异常退出都会递减，避免 gauge 只增不减。
+        try:
+            from src.api.metrics import SERVICE_NAME as _METRICS_SVC, gauge_dec
+
+            gauge_dec("ws_active_connections", 1, {"service": _METRICS_SVC})
+        except Exception:  # pragma: no cover - 指标不应影响清理
+            pass
 
 
 def _build_citations(retrieved_docs) -> List[Dict[str, Any]]:

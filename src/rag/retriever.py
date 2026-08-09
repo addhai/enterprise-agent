@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -252,6 +253,9 @@ class HybridRetriever:
         if user_access_levels is None:
             user_access_levels = ["public", "internal", "confidential", "restricted"]
 
+        # 检索耗时计时起点（Prometheus rag_search_duration_seconds）
+        _rag_t0 = time.perf_counter()
+
         # 标准粒度：向量检索
         vector_results = self._vector_search(query, top_k * 2, filter_by)
 
@@ -299,6 +303,19 @@ class HybridRetriever:
 
         # 版本冲突处理
         final = self._resolve_version_conflicts(final, top_k)
+
+        # 检索耗时与命中埋点 —— Grafana「RAG Search Latency」面板依赖
+        # rag_search_duration_seconds_bucket；指标失败绝不影响检索主流程
+        try:
+            from src.api.metrics import record_rag_search
+
+            record_rag_search(
+                time.perf_counter() - _rag_t0,
+                backend=self.backend,
+                hit=bool(final),
+            )
+        except Exception:  # pragma: no cover - 指标不应影响业务
+            pass
 
         return final
 
