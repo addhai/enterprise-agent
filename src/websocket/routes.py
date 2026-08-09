@@ -185,7 +185,7 @@ async def websocket_chat(websocket: WebSocket):
                     existing._websocket_ref = websocket
                     user_id = _auth_user_id
                     tenant_id = _auth_tenant_id
-                    user_plan = existing.user_plan or _auth_plan
+                    user_plan = _auth_plan
                     restored_count = len(getattr(existing, "conversation_history", []))
                     await websocket.send_json({
                         "type": "session_resumed",
@@ -326,7 +326,7 @@ async def websocket_chat(websocket: WebSocket):
                         session_id = incoming_session
                         user_id = _auth_user_id
                         tenant_id = _auth_tenant_id
-                        user_plan = existing.user_plan or _auth_plan
+                        user_plan = _auth_plan
                     else:
                         # 内存无此会话（如服务重启）→ 以该 id 重建，稍后从 DB 恢复历史；
                         # 租户/身份以服务端解析为准

@@ -15,7 +15,7 @@
 - **Python 3.11+**（部署与 CI 基准锁定 3.11，见 `Dockerfile` / `.github/workflows/ci.yml`；本地开发建议 3.11 以与部署完全一致）
 - **Node.js 22+**（前端 Vite 构建）
 - **Docker 20.10+ / Compose v2**（可选，用于全栈云原生部署；`docker compose up -d` 一键起网关 + 双副本 api/ws + 监控）
-- 真实大模型密钥 `DASHSCOPE_API_KEY`（通义千问）；缺失时部分 AI 能力降级，系统仍可启动与演示
+- 真实大模型密钥 `OPENAI_API_KEY`（通义千问 DashScope 兼容）；缺失时部分 AI 能力降级，系统仍可启动与演示
 
 ## ✨ 项目亮点（为什么值得看）
 
@@ -28,6 +28,24 @@
 - **容器化多副本部署**：应用层（api/ws/worker/rag/frontend）去除固定 `container_name`、api/ws 设 `replicas: 2`，网关与数据层保持单实例；水平扩展 `docker compose up -d --scale api-service=3 --scale ws-service=3 ...`。
 - **云原生部署**：APISIX 网关、RabbitMQ 异步、Prometheus/Grafana 监控，Docker Compose / K3s + Helm 两条部署路径。
 - **引用气泡（坐席可溯源）**：AI 回复下方透出"引用知识片段 N"可展开气泡，回复有据可依，对标阿里云智能客服坐席引用。
+
+---
+
+## 🎬 实时 Demo
+
+> 下面是真实跑通的智能客服对话（非截图伪造，由真实大模型生成、WebSocket 流式返回）：
+
+### RAG 检索增强（核心能力）
+
+用户提出 CloudSync 产品技术问题，AI 从知识库精准检索并引用来源片段作答。
+
+![RAG 知识库检索 Demo](rag_demo.gif)
+
+### 工具调用 + 工单创建
+
+用户描述同步故障，AI 调用工具创建工单并给出排查建议。
+
+![工具调用 Demo](demo.gif)
 
 ---
 
