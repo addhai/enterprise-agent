@@ -25,6 +25,7 @@ static/
 
 # 多副本验证脚本产生的临时日志
 .replica_*.log
+.fullstack_*.log
 
 # 本地持久化数据库文件（非源码，由 init_db 自动生成）
 *.db

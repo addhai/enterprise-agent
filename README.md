@@ -114,7 +114,11 @@ python scripts/verify_multireplica.py   # 退出码 0 = 验证通过
 
 > 三套 values 全渲染不是凑数：`NOTES.txt` 曾读取 `.Values.apisix.service.httpPort`，而默认 values 缺 `apisix.service` 结构。因为 default/staging 的 `apisix.enabled=false` 被 `if` 短路，**只有 prod 才触发 nil pointer**——即 `helm install -f values-prod.yaml` 会当场失败。只跑默认 values 完全拦不住这类「仅生产配置触发」的问题。该缺陷已由这条门禁发现并修复。
 
-**能力边界（诚实标注）**：单进程 demo（路径 A）与双副本水平扩展已本机实测；Compose / Dockerfile / Helm 配置由 CI 逐次校验并真实构建镜像；但完整 12 服务栈（Milvus + RabbitMQ + APISIX + 监控）的长时间联跑尚未在本机完成。
+**能力边界（诚实标注）**：
+- **已实测（运行时真跑）**：多副本水平扩展（`scripts/verify_multireplica.py`）、应用层全栈端到端（`scripts/verify_fullstack_local.py`：多无状态副本 + 共享存储一致 + WS 活跃连接 gauge 运行时 +1 + 指标端点吐 `agent_*` gauge + RAG 检索命中）、多租户 RBAC 隔离、可观测性链路、RAG 检索（rag_demo.gif 真实驱动）。
+- **配置已校验并真实构建镜像（CI `infra-validate`）**：4 个 Compose 全部 `config` 校验、3 个生产 Dockerfile 真实 build、Helm 三套 values 分别渲染。
+- **待 Docker 环境补齐（已有可复现脚本，沙箱无 daemon 未跑）**：完整 12 服务容器栈联跑（`scripts/verify_fullstack.py`）、Grafana 面板真出数（`scripts/verify_monitoring.py`）。具体步骤见 `docs/deployment/runbook.md`。
+- **云资源真实性（受 key + 付费 阻断）**：默认 `ALIYUN_DEMO_FALLBACK=true`，真实阿里云 API 优先、无资源回退样本（每条结果由 `src/mcp_tools/resource.py` 的 `_source_note` 标注来源）；`/api/v1/health` 现暴露 `aliyun_demo_fallback` 便于感知样本模式。要 100% 真实需用户付费购资源 + 填真实 key + 置 false（详见 runbook 第 4 节）。
 
 ---
 

@@ -43,8 +43,21 @@ class ChatResponse(BaseModel):
 
 @router.get("/health")
 async def health_check():
-    """健康检查"""
-    return {"status": "ok", "service": "enterprise-agent"}
+    """健康检查
+
+    额外暴露 aliyun_demo_fallback：让调用方（前端/运维）能感知当前是否处于
+    “云资源样本回退”模式，避免把样本数据误认为真实数据。详见
+    src/mcp_tools/cloud_provider.py 的 FallbackProvider。
+    """
+    import os
+    aliyun_demo_fallback = os.environ.get("ALIYUN_DEMO_FALLBACK", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+    return {
+        "status": "ok",
+        "service": "enterprise-agent",
+        "aliyun_demo_fallback": aliyun_demo_fallback,
+    }
 
 
 @router.post("/chat", response_model=ChatResponse)
