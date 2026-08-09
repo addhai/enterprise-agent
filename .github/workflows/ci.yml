@@ -89,3 +89,31 @@ jobs:
           # GitHub 上仅作参考（避免网络/规则同步导致误红）；
           # 真正阻断在贵司 GitLab CI 的 python-security 阶段。
           semgrep scan --config auto --severity ERROR --error --json -o semgrep-report.json src/ || true
+
+  frontend-build:
+    name: Frontend Build & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (oxlint)
+        # 静态检查：.oxlintrc.json 已配规则；零配置项按默认，不阻塞正常告警
+        run: npm run lint
+
+      - name: Build (tsc -b + vite build)
+        # 类型检查（tsc -b）是核心闸门：曾因 BotIcon 类型错误在本地修好、
+        # 但 CI 只跑 Python 完全没拦到。vite build 产物输出到 ../static（已 gitignore）。
+        run: npm run build
