@@ -111,7 +111,8 @@
 - **最轻量启动路径（克隆即可演示）**：配置 `.env`（填 `OPENAI_API_KEY`，配 DashScope 兼容 `OPENAI_API_BASE`）→ `cd frontend && npm run build`（产物自动输出到 `static/`）→ `set VECTOR_STORE_BACKEND=chroma && uvicorn src.api.server:app` → 打开 `http://localhost:8000` 即可对话。
 - **多租户 RBAC 隔离（可复现）**：`pytest tests/test_websocket/test_ws_tenant_isolation.py -v` 进 CI 长期复跑，证明 A 租户数据 B 租户不可见、客户端注入 `tenant_id` 越权被服务端忽略。
 - **云原生多副本水平扩展（可复现）**：`python scripts/verify_multireplica.py` 起 2 个无状态副本实测共享存储一致性（副本 A 工单副本 B 可读），等价于 `docker compose up --scale api-service=3` 的副本语义。
-- 完整 12 服务云原生栈（APISIX + 业务服务 + PG/Milvus/Redis/RabbitMQ/MinIO + 监控）亦可经 Docker Compose / K3s + Helm 部署。
+- **基础设施配置进 CI 门禁（可复现）**：`infra-validate` job 每次流水线校验 4 个 compose 文件、真实 build api/worker/rag 三个生产镜像、`helm lint` + default/staging/prod 三套 values 渲染。该门禁上线即查出 `values-prod.yaml` 渲染 nil pointer（`apisix.service` 结构缺失，仅 `apisix.enabled=true` 时触发，等同生产 `helm install` 会当场失败），已修复。
+- **能力边界（面试可如实回答）**：单进程 demo 与双副本扩展已本机实测，Compose/Dockerfile/Helm 由 CI 逐次校验并真实构建镜像；完整 12 服务栈（APISIX + PG/Milvus/Redis/RabbitMQ/MinIO + 监控）的长时间联跑尚未在本机完成。
 
 ## 技术栈
 
@@ -131,7 +132,7 @@
 | 云资源查询 | 阿里云 OpenAPI（ECS/RDS/SLB/Redis 只读 + 云监控，手写 RPC 签名零依赖） |
 | 鉴权 | JWT（HS256 零依赖，无状态，支持多副本 / 多进程部署） |
 | 部署 | Docker Compose **多副本**（`--scale`）+ K3s + Helm（生产） |
-| CI/CD | **GitHub Actions**（3 阶段：ruff lint/format · pytest 全量 + 覆盖率门禁 · SAST） |
+| CI/CD | **GitHub Actions**（4 个并行 job：pytest + 覆盖率门禁 · SAST · 前端 tsc/vite build · 基础设施 compose+镜像+Helm 校验） |
 | 监控 | Prometheus + Grafana（12 面板 + 8 告警） |
 | 代码质量 | Ruff（line-length 88，target py311）+ Bandit + Semgrep |
 
@@ -144,4 +145,4 @@
 ## 📋 简历「项目经历」栏可直接用的精简版（约 120 字）
 
 > **企业级智能客服 AI Agent**（个人作品集，production-grade）｜对标阿里云 AI 助理
-> 用 LangGraph + RAG + MCP 搭建智能客服：HybridRetriever 混合检索、7 节点多路径编排、5 层安全护栏、多租户强隔离 + RBAC、JWT 无状态多副本部署。前端单进程即可跑真实对话 demo，38 个 MCP 工具真实落库；GitHub Actions 3 阶段流水线，856 测试全绿、覆盖率 48.83%。
+> 用 LangGraph + RAG + MCP 搭建智能客服：HybridRetriever 混合检索、7 节点多路径编排、5 层安全护栏、多租户强隔离 + RBAC、JWT 无状态多副本部署。前端单进程即可跑真实对话 demo，38 个 MCP 工具真实落库；GitHub Actions 4 job 流水线（测试 / SAST / 前端构建 / 基础设施校验），856 测试全绿、覆盖率 48.83%。

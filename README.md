@@ -15,7 +15,7 @@
 - **对标阿里云 AI 助理形态**：智能客服坐席助手 —— 知识库检索增强、多轮对话、实时查云资源 / 开真实工单、引用可溯源。
 - **全栈 AI 工程能力全覆盖**：LangGraph 编排 + RAG 混合检索 + MCP 工具 + 多租户强隔离 + RBAC + 5 层安全护栏 + 云原生多副本 + 可观测。
 - **"全链路经得起问"，不是"某一点亮眼"**：多租户隔离有进 CI 的自动化测试、多副本水平扩展有实测脚本、demo 由真实对话脚本化生成（见下方「可验证证据链」）。
-- **工程落地成熟度**：**856 个测试 + 覆盖率门禁 + SAST 全绿**（无密钥也能稳定跑），GitHub Actions 3 阶段流水线。
+- **工程落地成熟度**：**856 个测试 + 覆盖率门禁 + SAST 全绿**（无密钥也能稳定跑），GitHub Actions 4 个并行 job 覆盖 Python / 安全 / 前端构建 / 基础设施校验。
 
 ---
 
@@ -103,6 +103,18 @@ docker daemon 不可用环境，用 `scripts/verify_multireplica.py` 在单机�
 ```bash
 python scripts/verify_multireplica.py   # 退出码 0 = 验证通过
 ```
+
+### 基础设施配置在 CI 每次校验（不只是「写了 YAML」）
+
+云原生配置最容易变成「代码齐全但从没跑过」。本仓库把它做成流水线门禁（`infra-validate` job，与测试并行）：
+
+- **Compose**：4 个 `docker-compose*.yml` 全部 `config` 校验（语法 / 服务定义 / 变量插值）
+- **镜像**：`docker/api`、`docker/worker`、`docker/rag` 三个生产 Dockerfile **每次 CI 真实 build**（带 GHA 缓存）
+- **Helm**：`helm lint` + 对 **default / staging / prod 三套 values 分别渲染**
+
+> 三套 values 全渲染不是凑数：`NOTES.txt` 曾读取 `.Values.apisix.service.httpPort`，而默认 values 缺 `apisix.service` 结构。因为 default/staging 的 `apisix.enabled=false` 被 `if` 短路，**只有 prod 才触发 nil pointer**——即 `helm install -f values-prod.yaml` 会当场失败。只跑默认 values 完全拦不住这类「仅生产配置触发」的问题。该缺陷已由这条门禁发现并修复。
+
+**能力边界（诚实标注）**：单进程 demo（路径 A）与双副本水平扩展已本机实测；Compose / Dockerfile / Helm 配置由 CI 逐次校验并真实构建镜像；但完整 12 服务栈（Milvus + RabbitMQ + APISIX + 监控）的长时间联跑尚未在本机完成。
 
 ---
 
@@ -323,7 +335,16 @@ result = await client.call_tool("api_key_generate", name="my-app-key")
 
 ## 🧪 测试与 CI
 
-GitHub Actions 运行 3 个阶段：代码检查（ruff lint / format）、确定性单元测试（pytest + 覆盖率）、SAST（Bandit + Semgrep）。
+GitHub Actions 运行 **4 个并行 job**：
+
+| Job | 内容 |
+|-----|------|
+| `python-test` | ruff lint / format + 全量 pytest + 覆盖率门禁（≥40%） |
+| `python-security` | SAST：Bandit（中高危阻断）+ Semgrep（ERROR 级） |
+| `frontend-build` | `npm ci` + oxlint + `tsc -b` 类型检查 + `vite build` |
+| `infra-validate` | 4 个 compose 文件 `config` 校验 + api/worker/rag 三镜像真实 build + `helm lint` 与三套 values 渲染 |
+
+> `frontend-build` 与 `infra-validate` 是后补的闸门，各自都堵住过真实缺陷：前者对应曾只在本地发现的 `tsc` 类型错误，后者直接查出 `values-prod.yaml` 渲染 nil pointer（生产部署会当场失败）。
 
 ```bash
 make test            # 运行全部测试（带覆盖率门槛）
