@@ -604,7 +604,9 @@ async def _handle_ai_chat(
         )
 
         # 4. 执行工作流（异步 offload，避免阻塞事件循环）
-        import asyncio
+        # 注意：asyncio 已在文件顶部 import，函数内不要再次 import，否则会让
+        # asyncio 被当成局部变量，导致上方 494/535 行的 asyncio.to_thread 报
+        # "cannot access local variable 'asyncio' where it is not associated with a value"
         thread_config = {"configurable": {"thread_id": session_id}}
         result = await asyncio.to_thread(
             app.invoke, state, thread_config,
