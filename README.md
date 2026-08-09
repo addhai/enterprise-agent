@@ -1,7 +1,6 @@
 # Enterprise Customer Service Agent
 
-> 一个**对标「阿里云 AI 助理」形态**的企业级智能客服系统，作为全栈 AI 工程**作品集**构建。
-> 覆盖 LangGraph 工作流编排、RAG 检索增强、工具调用（MCP）、多租户隔离、RBAC 权限、5 层安全护栏与评估监控。
+> **一句话**：一个**真能对话**的企业级智能客服 AI Agent 作品集 —— 单进程就能跑起「前端官网 + 真实大模型对话 + 工具调用」，**对标「阿里云 AI 助理」形态**。覆盖 LangGraph 编排、RAG 检索增强、MCP 工具调用、多租户隔离、RBAC 权限、5 层安全护栏与云原生可观测部署。
 
 [![CI](https://github.com/addhai/enterprise-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/addhai/enterprise-agent/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
@@ -10,30 +9,19 @@
 
 ---
 
-## 🔧 环境要求
+## 🎯 30 秒看懂（写给招聘官 / 技术面试官）
 
-- **Python 3.11+**（部署与 CI 基准锁定 3.11，见 `Dockerfile` / `.github/workflows/ci.yml`；本地开发建议 3.11 以与部署完全一致）
-- **Node.js 22+**（前端 Vite 构建）
-- **Docker 20.10+ / Compose v2**（可选，用于全栈云原生部署；`docker compose up -d` 一键起网关 + 双副本 api/ws + 监控）
-- 真实大模型密钥 `OPENAI_API_KEY`（通义千问 DashScope 兼容）；缺失时部分 AI 能力降级，系统仍可启动与演示
-
-## ✨ 项目亮点（为什么值得看）
-
-- **端到端可跑的真实 demo**：单进程即可拉起「前端官网 + 浮动智能客服 + 后端 API + WebSocket 聊天」，AI 回复由真实大模型（通义千问）生成，不是 mock。
-- **LangGraph 工作流编排**：`entry → rag → reply` 的多节点 DAG，含工具调用（ReAct）、记忆注入、安全护栏与人工接管（HITL）分支。
-- **RAG 检索增强**：HybridRetriever（向量 + 关键词混合检索），开发用 Chroma、生产用 Milvus，支持多租户 Partition Key 隔离。
-- **MCP 工具服务**：开箱即暴露 **38 个标准化工具**（工单 / 账单 / 用户 / SSO / API Key / 审计 / 知识库），任意 MCP 兼容 Agent 可自动发现并调用。
-- **企业级工程能力**：RBAC 三层防护（工具级 + 参数级 + 审计）、多租户强制隔离（LLM 无法跨租户）、5 层安全护栏、GitHub Actions CI（lint + 确定性测试 + SAST）。
-- **真实云资源查询**：对话中可查真实阿里云 ECS / RDS / SLB / Redis 实例与云监控指标（手写阿里云 RPC Signature V1 签名，`requests` 零额外依赖客户端，只读）；无 AK/SK 时自动回退样本数据，demo 不空。
-- **容器化多副本部署**：应用层（api/ws/worker/rag/frontend）去除固定 `container_name`、api/ws 设 `replicas: 2`，网关与数据层保持单实例；水平扩展 `docker compose up -d --scale api-service=3 --scale ws-service=3 ...`。
-- **云原生部署**：APISIX 网关、RabbitMQ 异步、Prometheus/Grafana 监控，Docker Compose / K3s + Helm 两条部署路径。
-- **引用气泡（坐席可溯源）**：AI 回复下方透出"引用知识片段 N"可展开气泡，回复有据可依，对标阿里云智能客服坐席引用。
+- **这是生产级作品集，不是玩具 demo**：`uvicorn src.api.server:app` 一个进程同时提供官网前端、REST API 和 WebSocket 聊天；AI 回复由真实大模型（通义千问）生成，工具调用真实落库，全程**非 mock**。
+- **对标阿里云 AI 助理形态**：智能客服坐席助手 —— 知识库检索增强、多轮对话、实时查云资源 / 开真实工单、引用可溯源。
+- **全栈 AI 工程能力全覆盖**：LangGraph 编排 + RAG 混合检索 + MCP 工具 + 多租户强隔离 + RBAC + 5 层安全护栏 + 云原生多副本 + 可观测。
+- **"全链路经得起问"，不是"某一点亮眼"**：多租户隔离有进 CI 的自动化测试、多副本水平扩展有实测脚本、demo 由真实对话脚本化生成（见下方「可验证证据链」）。
+- **工程落地成熟度**：**856 个测试 + 覆盖率门禁 + SAST 全绿**（无密钥也能稳定跑），GitHub Actions 3 阶段流水线。
 
 ---
 
-## 🎬 实时 Demo
+## 🎬 实时 Demo（真能跑，非截图伪造）
 
-> 下面是真实跑通的智能客服对话（非截图伪造，由真实大模型生成、WebSocket 流式返回）：
+> 下面是**真实跑通**的智能客服对话 —— 由真实大模型生成、WebSocket 流式返回，不是 PS 或写死的截图。
 
 ### RAG 检索增强（核心能力）
 
@@ -66,6 +54,20 @@ python scripts/rag_demo_gif.py    # 渲染 rag_demo.gif
 
 - 中间产物落在 `scripts/.cache/`（已 gitignore，不进仓库）；需要真实 LLM key（`.env` 的 `OPENAI_API_KEY` / DashScope）。
 - `rag_capture.py` 支持 `RAG_RUNS=N` 控制抓取条数（默认 5，取命中知识库术语最多的一条）。
+
+---
+
+## ✨ 项目亮点（为什么值得看）
+
+- **端到端可跑的真实 demo**：单进程即可拉起「前端官网 + 浮动智能客服 + 后端 API + WebSocket 聊天」，AI 回复由真实大模型（通义千问）生成，**不是 mock**。
+- **LangGraph 工作流编排**：`entry → rag → reply` 的多节点 DAG，含工具调用（ReAct）、记忆注入、安全护栏与人工接管（HITL）分支。
+- **RAG 检索增强**：HybridRetriever（向量 + 关键词混合检索），开发用 Chroma、生产用 Milvus，支持多租户 Partition Key 隔离。
+- **MCP 工具服务**：开箱即暴露 **38 个标准化工具**（工单 / 账单 / 用户 / SSO / API Key / 审计 / 知识库），任意 MCP 兼容 Agent 可自动发现并调用。
+- **企业级工程能力**：RBAC 三层防护（工具级 + 参数级 + 审计）、多租户强制隔离（LLM 无法跨租户）、5 层安全护栏、GitHub Actions CI（lint + 确定性测试 + SAST）。
+- **真实云资源查询**：对话中可查真实阿里云 ECS / RDS / SLB / Redis 实例与云监控指标（手写阿里云 RPC Signature V1 签名，`requests` 零额外依赖客户端，只读）；无 AK/SK 时自动回退样本数据，demo 不空。
+- **容器化多副本部署**：应用层（api/ws/worker/rag/frontend）去除固定 `container_name`、api/ws 设 `replicas: 2`，网关与数据层保持单实例；水平扩展 `docker compose up -d --scale api-service=3 --scale ws-service=3 ...`。
+- **云原生部署**：APISIX 网关、RabbitMQ 异步、Prometheus/Grafana 监控，Docker Compose / K3s + Helm 两条部署路径。
+- **引用气泡（坐席可溯源）**：AI 回复下方透出"引用知识片段 N"可展开气泡，回复有据可依，对标阿里云智能客服坐席引用。
 
 ---
 
@@ -152,6 +154,13 @@ flowchart TB
 ---
 
 ## 🚀 快速开始
+
+### 需要什么
+
+- **Python 3.11+**（部署与 CI 基准锁定 3.11，见 `Dockerfile` / `.github/workflows/ci.yml`；本地开发建议 3.11 以与部署完全一致）
+- **Node.js 22+**（前端 Vite 构建）
+- **Docker 20.10+ / Compose v2**（可选，用于全栈云原生部署；`docker compose up -d` 一键起网关 + 双副本 api/ws + 监控）
+- 真实大模型密钥 `OPENAI_API_KEY`（通义千问 DashScope 兼容）；缺失时部分 AI 能力降级，系统仍可启动与演示
 
 ### 路径 A：最轻量（推荐，已验证 ✅）
 
