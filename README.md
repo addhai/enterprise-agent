@@ -49,6 +49,41 @@
 
 ---
 
+## 🔒 可验证能力证据链
+
+作品集不是「某一功能亮眼」，而是「全栈都经得起问」。下面两条都做成了**可复现的自动化证据**，而非口头声称。
+
+### 多租户 RBAC 隔离（A 租户看不到 B 租户数据）
+
+租户与身份完全由服务端 JWT 解析决定，客户端无法注入 `tenant_id` 越权串台。证据是进 CI 长期复跑的 pytest：
+
+```bash
+pytest tests/test_websocket/test_ws_tenant_isolation.py -v
+```
+
+覆盖四点：
+
+- 匿名连接 → 服务端解析为 `anon-<session_id>`，按连接粒度隔离，且被资源查询拦截
+- 登录用户 → WebSocket 派生的 `tenant_id` 与 JWT 真实租户一致
+- 越权防护 → 客户端在消息体注入 `tenant_id` 被服务端忽略，以 token 为准
+- 伪造 token → 降级为匿名隔离，不会冒充任何租户
+
+### 云原生多副本水平扩展（无状态 + 共享存储）
+
+`docker-compose.yml` 已为 `api-service` / `ws-service` 设 `replicas: 2`，水平扩展命令：
+
+```bash
+docker compose up -d --scale api-service=3 --scale ws-service=3
+```
+
+docker daemon 不可用环境，用 `scripts/verify_multireplica.py` 在单机起 2 个独立 uvicorn 实例（等价于 2 个容器副本）实测：每个副本各自 `/api/v1/health == 200`、各自独立 accept WebSocket、副本 A 创建的工单副本 B 用同一 token 能读到（共享存储一致）。本质是**状态外置到共享存储（SQLite/PostgreSQL），任意无状态副本承接流量结果一致**。
+
+```bash
+python scripts/verify_multireplica.py   # 退出码 0 = 验证通过
+```
+
+---
+
 ## 🏗️ 系统架构
 
 ```mermaid
@@ -269,8 +304,9 @@ make lint            # ruff 检查 + 格式化
 ```
 
 **可验证指标（CI 裸环境真实运行：无 API Key / 无 .env）：**
-- 测试：**852 passed / 17 skipped**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / API 接线守卫等
+- 测试：**856 passed / 17 skipped**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / 多租户 WS 隔离 / API 接线守卫等
 - 覆盖率：**48.83%**（门禁 40%），`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致
+- 多租户 WS 隔离守卫（`tests/test_websocket/test_ws_tenant_isolation.py`）：匿名按连接隔离、登录派生真实租户、客户端注入 tenant 被忽略、伪造 token 降级匿名，4 点全绿
 - 应用接线守卫（`tests/test_api/test_app_wiring.py`）：19 个 router 模块逐个导入探测 + 鉴权关键路由存在性断言，任一 router 静默消失立即红灯
 - 类型 / lint：ruff（line-length 88，target py311）；安全：Bandit 中高危阻断 + Semgrep ERROR 级
 

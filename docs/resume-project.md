@@ -56,12 +56,12 @@
 - SQL 级 + 向量级双重隔离：`tenant_id` 由后端从调用上下文强制注入，LLM 无法跨租户读取
 - P0 加固：空 tenant 文档默认归 default 租户，堵住"漏打 tenant 的文档对所有租户可见"后门；`add_documents` 与过滤端统一空 tenant 归一化，避免检索静默过滤掉合法文档
 - RBAC 4 角色（admin / agent / viewer / user）+ 权限点 + 依赖注入 + REST 管理端点 + seed 用户，覆盖工具级 / 参数级 / 审计三层防护
-- 多租户运行化（P1）已落地：新增 `Tenant` 表与租户 CRUD、超级管理员租户端点；工单与知识库租户由 JWT 用户动态解析（忽略客户端传入防越权）；两真实租户互不可见已由 `tests/test_ticket/test_multitenant.py` 端到端验证通过
+- 多租户运行化（P1）已落地：新增 `Tenant` 表与租户 CRUD、超级管理员租户端点；工单与知识库租户由 JWT 用户动态解析（忽略客户端传入防越权）；两真实租户互不可见已由 `tests/test_ticket/test_multitenant.py` 端到端验证通过；WebSocket `/ws/chat` 的租户隔离与越权防护也由 `tests/test_websocket/test_ws_tenant_isolation.py` 覆盖（匿名按连接隔离、登录派生真实租户、客户端注入 tenant 被忽略、伪造 token 降级匿名）
 
 **9. JWT 无状态鉴权**
 
 - 零依赖 HS256（RFC 7519）实现 access token，替代进程内 token 字典
-- 无状态设计使鉴权支持多副本 / 多进程部署（任意副本独立验签，无需共享内存），重启不失效，契合容器化多副本形态
+- 无状态设计使鉴权支持多副本 / 多进程部署（任意副本独立验签，无需共享内存），重启不失效，契合容器化多副本形态。水平扩展由 `scripts/verify_multireplica.py` 实测：单机起 2 个独立 uvicorn 实例（等价于 2 个容器副本），各自 health OK、各自独立 accept WebSocket、副本 A 创建的工单副本 B 用同一 token 能读到（共享存储一致，退出码 0）
 
 ## 项目成果
 
@@ -71,7 +71,7 @@
 - 基础设施配置：4 个 Dockerfile（legacy + api / worker / rag）+ 3 个 docker-compose + 11 个 Helm 模板 + 5 个运维脚本
 
 **测试统计（CI 裸环境真实运行：无 API Key / 无 .env）：**
-- **852 个测试通过 + 17 跳过**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / API 接线守卫等
+- **856 个测试通过 + 17 跳过**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / 多租户 WS 隔离 / API 接线守卫等
 - 覆盖率 **48.83%**（门禁 40%，`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致）
 - 应用接线守卫（`tests/test_api/test_app_wiring.py`）：19 个 router 模块逐个导入探测 + 鉴权关键路由存在性断言，任一 router 静默消失立即红灯（曾因 `auth` 路由在 Python 3.11 因前向引用 `NameError` 被静默吞掉导致 `/auth/*` 404，由此守卫测试堵住同类缺陷）
 - RAG 离线评估 4 项指标（Recall / Precision / MRR / F1）全部通过
@@ -99,7 +99,9 @@
 - **实测验证**：`/api/v1/health` 返回 `{"status":"ok"}`；WebSocket 实测可流式返回贴合产品人设的回复（如询问产品功能得到详细答案），未知问题走护栏优雅降级（建议转人工）。
 - **引用气泡实测**：登录 → WebSocket 发问，ECS 类问题命中《ECS 远程连接排障 SOP》并透出"引用知识片段 1"可展开气泡；纯价格类问题 0 命中、不展示引用（正确不误引）。
 - **实时操作链路实测（端到端）**：对话中「查云资源 / 开工单」经 WebSocket 端到端验证通过——资源工具返回代码内真实样本数据（含公网 IP、RDS 连接地址等唯一标记），工单真实落库（SQLite/PG，跨进程可查），确认工具由 LangChain 原生函数调用真正执行，而非模型文本编造。
-- **最轻量启动路径（克隆即可演示）**：配置 `.env`（填 `DASHSCOPE_API_KEY`）→ `cd frontend && npm run build`（产物自动输出到 `static/`）→ `set VECTOR_STORE_BACKEND=chroma && uvicorn src.api.server:app` → 打开 `http://localhost:8000` 即可对话。
+- **最轻量启动路径（克隆即可演示）**：配置 `.env`（填 `OPENAI_API_KEY`，配 DashScope 兼容 `OPENAI_API_BASE`）→ `cd frontend && npm run build`（产物自动输出到 `static/`）→ `set VECTOR_STORE_BACKEND=chroma && uvicorn src.api.server:app` → 打开 `http://localhost:8000` 即可对话。
+- **多租户 RBAC 隔离（可复现）**：`pytest tests/test_websocket/test_ws_tenant_isolation.py -v` 进 CI 长期复跑，证明 A 租户数据 B 租户不可见、客户端注入 `tenant_id` 越权被服务端忽略。
+- **云原生多副本水平扩展（可复现）**：`python scripts/verify_multireplica.py` 起 2 个无状态副本实测共享存储一致性（副本 A 工单副本 B 可读），等价于 `docker compose up --scale api-service=3` 的副本语义。
 - 完整 12 服务云原生栈（APISIX + 业务服务 + PG/Milvus/Redis/RabbitMQ/MinIO + 监控）亦可经 Docker Compose / K3s + Helm 部署。
 
 ## 技术栈
