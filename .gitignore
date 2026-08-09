@@ -19,6 +19,8 @@ logs/
 __pycache__/
 *.pyc
 .pytest_cache/
+scripts/.cache/
+.replica_*.log
 static/
 
 # 多副本验证脚本产生的临时日志

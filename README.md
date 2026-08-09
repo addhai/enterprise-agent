@@ -47,6 +47,26 @@
 
 ![工具调用 Demo](demo.gif)
 
+### Demo 制作可复现
+
+两张 GIF **全部由真实后端对话驱动、脚本化生成**，不依赖手工截图或 PS。完整链路：
+
+```bash
+# 1) 起后端（默认 8001，DEMO_WS_PORT 可覆盖）
+uvicorn src.api.server:app --port 8001
+
+# 2) 工具调用 Demo（demo.gif）
+python scripts/ws_capture.py      # 抓取真实对话 → scripts/.cache/ws_reply.json
+python scripts/make_demo_gif.py   # 渲染 demo.gif
+
+# 3) RAG Demo（rag_demo.gif）
+python scripts/rag_capture.py     # 抓多条、挑命中知识库术语的一条 → scripts/.cache/rag_api_best.json
+python scripts/rag_demo_gif.py    # 渲染 rag_demo.gif
+```
+
+- 中间产物落在 `scripts/.cache/`（已 gitignore，不进仓库）；需要真实 LLM key（`.env` 的 `OPENAI_API_KEY` / DashScope）。
+- `rag_capture.py` 支持 `RAG_RUNS=N` 控制抓取条数（默认 5，取命中知识库术语最多的一条）。
+
 ---
 
 ## 🔒 可验证能力证据链
