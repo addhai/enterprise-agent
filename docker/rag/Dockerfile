@@ -3,9 +3,16 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # ---- 依赖层 ----
+# 离线优先（同 api Dockerfile）：本地有 wheels/ 则离线装，否则在线装
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir pymilvus minio pika    # 新增: Milvus, MinIO, RabbitMQ 客户端
+COPY wheels/ /wheels/
+RUN if [ -n "$(ls -A /wheels 2>/dev/null | grep -v -x '.gitkeep')" ]; then \
+      pip install --no-cache-dir --no-index --find-links /wheels -r requirements.txt && \
+      pip install --no-cache-dir --no-index --find-links /wheels pymilvus minio pika; \
+    else \
+      pip install --no-cache-dir -r requirements.txt && \
+      pip install --no-cache-dir pymilvus minio pika; \
+    fi
 
 # ---- 代码层 (只复制 RAG 需要的) ----
 COPY src/rag/ src/rag/

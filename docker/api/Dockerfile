@@ -14,8 +14,15 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # ---- 依赖层 (利用 Docker 层缓存) ----
+# 离线优先：若构建上下文含预下载的 Linux 轮子目录 wheels/（gitignore，仅本地/内网构建放置），
+# 则完全离线安装；否则回退在线安装（CI / 有网环境）。两套环境都不破坏。
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY wheels/ /wheels/
+RUN if [ -n "$(ls -A /wheels 2>/dev/null | grep -v -x '.gitkeep')" ]; then \
+      pip install --no-cache-dir --no-index --find-links /wheels -r requirements.txt; \
+    else \
+      pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 # ---- 代码层 ----
 COPY src/ src/

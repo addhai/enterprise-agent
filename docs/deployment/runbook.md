@@ -21,6 +21,38 @@ npm install && npm run build   # 生成 static/（前端托管目录）
 - **密钥红线**：真实 key 只在本机 `.env`，绝不进仓库、绝不挂公网。对外展示用 README 内嵌的 demo.gif / rag_demo.gif（真实 WS 对话驱动，非截图伪造）。
 - 沙箱（CI / 无 docker daemon 环境）只能跑 `verify_fullstack_local.py`；容器栈与监控需在装有 Docker Desktop 的机器上跑。
 
+### 0.1 离线 Docker 构建（代理不稳 / 无外网时必看）
+
+`docker/api`（及 rag / worker）的 Dockerfile 依赖 `/wheels` 目录做**离线优先**安装：
+`pip install -r requirements.txt` 失败才回退在线。这样构建阶段不依赖外网，绕开容器内联网那套坑。
+但 wheels 必须在**目标平台**预下载，否则会缺包或装错平台轮子：
+
+```bash
+# 在能联网的机器上，按 Linux x86_64 / cp311 预下载整个依赖树
+pip download -r requirements.txt --dest wheels/ \
+  --python-version 3.11 --platform manylinux2014_x86_64 --abi cp311 --only-binary=:all:
+```
+
+> 关键教训：不要在本机（Windows）直接 `pip download -r requirements.txt`。宿主平台的
+> 环境约束（`sys_platform != "win32"`、`platform_system == "Linux"`）会让
+> `uvloop` / `nvidia-*` / `culsans` 等**只在 Linux 才需要的传递依赖被静默跳过**，
+> 到了 Linux 容器里才暴露缺包。预下载时必须显式声明目标平台。
+
+- **验证机改 CPU 版 torch**：torch 默认 CUDA 版会拉 ~2GB 的 `nvidia-*` 轮子，
+  纯把构建上下文撑到 2GB+，daemon 传上下文时会直接 EOF 断流。验证用 CPU 版即可：
+  下载 `torch==2.6.0+cpu`（`--index-url https://download.pytorch.org/whl/cpu --no-deps`），
+  删除 `wheels/nvidia_*.whl` / `wheels/triton-*.whl`。生产 / CI 仍走 CUDA 版（不动 `requirements.txt`）。
+- `wheels/` 已 gitignore（仅保留 `.gitkeep`），不进仓库；CI 走在线安装，不受影响。
+
+### 0.2 Docker Desktop 代理与残留容器
+
+- **daemon 拉镜像**走 Docker Desktop GUI 设置的 Manual Proxy（本机 Clash `127.0.0.1:7890`），
+  重启后仍在；但 Clash 本身需手动开，否则 `docker pull` 卡死。
+- **容器内 / 构建联网**与 daemon 代理是两套独立机制；构建阶段已用离线 wheels 规避。
+- **残留容器冲突**：历史验证若中途被杀，会留下同名 `agent-*` 停止容器，
+  导致下次 `docker compose up` 命名冲突而 FAIL。两个验证脚本开头都已加防御性 `docker rm -f`；
+  也可手动 `docker compose down -v --remove-orphans` 清场。
+
 ---
 
 ## 1. 应用层全栈验证（无需 docker，沙箱可跑）
@@ -40,13 +72,12 @@ npm install && npm run build   # 生成 static/（前端托管目录）
 ## 2. 完整容器栈验证（需 docker daemon）
 
 ```bash
-docker compose up -d --scale api-service=3 --scale ws-service=3
 ./venv/Scripts/python.exe scripts/verify_fullstack.py
-docker compose down
 ```
 
-- `verify_fullstack.py` 先 `docker compose up -d`，轮询 12 服务健康，再经 APISIX 网关（:9080）跑端到端建单/读单。
-- **判定标准**：至少半数 HTTP 服务存活 + 网关端到端工单链路通过 = 全栈真跑验证通过。
+- 脚本自带幂等清理（开头 `docker rm -f` 残留 `agent-*` 容器），随后 `docker compose up -d --scale api-service=3 --scale ws-service=3`，
+  轮询 12 服务健康，再经 APISIX 网关（:9080）跑端到端建单/读单，最后 `down` 收尾。
+- **判定标准**：12 服务全部 healthy + 网关端到端工单链路通过 = 全栈真跑验证通过。
 - 这条在沙箱无法执行（daemon 未起），需在本地 Docker Desktop 环境补齐，并把结果回填 README「能力边界」。
 
 ---
@@ -54,14 +85,11 @@ docker compose down
 ## 3. Grafana 面板真渲染验证（需 docker daemon）
 
 ```bash
-# 先起后端（让 Prometheus 有抓取目标）
-./venv/Scripts/python.exe -m uvicorn src.api.server:app --port 8000 &
-docker compose -f docker-compose.monitoring.yml up -d
 ./venv/Scripts/python.exe scripts/verify_monitoring.py
-docker compose -f docker-compose.monitoring.yml down
 ```
 
-- `verify_monitoring.py` 起 prometheus + grafana，等抓取若干轮后，逐面板执行 `deploy/monitoring/grafana/dashboards/agent-overview.json` 里的 PromQL，断言返回非空。
+- 脚本自带幂等清理，随后起 `api-service`（自动带 postgres/redis/rabbitmq）+ 监控栈（prometheus/grafana/exporters），
+  等 Prometheus 抓取若干轮后，逐面板执行 `deploy/monitoring/grafana/dashboards/agent-overview.json` 里的 PromQL，断言返回非空，最后 `down` 收尾。
 - **判定标准**：所有面板 PromQL 均返回数据 = Grafana 真能出数（非配置正确但空白）。
 - 若某面板为空：先用 `curl localhost:9090/api/v1/query?query=<expr>` 手工确认，多半是 scrape 路径或数据源 uid 配置问题（C 档已修，正常应通过）。
 

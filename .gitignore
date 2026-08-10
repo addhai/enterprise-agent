@@ -40,3 +40,12 @@ test_agent.db
 团队技术提升方案.md
 # 内部项目路线图 HTML，非对外展示材料
 docs/agent-project-roadmap.html
+
+# 预下载的 Linux 轮子（仅本地/内网离线构建用，不入库；保留 .gitkeep 让 CI 也能 COPY 到空目录）
+wheels/*
+!wheels/.gitkeep
+
+# 验证脚本本地运行产物（报告/日志，不入库）
+verify_monitoring_report.txt
+verify_fullstack_report.txt
+.fullstack_*.log

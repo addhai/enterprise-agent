@@ -1,0 +1,28 @@
+# 构建上下文优化：排除与镜像无关的目录/文件，加速 docker build 上下文上传
+.git
+.gitignore
+venv
+node_modules
+static
+chroma_data
+logs
+*.db
+.env
+.env.example
+.jwt_secret
+chk_tmp
+chk_rf
+chk_rf2
+chroma_e2e_test
+test_chroma
+test_chroma_full
+scripts/.cache
+.fullstack_*.log
+.replica_*.log
+# 保留 wheels/（离线构建依赖），仅排除占位文件
+wheels/.gitkeep
+# 文档/记忆/工具链
+.workbuddy
+docs/deployment
+*.md
+!requirements.txt
