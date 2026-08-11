@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
+
+<defs>
+<marker id="ah" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#475569"/></marker>
+<marker id="ahb" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#1D4ED8"/></marker>
+<marker id="ahd" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#94A3B8"/></marker>
+<marker id="ahg" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#15803D"/></marker>
+<marker id="ahp" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#6D28D9"/></marker>
+<marker id="aho" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#C2410C"/></marker>
+</defs>
+
+<text x="500.0" y="30" font-size="17" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="font-weight:bold;">图3 STRIDE 威胁 — 缓解措施映射图（六类全覆盖）</text>
+<rect x="30" y="70" width="300" height="70" rx="9" ry="9" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1.6"/>
+<text x="180.0" y="100.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">S 仿冒</text>
+<text x="180.0" y="117.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">身份伪造 / AKSK 泄露 / token 重放</text>
+<rect x="30" y="152" width="300" height="70" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="180.0" y="182.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">T 篡改</text>
+<text x="180.0" y="199.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">请求参数 / DB / 配置篡改</text>
+<rect x="30" y="234" width="300" height="70" rx="9" ry="9" fill="#FFEDD5" stroke="#C2410C" stroke-width="1.6"/>
+<text x="180.0" y="264.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">R 否认</text>
+<text x="180.0" y="281.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">缺少操作审计</text>
+<rect x="30" y="316" width="300" height="70" rx="9" ry="9" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1.6"/>
+<text x="180.0" y="346.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">I 信息泄露</text>
+<text x="180.0" y="363.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">敏感数据 / 密钥 / 日志泄露</text>
+<rect x="30" y="398" width="300" height="70" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="180.0" y="428.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">D 拒绝服务</text>
+<text x="180.0" y="445.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">DDoS / CC / 慢查询</text>
+<rect x="30" y="480" width="300" height="70" rx="9" ry="9" fill="#EDE9FE" stroke="#6D28D9" stroke-width="1.6"/>
+<text x="180.0" y="510.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">E 权限提升</text>
+<text x="180.0" y="527.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">水平/垂直越权 / 容器逃逸</text>
+<text x="380" y="60" font-size="13" fill="#0F172A" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="font-weight:bold;">缓解措施（映射到 §2~§7）</text>
+<rect x="380" y="70" width="590" height="70" rx="9" ry="9" fill="#DCFCE7" stroke="#15803D" stroke-width="1.6"/>
+<text x="675.0" y="100.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">认证 + 防重放</text>
+<text x="675.0" y="117.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">登录 MFA/2FA · JWT HS256 · nonce+timestamp 接口签名 · 密钥不硬编码</text>
+<line x1="330" y1="105" x2="380" y2="105" stroke="#475569" stroke-width="1.6" marker-end="url(#ahg)"/>
+<rect x="380" y="152" width="590" height="70" rx="9" ry="9" fill="#DCFCE7" stroke="#15803D" stroke-width="1.6"/>
+<text x="675.0" y="182.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">完整性 + 鉴权</text>
+<text x="675.0" y="199.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">参数化查询 · 输入校验 · 网关+RBAC 双层校验 · 配置中心</text>
+<line x1="330" y1="187" x2="380" y2="187" stroke="#475569" stroke-width="1.6" marker-end="url(#ahg)"/>
+<rect x="380" y="234" width="590" height="70" rx="9" ry="9" fill="#FFEDD5" stroke="#C2410C" stroke-width="1.6"/>
+<text x="675.0" y="264.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">审计可追溯</text>
+<text x="675.0" y="281.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">t_audit_log 仅追加 · 5 维度审计 · 独立桶防篡改</text>
+<line x1="330" y1="269" x2="380" y2="269" stroke="#475569" stroke-width="1.6" marker-end="url(#aho)"/>
+<rect x="380" y="316" width="590" height="70" rx="9" ry="9" fill="#DBEAFE" stroke="#1E40AF" stroke-width="1.6"/>
+<text x="675.0" y="346.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">加密 + 最小化</text>
+<text x="675.0" y="363.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">TLS 1.2+ · AES-256 · KMS · 脱敏 · 密钥红线</text>
+<line x1="330" y1="351" x2="380" y2="351" stroke="#475569" stroke-width="1.6" marker-end="url(#ahb)"/>
+<rect x="380" y="398" width="590" height="70" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="675.0" y="428.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">限流 + 容错</text>
+<text x="675.0" y="445.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">APISIX limit-count · 熔断 · 降级 demo fallback</text>
+<line x1="330" y1="433" x2="380" y2="433" stroke="#475569" stroke-width="1.6" marker-end="url(#ahd)"/>
+<rect x="380" y="480" width="590" height="70" rx="9" ry="9" fill="#EDE9FE" stroke="#6D28D9" stroke-width="1.6"/>
+<text x="675.0" y="510.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">最小权限 + 隔离</text>
+<text x="675.0" y="527.3" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">RBAC0+ABAC · 双重租户隔离 · 非 root 容器 · 越权 403</text>
+<line x1="330" y1="515" x2="380" y2="515" stroke="#475569" stroke-width="1.6" marker-end="url(#ahp)"/>
+<rect x="30" y="568" width="16" height="14" rx="3" fill="#FEE2E2" stroke="#94A3B8"/>
+<text x="62" y="579" font-size="11.5" fill="#334155" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">S/I 仿冒/泄露</text>
+<rect x="181.5" y="568" width="16" height="14" rx="3" fill="#FEF3C7" stroke="#94A3B8"/>
+<text x="213.5" y="579" font-size="11.5" fill="#334155" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">T/D 篡改/DoS</text>
+<rect x="344.5" y="568" width="16" height="14" rx="3" fill="#FFEDD5" stroke="#94A3B8"/>
+<text x="376.5" y="579" font-size="11.5" fill="#334155" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">R 否认</text>
+<rect x="438.5" y="568" width="16" height="14" rx="3" fill="#EDE9FE" stroke="#94A3B8"/>
+<text x="470.5" y="579" font-size="11.5" fill="#334155" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">E 权限提升</text>
+</svg>

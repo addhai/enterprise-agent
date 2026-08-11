@@ -26,6 +26,8 @@ import pika
 from pika.adapters.blocking_connection import BlockingChannel
 from pika.exceptions import AMQPConnectionError
 
+from src.broker.topology import declare_topology
+
 logger = logging.getLogger(__name__)
 
 # ---- 队列常量 ----
@@ -57,16 +59,9 @@ class AgentWorker:
         self._connection = pika.BlockingConnection(params)
         self._channel = self._connection.channel()
 
-        # 声明交换机（与 definitions.json 保持一致）
-        self._channel.exchange_declare(
-            exchange=EXCHANGE, exchange_type="topic", durable=True
-        )
-
-        # 声明队列
-        self._channel.queue_declare(queue=QUEUE_INFERENCE, durable=True)
-        self._channel.queue_bind(
-            queue=QUEUE_INFERENCE, exchange=EXCHANGE, routing_key=ROUTING_KEY
-        )
+        # 幂等声明完整拓扑（交换机 / 队列 / DLX / 绑定），
+        # 取代原 definitions.json 静态导入（RabbitMQ 4.x 导入会失败）。
+        declare_topology(self._channel)
 
         # 公平分发：每个消费者一次只取一条消息
         self._channel.basic_qos(prefetch_count=1)

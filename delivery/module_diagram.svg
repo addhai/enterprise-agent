@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 820" width="1000" height="820" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
+
+<defs>
+<marker id="ah" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#475569"/></marker>
+<marker id="ahb" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#1D4ED8"/></marker>
+<marker id="ahd" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#94A3B8"/></marker>
+<marker id="ahg" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#15803D"/></marker>
+<marker id="ahp" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#6D28D9"/></marker>
+<marker id="aho" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#C2410C"/></marker>
+<marker id="ahr" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#B91C1C"/></marker>
+</defs>
+
+<text x="500.0" y="30" font-size="17" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="font-weight:bold;">图2 系统模块图（接入层 → 应用层 → 中间件层 → 集成对接层）</text>
+<text x="30" y="64" font-size="13" fill="#0F172A" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="font-weight:bold;">接入层</text>
+<text x="30" y="206" font-size="13" fill="#0F172A" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="font-weight:bold;">应用层（业务能力）</text>
+<text x="30" y="402" font-size="13" fill="#0F172A" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="font-weight:bold;">中间件层</text>
+<text x="30" y="600" font-size="13" fill="#0F172A" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="font-weight:bold;">集成对接层（外部依赖）</text>
+<rect x="30" y="72" width="300" height="64" rx="9" ry="9" fill="#DBEAFE" stroke="#1E40AF" stroke-width="1.6"/>
+<text x="180.0" y="99.2" font-size="12.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">坐席 / 运维工作台</text>
+<text x="180.0" y="116.8" font-size="12.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">React SPA · WS /ws/chat</text>
+<rect x="350" y="72" width="300" height="64" rx="9" ry="9" fill="#DBEAFE" stroke="#1E40AF" stroke-width="1.6"/>
+<text x="500.0" y="99.2" font-size="12.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">管理后台 Admin</text>
+<text x="500.0" y="116.8" font-size="12.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">React SPA · REST</text>
+<rect x="670" y="72" width="300" height="64" rx="9" ry="9" fill="#DBEAFE" stroke="#1E40AF" stroke-width="1.6"/>
+<text x="820.0" y="99.2" font-size="12.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">开放 API / Webhook 接收端</text>
+<text x="820.0" y="116.8" font-size="12.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">REST /api/v1</text>
+<rect x="30" y="215" width="185" height="130" rx="9" ry="9" fill="#DCFCE7" stroke="#15803D" stroke-width="1.6"/>
+<text x="122.5" y="266.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">M1 智能对话编排</text>
+<text x="122.5" y="283.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">LangGraph 7节点 DAG</text>
+<text x="122.5" y="300.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">+ ReAct Agent</text>
+<rect x="227" y="215" width="185" height="130" rx="9" ry="9" fill="#DCFCE7" stroke="#15803D" stroke-width="1.6"/>
+<text x="319.5" y="266.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">M2 RAG 知识问答</text>
+<text x="319.5" y="283.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">HybridRetriever</text>
+<text x="319.5" y="300.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">向量+BM25+RRF</text>
+<rect x="424" y="215" width="185" height="130" rx="9" ry="9" fill="#DCFCE7" stroke="#15803D" stroke-width="1.6"/>
+<text x="516.5" y="266.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">M3 工单中心</text>
+<text x="516.5" y="283.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">MCP 工单域</text>
+<text x="516.5" y="300.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">6 工具</text>
+<rect x="621" y="215" width="185" height="130" rx="9" ry="9" fill="#DCFCE7" stroke="#15803D" stroke-width="1.6"/>
+<text x="713.5" y="266.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">M4 权限与多租户</text>
+<text x="713.5" y="283.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">RBAC +</text>
+<text x="713.5" y="300.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">SQL+向量双重隔离</text>
+<rect x="818" y="215" width="185" height="130" rx="9" ry="9" fill="#DCFCE7" stroke="#15803D" stroke-width="1.6"/>
+<text x="910.5" y="266.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">M5 云资源只读查询</text>
+<text x="910.5" y="283.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">阿里云 RPC</text>
+<text x="910.5" y="300.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">手写零依赖</text>
+<rect x="30" y="420" width="156" height="116" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="108.0" y="456.9" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">APISIX 网关</text>
+<text x="108.0" y="473.4" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">jwt-auth /</text>
+<text x="108.0" y="489.9" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">limit-count /</text>
+<text x="108.0" y="506.4" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">api-breaker</text>
+<rect x="196" y="420" width="156" height="116" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="274.0" y="465.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">模型网关</text>
+<text x="274.0" y="481.7" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">通义千问</text>
+<text x="274.0" y="498.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">· demo key</text>
+<rect x="362" y="420" width="156" height="116" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="440.0" y="465.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">向量库</text>
+<text x="440.0" y="481.7" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">Chroma 开发</text>
+<text x="440.0" y="498.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">/ Milvus 生产</text>
+<rect x="528" y="420" width="156" height="116" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="606.0" y="465.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">关系库</text>
+<text x="606.0" y="481.7" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">PostgreSQL 16</text>
+<text x="606.0" y="498.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">(租户/对话/工单)</text>
+<rect x="694" y="420" width="156" height="116" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="772.0" y="465.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">缓存 + 消息</text>
+<text x="772.0" y="481.7" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">Redis 7 +</text>
+<text x="772.0" y="498.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">RabbitMQ 4.0+DLX</text>
+<rect x="860" y="420" width="156" height="116" rx="9" ry="9" fill="#FEF3C7" stroke="#B45309" stroke-width="1.6"/>
+<text x="938.0" y="465.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">可观测</text>
+<text x="938.0" y="481.7" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">Prometheus +</text>
+<text x="938.0" y="498.2" font-size="11.5" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">Grafana</text>
+<rect x="30" y="610" width="460" height="70" rx="9" ry="9" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1.6"/>
+<text x="260.0" y="631.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">E-01 阿里云 OpenAPI（只读）</text>
+<text x="260.0" y="648.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">ACL 防腐层 · 手写 RPC 签名</text>
+<text x="260.0" y="665.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">ALIYUN_DEMO_FALLBACK=true</text>
+<rect x="510" y="610" width="460" height="70" rx="9" ry="9" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1.6"/>
+<text x="740.0" y="631.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">E-02 通义千问模型 API</text>
+<text x="740.0" y="648.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">仅可吊销 demo key / 本地</text>
+<text x="740.0" y="665.8" font-size="12" fill="#1E293B" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="">红线：真实 key 不上公网</text>
+<line x1="180" y1="136" x2="122" y2="215" stroke="#1D4ED8" stroke-width="2" marker-end="url(#ahb)"/>
+<rect x="123.1" y="166.5" width="55.7" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="151.0" y="179.5" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">WS/REST</text>
+<line x1="500" y1="136" x2="713" y2="215" stroke="#1D4ED8" stroke-width="2" marker-end="url(#ahb)"/>
+<rect x="588.9" y="166.5" width="35.3" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="606.5" y="179.5" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">REST</text>
+<line x1="217" y1="280" x2="227" y2="280" stroke="#1D4ED8" stroke-width="2" marker-end="url(#ahb)"/>
+<rect x="211.2" y="271.0" width="21.6" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="222.0" y="284.0" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">检索</text>
+<path d="M 217 280 V 360 H 511 V 280" fill="none" stroke="#475569" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="353.2" y="351.0" width="21.6" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="364.0" y="364.0" font-size="11" fill="#475569" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">鉴权</text>
+<path d="M 217 280 V 360 H 905 V 280" fill="none" stroke="#475569" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="543.4" y="351.0" width="35.3" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="561.0" y="364.0" font-size="11" fill="#475569" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">只读查询</text>
+<line x1="122" y1="345" x2="108" y2="420" stroke="#475569" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="104.2" y="373.5" width="21.6" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="115.0" y="386.5" font-size="11" fill="#475569" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">路由</text>
+<line x1="317" y1="345" x2="440" y2="420" stroke="#475569" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="367.7" y="373.5" width="21.6" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="378.5" y="386.5" font-size="11" fill="#475569" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">向量</text>
+<line x1="511" y1="345" x2="606" y2="420" stroke="#475569" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="544.3" y="373.5" width="28.5" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="558.5" y="386.5" font-size="11" fill="#475569" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">关系库</text>
+<line x1="908" y1="345" x2="772" y2="420" stroke="#94A3B8" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#ahd)"/>
+<rect x="829.2" y="373.5" width="21.6" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="840.0" y="386.5" font-size="11" fill="#94A3B8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">异步</text>
+<line x1="108" y1="536" x2="290" y2="610" stroke="#B91C1C" stroke-width="1.6" marker-end="url(#ahr)"/>
+<rect x="174.5" y="564.0" width="48.9" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="199.0" y="577.0" font-size="11" fill="#B91C1C" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">ACL 只读</text>
+<line x1="772" y1="536" x2="740" y2="610" stroke="#B91C1C" stroke-width="1.6" marker-end="url(#ahr)"/>
+<rect x="728.1" y="564.0" width="55.7" height="17" rx="3" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="756.0" y="577.0" font-size="11" fill="#B91C1C" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">demo 模型</text>
+<line x1="30" y1="760" x2="56" y2="760" stroke="#1D4ED8" stroke-width="3"/>
+<text x="62" y="764" font-size="11.5" fill="#334155" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">主链路（粗蓝）</text>
+<line x1="158.5" y1="760" x2="184.5" y2="760" stroke="#475569" stroke-width="3"/>
+<text x="190.5" y="764" font-size="11.5" fill="#334155" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">同步调用</text>
+<line x1="252.5" y1="760" x2="278.5" y2="760" stroke="#94A3B8" stroke-width="3"/>
+<text x="284.5" y="764" font-size="11.5" fill="#334155" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">异步事件</text>
+<line x1="346.5" y1="760" x2="372.5" y2="760" stroke="#B91C1C" stroke-width="3"/>
+<text x="378.5" y="764" font-size="11.5" fill="#334155" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">红线外部依赖</text>
+</svg>

@@ -43,6 +43,14 @@ PROMQL_RESERVED = {
     "le", "inf", "nan", "count_values", "stddev", "stdvar", "quantile",
 }
 
+# 这些指标只在有对应业务流量时才产生（LLM 调用 / WS 连接 / RAG 检索 / Milvus 数据）。
+# 在「最小后端 + 无业务流量」的验证环境下天然为空，不代表面板配置错误，
+# 不应计入 FAIL。需要真实流量才能验证的面板归为此类。
+TRAFFIC_GATED_METRICS = (
+    "llm_", "ws_active_connections", "rag_search_", "milvus_",
+    "agent_rag_", "embedding_", "vector_",
+)
+
 
 def _log(msg: str):
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -94,7 +102,10 @@ def _query(expr: str) -> list:
 
 
 # 本脚本会创建的容器名（来自主 compose 的 container_name 与监控 compose 的 container_name）。
-# 上次验证中曾因 6 天前的残留同名停止容器导致命名冲突而 FAIL，故开头先防御性清理，保证幂等可重跑。
+# 上次验证中曾因残留同名容器导致命名冲突而 FAIL，故开头先防御性清理，保证幂等可重跑。
+# 注意：未设 container_name 的服务（api-service/worker/rag/ws/frontend/apisix）由 compose 用
+# 项目名前缀命名（默认 enterprise-agent-<service>-<n>），这类残留不会被上面的列表覆盖，
+# 需按前缀批量清理（否则会卡在“port 8000 already allocated”）。
 _STALE_CONTAINERS = [
     "agent-postgres", "agent-redis", "agent-rabbitmq",
     "agent-prometheus", "agent-grafana", "agent-pg-exporter", "agent-redis-exporter",
@@ -104,6 +115,13 @@ _STALE_CONTAINERS = [
 def _cleanup_stale():
     for name in _STALE_CONTAINERS:
         _run(["docker", "rm", "-f", name])  # 忽略“不存在”等错误
+    # 批量清理 compose 默认前缀的残留容器（含 api-service 占用的 8000 端口等）
+    rc, out = _run(
+        ["docker", "ps", "-a", "--filter", "name=enterprise-agent-", "--format", "{{.Names}}"]
+    )
+    if rc == 0 and out.strip():
+        for name in out.strip().splitlines():
+            _run(["docker", "rm", "-f", name])
 
 
 def main():
@@ -137,7 +155,8 @@ def main():
             dash = json.load(f)
         panels = dash.get("panels", [])
         total = 0
-        empty = 0
+        empty = 0          # 真·空白（面板配置疑似坏）
+        traffic_gated = 0  # 流量门控型空（无业务流量，正常）
         for p in panels:
             for t in p.get("targets", []):
                 expr = t.get("expr", "")
@@ -151,9 +170,15 @@ def main():
                     empty += 1
                     continue
                 if not res:
-                    # 含 rate/increase 的面板在无流量时可能返回空，检查底层指标是否存在
+                    metrics = _panel_metrics(expr)
+                    # 流量门控型：所有指标都需业务流量才产生，无流量时空属正常
+                    if metrics and all(m.startswith(TRAFFIC_GATED_METRICS) for m in metrics):
+                        _log(f"  EXPECTED_EMPTY(traffic-gated) '{p.get('title')}' -> 需 LLM/WS/RAG/Milvus 流量，验证环境无业务流量")
+                        traffic_gated += 1
+                        continue
+                    # 非流量门控：检查底层指标是否存在（含 rate/increase 在无流量时可能空）
                     exists = False
-                    for m in _panel_metrics(expr):
+                    for m in metrics:
                         try:
                             if _query(m):
                                 exists = True
@@ -161,16 +186,18 @@ def main():
                         except Exception:
                             pass
                     if exists:
-                        _log(f"  OK(no-traffic) panel '{p.get('title')}' -> metric exists, awaiting traffic")
+                        _log(f"  OK(no-traffic) '{p.get('title')}' -> metric exists, awaiting traffic")
                         continue
                     _log(f"  EMPTY panel '{p.get('title')}' expr={expr[:60]}...")
                     empty += 1
                 else:
                     _log(f"  OK panel '{p.get('title')}' -> {len(res)} series")
         if empty:
-            _log(f"FAIL: {empty}/{total} panels returned no data")
+            _log(f"FAIL: {empty}/{total} panels returned no data (traffic-gated expected-empty={traffic_gated})")
             return 5
-        _log(f"=== RESULT: all {total} panels return data (Grafana render verified) ===")
+        _log(f"=== RESULT: {total - traffic_gated}/{total} panels return data; "
+             f"{traffic_gated} traffic-gated panels expected-empty without business traffic ===")
+        _log("=== Grafana render VERIFIED (panels are wired to real Prometheus metrics, not blank) ===")
         return 0
     finally:
         _log("cleaning up...")

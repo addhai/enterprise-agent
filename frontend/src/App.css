@@ -233,24 +233,6 @@
   color: var(--text-primary);
 }
 
-/* Mobile nav toggle */
-.nav-mobile-toggle {
-  display: none;
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  font-size: 22px;
-  cursor: pointer;
-  padding: 4px;
-}
-
-@media (max-width: 768px) {
-  .nav-links { display: none; }
-  .nav-mobile-toggle { display: block; }
-  .nav { padding: 0 var(--space-md); }
-  .container { padding: 0 var(--space-md); }
-}
-
 /* ============================================================
    HERO SECTION — Split layout with chat preview (Qumica style)
    ============================================================ */
@@ -2118,7 +2100,10 @@
   font-size: 11px;
   font-weight: 600;
 }
+.role-super_admin { background: rgba(170, 59, 255, 0.18); color: var(--brand-purple); }
 .role-admin { background: rgba(170, 59, 255, 0.15); color: var(--brand-purple); }
+.role-viewer { background: var(--bg-glass-hover); color: var(--text-secondary); }
+.role-operator { background: rgba(96, 165, 250, 0.16); color: var(--brand-blue); }
 .role-agent { background: var(--brand-teal-dim); color: var(--brand-teal); }
 .role-user { background: var(--bg-glass-hover); color: var(--text-secondary); }
 
@@ -3185,6 +3170,42 @@
    ADMIN DASHBOARD — Full-screen layout (v2)
    ============================================================ */
 .admin-layout {
+  /* 强制深色玻璃主题：工作台本就是设计稿的深色形态，不受外层 light/dark 切换影响 */
+  --bg-deep: #0a0a0f;
+  --bg-primary: #111118;
+  --bg-secondary: #18181f;
+  --bg-glass: rgba(255, 255, 255, 0.03);
+  --bg-glass-hover: rgba(255, 255, 255, 0.06);
+  --text-h: #f0f0f5;
+  --text-primary: #e2e2e8;
+  --text-secondary: #8888a0;
+  --text-muted: #555568;
+  --text-dim: #3a3a48;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-light: rgba(255, 255, 255, 0.1);
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --brand-teal: #2dd4a0;
+  --brand-teal-dim: rgba(45, 212, 160, 0.1);
+  --brand-teal-glow: rgba(45, 212, 160, 0.2);
+  --brand-purple: #aa3bff;
+  --brand-purple-dim: rgba(170, 59, 255, 0.1);
+  --brand-blue: #60a5fa;
+  --brand-blue-dim: rgba(96, 165, 250, 0.1);
+  --brand-amber: #fbbf24;
+  --gradient-brand: linear-gradient(135deg, #2dd4a0, #aa3bff);
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: blur(20px);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --nav-bg: rgba(10, 10, 15, 0.82);
+  --nav-border: rgba(255, 255, 255, 0.08);
+  --chat-bg: #111118;
+  --code-bg: #1a1a22;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --shadow-glow-teal: 0 0 28px rgba(45, 212, 160, 0.18);
+  --shadow-glow-purple: 0 0 28px rgba(170, 59, 255, 0.18);
   min-height: 100vh;
   background: var(--bg-deep);
   color: var(--text-primary);
@@ -3403,3 +3424,271 @@
     flex-shrink: 0;
   }
 }
+
+/* ===== Split layout: list + detail sidebar ===== */
+.split-layout {
+  display: grid;
+  grid-template-columns: 1fr 420px;
+  gap: 20px;
+  align-items: start;
+}
+.split-list-col {
+  min-width: 0;
+  overflow: hidden;
+}
+.split-detail-col {
+  position: sticky;
+  top: 80px;
+}
+.split-detail-panel {
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+}
+.split-detail-panel .detail-header {
+  justify-content: flex-end;
+}
+.session-row.selected {
+  background: var(--brand-teal-dim);
+  border-left: 3px solid var(--brand-teal);
+}
+.detail-empty {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 60px 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.detail-empty-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+@media (max-width: 1100px) {
+  .split-layout {
+    grid-template-columns: 1fr;
+  }
+  .split-detail-col {
+    position: static;
+  }
+}
+
+/* --- Knowledge Tab --- */
+.kb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.kb-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  cursor: pointer;
+  background: var(--bg-secondary);
+  transition: border-color var(--transition-normal), background var(--transition-normal);
+}
+.kb-card:hover { border-color: rgba(45, 212, 160, 0.4); }
+.kb-card.selected {
+  border-color: var(--brand-teal);
+  background: var(--brand-teal-dim);
+}
+.kb-card-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.kb-card-desc {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 6px 0;
+}
+.kb-card-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.kb-card-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+.kb-form {
+  margin: 12px 0;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+.kb-src-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all var(--transition-fast);
+}
+.kb-src-btn:hover { border-color: rgba(45, 212, 160, 0.4); }
+.kb-src-btn.active {
+  border-color: var(--brand-teal);
+  background: var(--brand-teal-dim);
+  color: var(--brand-teal);
+}
+.kb-danger-btn {
+  color: #f87171;
+  border-color: #f87171;
+}
+.kb-danger-btn:hover { color: #fca5a5; border-color: #fca5a5; }
+.kb-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.kb-hit-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.kb-hit-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.kb-hit-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.kb-hit-badge.pass { background: var(--brand-teal-dim); color: var(--brand-teal); }
+.kb-hit-badge.fail { background: rgba(248, 113, 113, 0.12); color: #f87171; }
+.kb-hit-title {
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-hit-score { color: var(--text-secondary); font-size: 12px; }
+.kb-hit-body { padding: 0 12px 12px; }
+.kb-hit-content {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kb-hit-source { margin-top: 8px; color: var(--text-muted); font-size: 12px; }
+
+/* --- Misc dark-mode fixes for config / workflow / evaluation tabs --- */
+.code-block {
+  background: var(--bg-deep);
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  max-height: 500px;
+  overflow: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  line-height: 1.6;
+}
+.role-badge.sensitive { background: rgba(252, 211, 77, 0.14); color: #fbbf24; }
+.role-badge.default { background: rgba(129, 140, 248, 0.16); color: #a5b4fc; }
+.role-badge.modified { background: rgba(45, 212, 160, 0.14); color: var(--brand-teal); }
+.role-badge.enabled { background: var(--brand-teal-dim); color: var(--brand-teal); }
+.role-badge.disabled { background: rgba(248, 113, 113, 0.14); color: #f87171; }
+.role-badge.running { background: rgba(252, 211, 77, 0.14); color: #fbbf24; }
+.role-badge.default-wf { background: rgba(96, 165, 250, 0.16); color: var(--brand-blue); }
+.role-badge.published { background: var(--brand-teal-dim); color: var(--brand-teal); }
+
+/* --- RBAC role cards & permission matrix --- */
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.role-card {
+  padding: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+.role-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.role-card-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.role-card-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  min-height: 36px;
+}
+.role-card-perms {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--brand-teal);
+}
+.rbac-matrix th, .rbac-matrix td { text-align: center; }
+.rbac-cell { font-size: 14px; }
+.rbac-dot.on { color: var(--brand-teal); }
+.rbac-dot.off { color: var(--text-muted); }
+
+/* --- Satisfaction distribution bars --- */
+.sat-dist { display: flex; flex-direction: column; gap: 10px; }
+.sat-dist-row { display: flex; align-items: center; gap: 12px; }
+.sat-dist-label { width: 40px; font-size: 13px; color: var(--text-secondary); flex-shrink: 0; }
+.sat-dist-track { flex: 1; height: 10px; background: var(--bg-deep); border-radius: 999px; overflow: hidden; }
+.sat-dist-bar { height: 100%; border-radius: 999px; transition: width var(--transition-normal); }
+.sat-dist-bar.pos { background: var(--brand-teal); }
+.sat-dist-bar.neg { background: #f87171; }
+.sat-dist-count { width: 28px; text-align: right; font-size: 13px; color: var(--text-secondary); flex-shrink: 0; }
+
+/* --- LangGraph route flow (session tab) --- */
+.route-flow { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.route-node {
+  padding: 10px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  font-size: 14px;
+  color: var(--text-primary);
+  text-align: center;
+}
+.route-start { border-color: var(--brand-teal); }
+.route-router { border-color: var(--brand-purple); background: rgba(170, 59, 255, 0.1); }
+.route-arrow { color: var(--text-muted); font-size: 16px; line-height: 1; }
+.route-branches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-top: 8px;
+}
+.route-branch { display: flex; align-items: stretch; gap: 8px; }
+.route-edge { width: 3px; border-radius: 999px; flex-shrink: 0; }
+.route-edge.direct { background: var(--brand-teal); }
+.route-edge.rag { background: var(--brand-blue); }
+.route-edge.tool { background: #fbbf24; }
+.route-edge.agent { background: var(--brand-purple); }
+.route-edge.human { background: #f87171; }
+.route-card {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.route-card-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.route-card-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }

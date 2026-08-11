@@ -24,8 +24,10 @@ import urllib.request
 from datetime import datetime, timezone
 
 COMPOSE = "docker-compose.yml"
-# 宿主可达且暴露 /api/v1/health 的应用服务（用于 HTTP 轮询）
-HTTP_HEALTH = {"api-service": 8000, "rag-service": 8001}
+# 宿主可达且暴露 /api/v1/health 的应用服务（用于 HTTP 轮询）。
+# 注意: api-service 不再发布主机端口（多副本会抢 8000），其健康经 apisix 网关(9080)
+# 内部路由 /api/v1/health 探测；rag-service 单副本，保留 8001 主机端口。
+HTTP_HEALTH = {"api-service": 9080, "rag-service": 8001}
 # apisix 网关状态端点（宿主 9080 可达）
 APISIX_STATUS_PORT = 9080
 # 期望全部起来且 healthy/running 的容器服务
@@ -55,8 +57,10 @@ def _run(cmd: list[str]) -> tuple[int, str]:
     return p.returncode, p.stdout + p.stderr
 
 
-# 主 compose 用 container_name: agent-*；历史验证残留的同名停止容器会导致
-# `docker compose up` 命名冲突（曾因此 FAIL）。开头先防御性清理，保证幂等可重跑。
+# 主 compose 用 container_name: agent-*；未设 container_name 的服务（api-service/ws-service/
+# rag-service/agent-worker/frontend）由 compose 用项目名前缀命名（默认 enterprise-agent-<svc>-<n>）。
+# 历史验证残留的这两类同名容器都会导致 `docker compose up` 命名冲突或端口占用（曾因此 FAIL）。
+# 开头先防御性清理，保证幂等可重跑。
 _STALE_CONTAINERS = [
     "agent-apisix", "agent-apisix-dashboard", "agent-postgres", "agent-milvus",
     "agent-minio", "agent-redis", "agent-rabbitmq",
@@ -66,6 +70,13 @@ _STALE_CONTAINERS = [
 def _cleanup_stale():
     for name in _STALE_CONTAINERS:
         _run(["docker", "rm", "-f", name])  # 忽略“不存在”等错误
+    # 批量清理 compose 默认前缀的残留容器（避免 api-service 端口 8000 被旧容器占用）
+    rc, out = _run(
+        ["docker", "ps", "-a", "--filter", "name=enterprise-agent-", "--format", "{{.Names}}"]
+    )
+    if rc == 0 and out.strip():
+        for name in out.strip().splitlines():
+            _run(["docker", "rm", "-f", name])
 
 
 def _docker_daemon_ok() -> bool:

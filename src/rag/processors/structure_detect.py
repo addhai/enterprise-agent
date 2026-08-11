@@ -44,9 +44,30 @@ def _detect_structure(text: str) -> dict:
     return info
 
 
+#: 已知的结构提示标记，用于幂等性检测（防止处理器重复执行导致标记堆叠）
+_KNOWN_HINTS = ("[Contains code blocks]", "[Contains tables]", "[Contains lists]")
+
+
+def _strip_existing_hints(text: str) -> str:
+    """剥离开头已存在的结构提示标记
+
+    处理器可能在流水线中被重复调用（或文档被二次入库），
+    若不剥离会出现 "[Contains code blocks]" 堆叠多份的情况，
+    既浪费 embedding token，也污染回传给 LLM 的上下文。
+    """
+    lines = text.split("\n")
+    idx = 0
+    while idx < len(lines) and lines[idx].strip() in _KNOWN_HINTS:
+        idx += 1
+    return "\n".join(lines[idx:])
+
+
 def _structure_hint(doc: "Document") -> str:
-    """根据结构检测结果生成结构化提示，注入到 page_content 前面"""
-    info = _detect_structure(doc.page_content)
+    """根据结构检测结果生成结构化提示，注入到 page_content 前面（幂等）"""
+    # 先剥离旧标记，保证重复执行结果一致
+    body = _strip_existing_hints(doc.page_content)
+
+    info = _detect_structure(body)
     hints = []
     if info["has_code"]:
         hints.append("[Contains code blocks]")
@@ -55,5 +76,5 @@ def _structure_hint(doc: "Document") -> str:
     if info["has_list"]:
         hints.append("[Contains lists]")
     if hints:
-        return "\n".join(hints) + "\n" + doc.page_content
-    return doc.page_content
+        return "\n".join(hints) + "\n" + body
+    return body

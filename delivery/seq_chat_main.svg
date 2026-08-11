@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 720" width="1000" height="720" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
+
+<defs>
+<marker id="ah" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#475569"/></marker>
+<marker id="ahb" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#1D4ED8"/></marker>
+<marker id="ahd" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#94A3B8"/></marker>
+<marker id="ahg" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#15803D"/></marker>
+<marker id="ahp" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#6D28D9"/></marker>
+<marker id="aho" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#C2410C"/></marker>
+<marker id="ahr" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#B91C1C"/></marker>
+</defs>
+
+<text x="500.0" y="30" font-size="17" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" style="font-weight:bold;">图3 关键时序图：多轮对话主链路（WS /ws/chat）</text>
+<line x1="40" y1="84" x2="40" y2="700" stroke="#CBD5E1" stroke-width="1.2"/>
+<rect x="-26" y="60" width="132" height="22" rx="4" fill="#E2E8F0" stroke="#94A3B8"/>
+<text x="40" y="75" font-size="11.5" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">坐席前端</text>
+<line x1="190" y1="84" x2="190" y2="700" stroke="#CBD5E1" stroke-width="1.2"/>
+<rect x="124" y="60" width="132" height="22" rx="4" fill="#E2E8F0" stroke="#94A3B8"/>
+<text x="190" y="75" font-size="11.5" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">ws-service</text>
+<line x1="340" y1="84" x2="340" y2="700" stroke="#CBD5E1" stroke-width="1.2"/>
+<rect x="274" y="60" width="132" height="22" rx="4" fill="#E2E8F0" stroke="#94A3B8"/>
+<text x="340" y="75" font-size="11.5" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">对话编排(LangGraph)</text>
+<line x1="490" y1="84" x2="490" y2="700" stroke="#CBD5E1" stroke-width="1.2"/>
+<rect x="424" y="60" width="132" height="22" rx="4" fill="#E2E8F0" stroke="#94A3B8"/>
+<text x="490" y="75" font-size="11.5" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">RAG(HybridRetriever)</text>
+<line x1="640" y1="84" x2="640" y2="700" stroke="#CBD5E1" stroke-width="1.2"/>
+<rect x="574" y="60" width="132" height="22" rx="4" fill="#E2E8F0" stroke="#94A3B8"/>
+<text x="640" y="75" font-size="11.5" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">模型网关(通义)</text>
+<line x1="790" y1="84" x2="790" y2="700" stroke="#CBD5E1" stroke-width="1.2"/>
+<rect x="724" y="60" width="132" height="22" rx="4" fill="#E2E8F0" stroke="#94A3B8"/>
+<text x="790" y="75" font-size="11.5" fill="#0F172A" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">PG / Redis</text>
+<line x1="40" y1="100" x2="190" y2="100" stroke="#1D4ED8" stroke-width="1.6" marker-end="url(#ahb)"/>
+<rect x="72.4" y="82.0" width="85.2" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="115.0" y="94.0" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">WS 连接 → 建立会话</text>
+<line x1="190" y1="130" x2="40" y2="130" stroke="#1D4ED8" stroke-width="1.6" marker-end="url(#ahb)"/>
+<rect x="29.5" y="112.0" width="171.0" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="115.0" y="124.0" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">session_ready(session_id)</text>
+<line x1="40" y1="164" x2="190" y2="164" stroke="#1D4ED8" stroke-width="1.6" marker-end="url(#ahb)"/>
+<rect x="6.4" y="146.0" width="217.2" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="115.0" y="158.0" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">chat_message(含 traceId+tenantId)</text>
+<line x1="190" y1="198" x2="340" y2="198" stroke="#1D4ED8" stroke-width="1.6" marker-end="url(#ahb)"/>
+<rect x="205.9" y="180.0" width="118.2" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="265.0" y="192.0" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">派发至编排(traceId 透传)</text>
+<line x1="340" y1="232" x2="490" y2="232" stroke="#475569" stroke-width="1.6" marker-end="url(#ah)"/>
+<rect x="355.9" y="214.0" width="118.2" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="415.0" y="226.0" font-size="11" fill="#475569" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">RAG 检索(tenant 过滤)</text>
+<line x1="490" y1="264" x2="340" y2="264" stroke="#475569" stroke-width="1.6" marker-end="url(#ah)"/>
+<rect x="388.9" y="246.0" width="52.2" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="415.0" y="258.0" font-size="11" fill="#475569" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">命中切片+引用</text>
+<line x1="340" y1="298" x2="640" y2="298" stroke="#B91C1C" stroke-width="1.6" marker-end="url(#ahr)"/>
+<rect x="440.8" y="280.0" width="98.4" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="490.0" y="292.0" font-size="11" fill="#B91C1C" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">模型调用(demo key)</text>
+<line x1="640" y1="330" x2="340" y2="330" stroke="#B91C1C" stroke-width="1.6" marker-end="url(#ahr)"/>
+<rect x="460.6" y="312.0" width="58.8" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="490.0" y="324.0" font-size="11" fill="#B91C1C" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">流式 token</text>
+<line x1="340" y1="364" x2="190" y2="364" stroke="#1D4ED8" stroke-width="1.6" marker-end="url(#ahb)"/>
+<rect x="199.3" y="346.0" width="131.4" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="265.0" y="358.0" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">streaming_chunk(逐片)</text>
+<line x1="190" y1="396" x2="40" y2="396" stroke="#1D4ED8" stroke-width="1.6" marker-end="url(#ahb)"/>
+<rect x="75.7" y="378.0" width="78.6" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="115.0" y="390.0" font-size="11" fill="#1D4ED8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">流式推送(可溯源引用)</text>
+<line x1="340" y1="432" x2="790" y2="432" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+<rect x="502.6" y="414.0" width="124.8" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="565.0" y="426.0" font-size="11" fill="#94A3B8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">落库会话/消息(tenant 强制)</text>
+<line x1="790" y1="466" x2="340" y2="466" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+<rect x="555.4" y="448.0" width="19.2" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="565.0" y="460.0" font-size="11" fill="#94A3B8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">OK</text>
+<line x1="340" y1="500" x2="190" y2="500" stroke="#C2410C" stroke-width="1.6" marker-end="url(#ah)"/>
+<rect x="196.0" y="482.0" width="138.0" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="265.0" y="494.0" font-size="11" fill="#C2410C" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">需转人工→transfer_notice</text>
+<line x1="190" y1="532" x2="790" y2="532" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+<rect x="450.7" y="514.0" width="78.6" height="15" rx="2" fill="#ffffff" stroke="#E2E8F0"/>
+<text x="490.0" y="526.0" font-size="11" fill="#94A3B8" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">工单创建(MQ 异步)</text>
+<text x="40" y="714" font-size="11" fill="#64748B" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">异常分支：RAG 未命中/低置信 → 转人工或 MCP 创建工单；所有调用透传 traceId，DB 写入强制带 tenant_id（SQL+向量双重隔离）。</text>
+</svg>

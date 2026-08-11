@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 460">
+  <rect width="680" height="460" fill="#f7f9fc"/>
+  <text x="20" y="30" font-family="sans-serif" font-size="16" font-weight="bold" fill="#1f2d3d">对话主链路泳道图（US-1 多轮对话与知识命中）</text>
+  <line x1="120" y1="60" x2="120" y2="420" stroke="#90a4ae" stroke-width="1"/>
+  <line x1="280" y1="60" x2="280" y2="420" stroke="#90a4ae" stroke-width="1"/>
+  <line x1="440" y1="60" x2="440" y2="420" stroke="#90a4ae" stroke-width="1"/>
+  <line x1="580" y1="60" x2="580" y2="420" stroke="#90a4ae" stroke-width="1"/>
+  <text x="120" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#37474f">坐席</text>
+  <text x="280" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#37474f">WS 网关</text>
+  <text x="440" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#37474f">对话编排</text>
+  <text x="580" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#37474f">RAG / 模型</text>
+  <rect x="130" y="80" width="130" height="34" rx="6" fill="#e8f5e9" stroke="#388e3c"/>
+  <text x="195" y="101" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#1b5e20">① 发送提问(WS)</text>
+  <line x1="260" y1="97" x2="275" y2="97" stroke="#555" stroke-width="1.2" marker-end="url(#b)"/>
+  <rect x="290" y="125" width="130" height="34" rx="6" fill="#e1f5fe" stroke="#0288d1"/>
+  <text x="355" y="146" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#01579b">② JWT鉴权+租户</text>
+  <line x1="420" y1="142" x2="435" y2="142" stroke="#555" stroke-width="1.2" marker-end="url(#b)"/>
+  <rect x="450" y="170" width="130" height="34" rx="6" fill="#ede7f6" stroke="#7b1fa2"/>
+  <text x="515" y="191" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#4a148c">③ LangGraph编排</text>
+  <line x1="510" y1="187" x2="585" y2="187" stroke="#555" stroke-width="1.2" marker-end="url(#b)"/>
+  <rect x="450" y="215" width="130" height="34" rx="6" fill="#fff3e0" stroke="#f57c00"/>
+  <text x="515" y="236" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e65100">④ RAG混合检索</text>
+  <line x1="510" y1="232" x2="435" y2="232" stroke="#555" stroke-width="1.2" marker-end="url(#b)"/>
+  <rect x="290" y="260" width="130" height="34" rx="6" fill="#ffebee" stroke="#c62828"/>
+  <text x="355" y="281" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b71c1c">⑤ 护栏校验</text>
+  <line x1="350" y1="277" x2="435" y2="277" stroke="#555" stroke-width="1.2" marker-end="url(#b)"/>
+  <rect x="450" y="305" width="130" height="34" rx="6" fill="#e0f7fa" stroke="#0097a7"/>
+  <text x="515" y="326" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#006064">⑥ 模型生成(demo)</text>
+  <line x1="510" y1="322" x2="435" y2="322" stroke="#555" stroke-width="1.2" marker-end="url(#b)"/>
+  <rect x="290" y="350" width="130" height="34" rx="6" fill="#e1f5fe" stroke="#0288d1"/>
+  <text x="355" y="371" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#01579b">⑦ 流式回复+引用</text>
+  <line x1="280" y1="367" x2="265" y2="367" stroke="#555" stroke-width="1.2" marker-end="url(#b)"/>
+  <rect x="130" y="395" width="130" height="34" rx="6" fill="#e8f5e9" stroke="#388e3c"/>
+  <text x="195" y="416" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#1b5e20">⑧ 引用气泡溯源</text>
+  <defs>
+    <marker id="b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#555"/>
+    </marker>
+  </defs>
+</svg>

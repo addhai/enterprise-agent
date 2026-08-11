@@ -169,6 +169,22 @@ flowchart TB
 
 ---
 
+## 📐 架构设计文档（详细）
+
+本项目配套一套完整的架构设计文档（由 AICoding 架构专家团按 G0~G5 关卡交付，已归档 `delivery/`），与设计实现口径一致：
+
+| 文档 | 内容 |
+|------|------|
+| `delivery/material_digest.md` | 资料摘要：22 份资料盘点、9 条冲突、两条任务线现状 |
+| `delivery/research_report.md` | 调研报告：5 家标杆 5 维加权矩阵、6 大技术域评分 |
+| `delivery/高层架构设计.md` | 高层架构：业务边界冻结、MVP F1~F8、Out-of-Scope O1~O6、三态标注 |
+| `delivery/系统设计.md` | 系统设计：DDD 限界上下文、模块五段式、6 位错误码、RPO/RTO、可观测 |
+| `delivery/UserStory.md` | 用户故事：角色清单、七段式 US-1~US-7、Given/When/Then、非功能需求 |
+| `delivery/部署设计.md` | 部署设计：compose 演示 + K8s 云原生双路、CI/CD、容量水位线、成本 |
+| `delivery/安全设计.md` | 安全设计：STRIDE 6 类、IAM/审计、OWASP Top 10、密钥分级、应急 |
+
+> 文档全程使用「三态标注」（**已实现** / **架构就绪未运行化** / **演示回退**）诚实声明项目现状差异，与本文「能力边界」一节口径一致，便于面试中经得起追问。
+
 ## 🚀 快速开始
 
 ### 需要什么

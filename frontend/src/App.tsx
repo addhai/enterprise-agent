@@ -115,10 +115,6 @@ function Navigation({
         )}
         <li><a href="#chat" className="btn btn-primary nav-cta">开始使用</a></li>
       </ul>
-
-      <button className="nav-mobile-toggle" onClick={() => {}}>
-        &#9776;
-      </button>
     </nav>
   )
 }

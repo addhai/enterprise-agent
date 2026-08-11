@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="600" viewBox="0 0 980 600">
+<rect x="0" y="0" width="980" height="600" fill="#ffffff"/>
+<text x="490.0" y="26" font-size="16" font-weight="bold" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#0f172a">图2 流量与网络链路（南北向/东西向/出网最小化）</text>
+<rect x="30" y="60" width="920" height="500" rx="12" fill="none" stroke="#dc2626" stroke-width="2" stroke-dasharray="8 4"/>
+<text x="490" y="50" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#dc2626">【红线边界】localhost 演示 / 可吊销 demo key；真实密钥不出框</text>
+<rect x="70" y="110" width="150" height="50" rx="8" fill="#fef9c3" stroke="#a16207" stroke-width="1.5"/>
+<text x="145.0" y="131.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">工作台/管理端</text>
+<text x="145.0" y="147.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">浏览器 localhost</text>
+<rect x="320" y="110" width="180" height="50" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+<text x="410.0" y="131.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">APISIX 网关</text>
+<text x="410.0" y="147.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">9080 · 鉴权/限流/熔断</text>
+<rect x="320" y="200" width="180" height="44" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+<text x="410.0" y="218.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">api/ws 多副本</text>
+<text x="410.0" y="234.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">无状态·会话外置Redis</text>
+<rect x="320" y="290" width="180" height="40" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5"/>
+<text x="410.0" y="306.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">业务模块 M1~M7</text>
+<text x="410.0" y="322.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">HTTP/MQ/WS</text>
+<rect x="70" y="290" width="180" height="40" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5"/>
+<text x="160.0" y="306.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">PostgreSQL16/Redis7</text>
+<text x="160.0" y="322.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">数据/缓存</text>
+<rect x="570" y="290" width="180" height="40" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5"/>
+<text x="660.0" y="306.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">RabbitMQ4/Chroma/MinIO</text>
+<text x="660.0" y="322.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">消息/向量/对象</text>
+<rect x="70" y="400" width="220" height="50" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+<text x="180.0" y="421.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">出口代理(NAT)</text>
+<text x="180.0" y="437.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">白名单域名·最小化出网</text>
+<rect x="330" y="400" width="220" height="50" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+<text x="440.0" y="421.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">E-01 阿里云只读</text>
+<text x="440.0" y="437.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">Describe* 仅只读</text>
+<rect x="590" y="400" width="220" height="50" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+<text x="700.0" y="421.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">E-02 通义千问</text>
+<text x="700.0" y="437.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">demo key 调用</text>
+<rect x="570" y="110" width="200" height="50" rx="8" fill="#fee2e2" stroke="#b91c1c" stroke-width="1.5"/>
+<text x="670.0" y="131.0" font-size="13" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">Prometheus→Grafana</text>
+<text x="670.0" y="147.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">12面板8告警</text>
+<line x1="220" y1="135" x2="320" y2="135" stroke="#1e40af" stroke-width="1.5"/>
+<line x1="410" y1="160" x2="410" y2="200" stroke="#15803d" stroke-width="1.5"/>
+<line x1="410" y1="244" x2="410" y2="290" stroke="#6d28d9" stroke-width="1.5"/>
+<line x1="410" y1="310" x2="250" y2="310" stroke="#6d28d9" stroke-width="1.5"/>
+<line x1="410" y1="310" x2="660" y2="310" stroke="#6d28d9" stroke-width="1.5"/>
+<line x1="410" y1="160" x2="670" y2="135" stroke="#b91c1c" stroke-width="1.5" stroke-dasharray="4 3"/>
+<line x1="290" y1="425" x2="330" y2="425" stroke="#475569" stroke-width="1.5"/>
+<line x1="550" y1="425" x2="590" y2="425" stroke="#475569" stroke-width="1.5"/>
+<line x1="180" y1="450" x2="440" y2="450" stroke="#475569" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="490" y="480" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">南北向：浏览器→网关→应用→数据；东西向：服务间 HTTP/MQ/WS；出网：仅白名单 E-01/E-02</text>
+</svg>

@@ -145,14 +145,6 @@ interface SatisfactionRecord {
   created_at: number
 }
 
-interface SatisfactionStats {
-  total: number
-  average_score: number
-  csat_rate: number
-  distribution: Record<string, number>
-  recent_trend: { date: string; avg_score: number; count: number }[]
-}
-
 interface NotificationItem {
   id: string
   type: string
@@ -551,141 +543,155 @@ function TicketsTab({ token, user, hasPermission }: { token: string; user: Props
   const canAssign = hasPermission('ticket:assign')
   const canManage = hasPermission('ticket:manage')
 
-  if (selected) {
-    return (
-      <div className="detail-panel">
-        <div className="detail-header">
-          <button className="back-btn" onClick={() => setSelected(null)}>← 返回列表</button>
-          <div className="detail-actions">
-            {canAssign && selected.status !== 'closed' && selected.assignee !== user?.username && (
-              <button className="btn-primary-small" onClick={assignToMe} disabled={actionLoading}>分配给我</button>
-            )}
-            {canAssign && selected.status !== 'closed' && (
-              <button className="btn-secondary-small" onClick={closeTicket} disabled={actionLoading}>关闭工单</button>
+  useEffect(() => {
+    if (tickets.length && !selected) {
+      setSelected(tickets[0])
+      setStatusEdit(tickets[0].status)
+    }
+  }, [tickets, selected])
+
+  const detailView = selected ? (
+    <div className="detail-panel split-detail-panel">
+      <div className="detail-header">
+        <div className="detail-actions">
+          {canAssign && selected.status !== 'closed' && selected.assignee !== user?.username && (
+            <button className="btn-primary-small" onClick={assignToMe} disabled={actionLoading}>分配给我</button>
+          )}
+          {canAssign && selected.status !== 'closed' && (
+            <button className="btn-secondary-small" onClick={closeTicket} disabled={actionLoading}>关闭工单</button>
+          )}
+        </div>
+      </div>
+      {detailLoading && <div className="admin-loading">加载详情...</div>}
+      {!detailLoading && (
+        <>
+          <div className="detail-grid">
+            <div><span className="detail-label">工单ID</span><span className="detail-value">{selected.id}</span></div>
+            <div><span className="detail-label">客户</span><span className="detail-value">{selected.user_id}</span></div>
+            <div><span className="detail-label">分类</span><span className="detail-value">{selected.category}</span></div>
+            <div><span className="detail-label">优先级</span><span className={`badge priority-${selected.priority}`}>{selected.priority}</span></div>
+            <div><span className="detail-label">状态</span><span className={`badge status-${selected.status}`}>{selected.status}</span></div>
+            <div><span className="detail-label">负责人</span><span className="detail-value">{selected.assignee || '-'}</span></div>
+            <div><span className="detail-label">创建时间</span><span className="detail-value">{formatDate(selected.created_at)}</span></div>
+            <div><span className="detail-label">标签</span><span className="detail-value">{selected.tags.join(', ') || '-'}</span></div>
+          </div>
+          <div className="detail-section">
+            <h4>描述</h4>
+            <p>{selected.description || '无描述'}</p>
+          </div>
+          {canManage && selected.status !== 'closed' && (
+            <div className="detail-section">
+              <h4>状态变更</h4>
+              <div className="filter-bar">
+                <select value={statusEdit} onChange={e => setStatusEdit(e.target.value)} className="filter-select">
+                  {TICKET_STATUSES.filter(s => s.value).map(s => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+                <button className="btn-primary-small" onClick={updateStatus} disabled={actionLoading || statusEdit === selected.status}>更新状态</button>
+              </div>
+            </div>
+          )}
+          {canManage && selected.status !== 'closed' && (
+            <div className="detail-section">
+              <h4>添加评论</h4>
+              <div className="comment-input-row">
+                <input
+                  type="text"
+                  value={comment}
+                  onChange={e => setComment(e.target.value)}
+                  placeholder="输入跟进内容..."
+                  className="filter-input"
+                  disabled={actionLoading}
+                />
+                <button className="btn-primary-small" onClick={addComment} disabled={actionLoading || !comment.trim()}>提交</button>
+              </div>
+            </div>
+          )}
+          <div className="detail-section">
+            <h4>评论记录 ({selected.comments.length})</h4>
+            {selected.comments.length === 0 ? (
+              <p className="hint">暂无评论</p>
+            ) : (
+              <div className="comment-list">
+                {selected.comments.map(c => (
+                  <div key={c.id} className="comment-item">
+                    <div className="comment-header">
+                      <span className="comment-author">{c.author}</span>
+                      <span className="comment-time">{formatDate(c.created_at)}</span>
+                    </div>
+                    <p className="comment-content">{c.content}</p>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
-        </div>
-        {detailLoading && <div className="admin-loading">加载详情...</div>}
-        {!detailLoading && (
-          <>
-            <div className="detail-grid">
-              <div><span className="detail-label">工单ID</span><span className="detail-value">{selected.id}</span></div>
-              <div><span className="detail-label">客户</span><span className="detail-value">{selected.user_id}</span></div>
-              <div><span className="detail-label">分类</span><span className="detail-value">{selected.category}</span></div>
-              <div><span className="detail-label">优先级</span><span className={`badge priority-${selected.priority}`}>{selected.priority}</span></div>
-              <div><span className="detail-label">状态</span><span className={`badge status-${selected.status}`}>{selected.status}</span></div>
-              <div><span className="detail-label">负责人</span><span className="detail-value">{selected.assignee || '-'}</span></div>
-              <div><span className="detail-label">创建时间</span><span className="detail-value">{formatDate(selected.created_at)}</span></div>
-              <div><span className="detail-label">标签</span><span className="detail-value">{selected.tags.join(', ') || '-'}</span></div>
-            </div>
-            <div className="detail-section">
-              <h4>描述</h4>
-              <p>{selected.description || '无描述'}</p>
-            </div>
-            {canManage && selected.status !== 'closed' && (
-              <div className="detail-section">
-                <h4>状态变更</h4>
-                <div className="filter-bar">
-                  <select value={statusEdit} onChange={e => setStatusEdit(e.target.value)} className="filter-select">
-                    {TICKET_STATUSES.filter(s => s.value).map(s => (
-                      <option key={s.value} value={s.value}>{s.label}</option>
-                    ))}
-                  </select>
-                  <button className="btn-primary-small" onClick={updateStatus} disabled={actionLoading || statusEdit === selected.status}>更新状态</button>
-                </div>
-              </div>
-            )}
-            {canManage && selected.status !== 'closed' && (
-              <div className="detail-section">
-                <h4>添加评论</h4>
-                <div className="comment-input-row">
-                  <input
-                    type="text"
-                    value={comment}
-                    onChange={e => setComment(e.target.value)}
-                    placeholder="输入跟进内容..."
-                    className="filter-input"
-                    disabled={actionLoading}
-                  />
-                  <button className="btn-primary-small" onClick={addComment} disabled={actionLoading || !comment.trim()}>提交</button>
-                </div>
-              </div>
-            )}
-            <div className="detail-section">
-              <h4>评论记录 ({selected.comments.length})</h4>
-              {selected.comments.length === 0 ? (
-                <p className="hint">暂无评论</p>
-              ) : (
-                <div className="comment-list">
-                  {selected.comments.map(c => (
-                    <div key={c.id} className="comment-item">
-                      <div className="comment-header">
-                        <span className="comment-author">{c.author}</span>
-                        <span className="comment-time">{formatDate(c.created_at)}</span>
-                      </div>
-                      <p className="comment-content">{c.content}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-    )
-  }
+        </>
+      )}
+    </div>
+  ) : (
+    <div className="detail-empty">
+      <div className="detail-empty-icon">🎫</div>
+      <p>选择一个工单查看详情</p>
+    </div>
+  )
 
   return (
-    <div>
-      <div className="filter-bar">
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="filter-select">
-          {TICKET_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
-        <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} className="filter-select">
-          {TICKET_PRIORITIES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
-        <input
-          type="text"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="搜索标题 / 描述 / 客户ID"
-          className="filter-input"
-        />
-        <button className="refresh-btn" onClick={fetchList} disabled={loading}>刷新</button>
-      </div>
-      {loading && <div className="admin-loading">加载工单...</div>}
-      {error && <div className="admin-error">{error}</div>}
-      {!loading && !error && tickets.length === 0 && (
-        <div className="sessions-placeholder"><p>暂无工单</p></div>
-      )}
-      {!loading && !error && tickets.length > 0 && (
-        <div className="sessions-table-wrap">
-          <table className="sessions-table">
-            <thead>
-              <tr>
-                <th>标题</th>
-                <th>客户</th>
-                <th>优先级</th>
-                <th>状态</th>
-                <th>负责人</th>
-                <th>创建时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tickets.map(t => (
-                <tr key={t.id} className="session-row" onClick={() => openDetail(t)}>
-                  <td className="ticket-title">{t.title}</td>
-                  <td>{t.user_id}</td>
-                  <td><span className={`badge priority-${t.priority}`}>{t.priority}</span></td>
-                  <td><span className={`badge status-${t.status}`}>{t.status}</span></td>
-                  <td>{t.assignee || '-'}</td>
-                  <td>{formatDateShort(t.created_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div className="split-layout">
+      <div className="split-list-col">
+        <div className="filter-bar">
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="filter-select">
+            {TICKET_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} className="filter-select">
+            {TICKET_PRIORITIES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="搜索标题 / 描述 / 客户ID"
+            className="filter-input"
+          />
+          <button className="refresh-btn" onClick={fetchList} disabled={loading}>刷新</button>
         </div>
-      )}
+        {loading && <div className="admin-loading">加载工单...</div>}
+        {error && <div className="admin-error">{error}</div>}
+        {!loading && !error && tickets.length === 0 && (
+          <div className="sessions-placeholder"><p>暂无工单</p></div>
+        )}
+        {!loading && !error && tickets.length > 0 && (
+          <div className="sessions-table-wrap">
+            <table className="sessions-table">
+              <thead>
+                <tr>
+                  <th>标题</th>
+                  <th>客户</th>
+                  <th>优先级</th>
+                  <th>状态</th>
+                  <th>负责人</th>
+                  <th>创建时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tickets.map(t => (
+                  <tr key={t.id} className={`session-row ${selected?.id === t.id ? 'selected' : ''}`} onClick={() => openDetail(t)}>
+                    <td className="ticket-title">{t.title}</td>
+                    <td>{t.user_id}</td>
+                    <td><span className={`badge priority-${t.priority}`}>{t.priority}</span></td>
+                    <td><span className={`badge status-${t.status}`}>{t.status}</span></td>
+                    <td>{t.assignee || '-'}</td>
+                    <td>{formatDateShort(t.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <div className="split-detail-col">
+        {detailView}
+      </div>
     </div>
   )
 }
@@ -803,158 +809,170 @@ function CustomersTab({ token, hasPermission }: { token: string; hasPermission: 
     }
   }
 
-  if (selectedId) {
-    return (
-      <div className="detail-panel">
-        <div className="detail-header">
-          <button className="back-btn" onClick={() => setSelectedId(null)}>← 返回列表</button>
-        </div>
-        {detailLoading && <div className="admin-loading">加载客户详情...</div>}
-        {!detailLoading && detail && (
-          <>
-            <div className="customer-profile">
-              <div className="profile-avatar-large">{detail.customer.username.charAt(0).toUpperCase()}</div>
-              <div className="customer-profile-info">
-                <h3>{detail.customer.username} <span className={`badge status-${detail.customer.status}`}>{detail.customer.status}</span></h3>
-                <p className="profile-email">{detail.customer.user_id} {detail.customer.email ? `· ${detail.customer.email}` : ''}</p>
-                <p className="profile-meta">计划：{detail.customer.plan} · 会话：{detail.customer.session_count} · 工单：{detail.customer.ticket_count} · 满意度：{detail.customer.satisfaction_score ?? '-'}</p>
+  useEffect(() => {
+    if (customers.length && !selectedId) {
+      openDetail(customers[0])
+    }
+  }, [customers, selectedId])
+
+  const detailView = selectedId ? (
+    <div className="detail-panel split-detail-panel">
+      {detailLoading && <div className="admin-loading">加载客户详情...</div>}
+      {!detailLoading && !detail && <div className="detail-empty"><p>未找到客户</p></div>}
+      {!detailLoading && detail && (
+        <>
+          <div className="customer-profile">
+            <div className="profile-avatar-large">{detail.customer.username.charAt(0).toUpperCase()}</div>
+            <div className="customer-profile-info">
+              <h3>{detail.customer.username} <span className={`badge status-${detail.customer.status}`}>{detail.customer.status}</span></h3>
+              <p className="profile-email">{detail.customer.user_id} {detail.customer.email ? `· ${detail.customer.email}` : ''}</p>
+              <p className="profile-meta">计划：{detail.customer.plan} · 会话：{detail.customer.session_count} · 工单：{detail.customer.ticket_count} · 满意度：{detail.customer.satisfaction_score ?? '-'}</p>
+            </div>
+          </div>
+
+          {canManage && (
+            <div className="detail-section">
+              <h4>编辑信息</h4>
+              <div className="edit-grid">
+                <div className="edit-field">
+                  <label>标签（逗号分隔）</label>
+                  <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)} className="filter-input" />
+                  <button className="btn-primary-small" onClick={saveTags} disabled={saving}>保存标签</button>
+                </div>
+                <div className="edit-field">
+                  <label>备注</label>
+                  <textarea value={noteInput} onChange={e => setNoteInput(e.target.value)} className="agent-reply-input" rows={2} />
+                  <button className="btn-primary-small" onClick={saveNote} disabled={saving}>保存备注</button>
+                </div>
+                <div className="edit-field">
+                  <label>状态</label>
+                  <select value={statusInput} onChange={e => setStatusInput(e.target.value)} className="filter-select">
+                    {CUSTOMER_STATUSES.filter(s => s.value).map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                  <button className="btn-primary-small" onClick={saveStatus} disabled={saving || statusInput === detail.customer.status}>保存状态</button>
+                </div>
               </div>
             </div>
+          )}
 
-            {canManage && (
-              <div className="detail-section">
-                <h4>编辑信息</h4>
-                <div className="edit-grid">
-                  <div className="edit-field">
-                    <label>标签（逗号分隔）</label>
-                    <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)} className="filter-input" />
-                    <button className="btn-primary-small" onClick={saveTags} disabled={saving}>保存标签</button>
+          <div className="dashboard-split">
+            <div className="dashboard-panel">
+              <h4 className="dashboard-section-title">会话历史 ({detail.sessions.length})</h4>
+              {detail.sessions.length === 0 ? <p className="hint">无会话</p> : (
+                <ul className="recent-list compact">
+                  {detail.sessions.map(s => (
+                    <li key={s.session_id} className="recent-item">
+                      <span className="recent-item-title">{s.session_id.slice(0, 12)}</span>
+                      <span className="recent-item-meta">{s.mode} · {s.turn_count} 轮 · {formatDate(s.last_active)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="dashboard-panel">
+              <h4 className="dashboard-section-title">工单历史 ({detail.tickets.length})</h4>
+              {detail.tickets.length === 0 ? <p className="hint">无工单</p> : (
+                <ul className="recent-list compact">
+                  {detail.tickets.map(t => (
+                    <li key={t.id} className="recent-item">
+                      <span className="recent-item-title">{t.title}</span>
+                      <span className="recent-item-meta"><span className={`badge status-${t.status}`}>{t.status}</span> · {formatDateShort(t.created_at)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <div className="detail-section">
+            <h4>满意度记录</h4>
+            {detail.satisfaction.length === 0 ? <p className="hint">暂无评价</p> : (
+              <div className="comment-list">
+                {detail.satisfaction.map(r => (
+                  <div key={r.id} className="comment-item">
+                    <div className="comment-header">
+                      <span className="comment-author">{r.score} 星</span>
+                      <span className="comment-time">{formatDate(r.created_at)}</span>
+                    </div>
+                    <p className="comment-content">{r.comment || r.tags.join(', ') || '无文字评价'}</p>
                   </div>
-                  <div className="edit-field">
-                    <label>备注</label>
-                    <textarea value={noteInput} onChange={e => setNoteInput(e.target.value)} className="agent-reply-input" rows={2} />
-                    <button className="btn-primary-small" onClick={saveNote} disabled={saving}>保存备注</button>
-                  </div>
-                  <div className="edit-field">
-                    <label>状态</label>
-                    <select value={statusInput} onChange={e => setStatusInput(e.target.value)} className="filter-select">
-                      {CUSTOMER_STATUSES.filter(s => s.value).map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                    </select>
-                    <button className="btn-primary-small" onClick={saveStatus} disabled={saving || statusInput === detail.customer.status}>保存状态</button>
-                  </div>
-                </div>
+                ))}
               </div>
             )}
+          </div>
 
-            <div className="dashboard-split">
-              <div className="dashboard-panel">
-                <h4 className="dashboard-section-title">会话历史 ({detail.sessions.length})</h4>
-                {detail.sessions.length === 0 ? <p className="hint">无会话</p> : (
-                  <ul className="recent-list compact">
-                    {detail.sessions.map(s => (
-                      <li key={s.session_id} className="recent-item">
-                        <span className="recent-item-title">{s.session_id.slice(0, 12)}</span>
-                        <span className="recent-item-meta">{s.mode} · {s.turn_count} 轮 · {formatDate(s.last_active)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <div className="dashboard-panel">
-                <h4 className="dashboard-section-title">工单历史 ({detail.tickets.length})</h4>
-                {detail.tickets.length === 0 ? <p className="hint">无工单</p> : (
-                  <ul className="recent-list compact">
-                    {detail.tickets.map(t => (
-                      <li key={t.id} className="recent-item">
-                        <span className="recent-item-title">{t.title}</span>
-                        <span className="recent-item-meta"><span className={`badge status-${t.status}`}>{t.status}</span> · {formatDateShort(t.created_at)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-
-            <div className="detail-section">
-              <h4>满意度记录</h4>
-              {detail.satisfaction.length === 0 ? <p className="hint">暂无评价</p> : (
-                <div className="comment-list">
-                  {detail.satisfaction.map(r => (
-                    <div key={r.id} className="comment-item">
-                      <div className="comment-header">
-                        <span className="comment-author">{r.score} 星</span>
-                        <span className="comment-time">{formatDate(r.created_at)}</span>
-                      </div>
-                      <p className="comment-content">{r.comment || r.tags.join(', ') || '无文字评价'}</p>
+          <div className="detail-section">
+            <h4>时间线</h4>
+            {timeline.length === 0 ? <p className="hint">暂无事件</p> : (
+              <div className="timeline">
+                {timeline.map((e, idx) => (
+                  <div key={idx} className={`timeline-item type-${e.type}`}>
+                    <div className="timeline-dot" />
+                    <div className="timeline-content">
+                      <div className="timeline-title">{e.title}</div>
+                      <div className="timeline-detail">{e.detail}</div>
+                      <div className="timeline-time">{formatDate(e.time)}</div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="detail-section">
-              <h4>时间线</h4>
-              {timeline.length === 0 ? <p className="hint">暂无事件</p> : (
-                <div className="timeline">
-                  {timeline.map((e, idx) => (
-                    <div key={idx} className={`timeline-item type-${e.type}`}>
-                      <div className="timeline-dot" />
-                      <div className="timeline-content">
-                        <div className="timeline-title">{e.title}</div>
-                        <div className="timeline-detail">{e.detail}</div>
-                        <div className="timeline-time">{formatDate(e.time)}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-    )
-  }
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  ) : (
+    <div className="detail-empty">
+      <div className="detail-empty-icon">👤</div>
+      <p>选择一个客户查看详情</p>
+    </div>
+  )
 
   return (
-    <div>
-      <div className="filter-bar">
-        <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索用户名 / ID / 邮箱" className="filter-input" />
-        <input type="text" value={planFilter} onChange={e => setPlanFilter(e.target.value)} placeholder="计划" className="filter-input small" />
-        <input type="text" value={tagFilter} onChange={e => setTagFilter(e.target.value)} placeholder="标签" className="filter-input small" />
-        <button className="refresh-btn" onClick={fetchList} disabled={loading}>刷新</button>
-      </div>
-      {loading && <div className="admin-loading">加载客户...</div>}
-      {error && <div className="admin-error">{error}</div>}
-      {!loading && !error && customers.length === 0 && <div className="sessions-placeholder"><p>暂无客户</p></div>}
-      {!loading && !error && customers.length > 0 && (
-        <div className="sessions-table-wrap">
-          <table className="sessions-table">
-            <thead>
-              <tr><th>客户</th><th>计划</th><th>状态</th><th>标签</th><th>最近活跃</th><th>会话/工单</th></tr>
-            </thead>
-            <tbody>
-              {customers.map(c => (
-                <tr key={c.user_id} className="session-row" onClick={() => openDetail(c)}>
-                  <td>
-                    <div className="customer-cell">
-                      <span className="customer-avatar">{c.username.charAt(0).toUpperCase()}</span>
-                      <div>
-                        <div className="customer-name">{c.username}</div>
-                        <div className="customer-id">{c.user_id}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td>{c.plan}</td>
-                  <td><span className={`badge status-${c.status}`}>{c.status}</span></td>
-                  <td>{c.tags.join(', ') || '-'}</td>
-                  <td>{formatDateShort(c.last_seen_at)}</td>
-                  <td>{c.session_count} / {c.ticket_count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div className="split-layout">
+      <div className="split-list-col">
+        <div className="filter-bar">
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索用户名 / ID / 邮箱" className="filter-input" />
+          <input type="text" value={planFilter} onChange={e => setPlanFilter(e.target.value)} placeholder="计划" className="filter-input small" />
+          <input type="text" value={tagFilter} onChange={e => setTagFilter(e.target.value)} placeholder="标签" className="filter-input small" />
+          <button className="refresh-btn" onClick={fetchList} disabled={loading}>刷新</button>
         </div>
-      )}
+        {loading && <div className="admin-loading">加载客户...</div>}
+        {error && <div className="admin-error">{error}</div>}
+        {!loading && !error && customers.length === 0 && <div className="sessions-placeholder"><p>暂无客户</p></div>}
+        {!loading && !error && customers.length > 0 && (
+          <div className="sessions-table-wrap">
+            <table className="sessions-table">
+              <thead>
+                <tr><th>客户</th><th>计划</th><th>状态</th><th>标签</th><th>最近活跃</th><th>会话/工单</th></tr>
+              </thead>
+              <tbody>
+                {customers.map(c => (
+                  <tr key={c.user_id} className={`session-row ${selectedId === c.user_id ? 'selected' : ''}`} onClick={() => openDetail(c)}>
+                    <td>
+                      <div className="customer-cell">
+                        <span className="customer-avatar">{c.username.charAt(0).toUpperCase()}</span>
+                        <div>
+                          <div className="customer-name">{c.username}</div>
+                          <div className="customer-id">{c.user_id}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>{c.plan}</td>
+                    <td><span className={`badge status-${c.status}`}>{c.status}</span></td>
+                    <td>{c.tags.join(', ') || '-'}</td>
+                    <td>{formatDateShort(c.last_seen_at)}</td>
+                    <td>{c.session_count} / {c.ticket_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <div className="split-detail-col">
+        {detailView}
+      </div>
     </div>
   )
 }
@@ -965,21 +983,14 @@ function CustomersTab({ token, hasPermission }: { token: string; hasPermission: 
 
 function SatisfactionTab({ token }: { token: string }) {
   const [records, setRecords] = useState<SatisfactionRecord[]>([])
-  const [stats, setStats] = useState<SatisfactionStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
     setLoading(true)
     setError('')
-    Promise.all([
-      fetchJson('/satisfaction?limit=100', token),
-      fetchJson('/satisfaction/stats?days=7', token),
-    ])
-      .then(([r, s]) => {
-        setRecords((r.records || []) as SatisfactionRecord[])
-        setStats(s as SatisfactionStats)
-      })
+    fetchJson('/satisfaction?limit=100', token)
+      .then((r: any) => setRecords((r.records || []) as SatisfactionRecord[]))
       .catch(err => setError(err instanceof Error ? err.message : '加载失败'))
       .finally(() => setLoading(false))
   }, [token])
@@ -987,18 +998,47 @@ function SatisfactionTab({ token }: { token: string }) {
   if (loading) return <div className="admin-loading">加载满意度...</div>
   if (error) return <div className="admin-error">{error}</div>
 
+  const total = records.length
+  const avg = total ? records.reduce((s, r) => s + r.score, 0) / total : 0
+  const csat = total ? Math.round((records.filter(r => r.score >= 4).length / total) * 1000) / 10 : 0
+  const detractors = records.filter(r => r.score <= 2).length
+  const promoters = records.filter(r => r.score >= 4).length
+  const nps = total ? Math.round(((promoters - detractors) / total) * 100) : 0
+  const negativePending = records.filter(r => r.score <= 3).length
+  const distribution: { star: number; label: string; count: number; positive: boolean }[] = [5, 4, 3, 2, 1].map(star => {
+    const count = records.filter(r => r.score === star).length
+    return { star, label: `${star} 星`, count, positive: star >= 4 }
+  })
+  const maxCount = Math.max(1, ...distribution.map(d => d.count))
+
   return (
     <div>
-      {stats && (
-        <div className="metrics-grid">
-          <StatCard label="评价总数" value={String(stats.total)} />
-          <StatCard label="平均评分" value={String(stats.average_score)} />
-          <StatCard label="CSAT 率" value={`${stats.csat_rate}%`} />
-          {Object.entries(stats.distribution).sort().map(([score, count]) => (
-            <StatCard key={score} label={`${score} 星`} value={String(count)} />
+      <div className="metrics-grid">
+        <StatCard label="CSAT（满意率）" value={`${csat}%`} color="#2dd4a0" />
+        <StatCard label="NPS（净推荐值）" value={String(nps)} color="#60a5fa" />
+        <StatCard label="平均评分" value={avg.toFixed(2)} color="#fbbf24" />
+        <StatCard label="评价总数" value={String(total)} color="#aa3bff" />
+        <StatCard label="差评待跟进" value={String(negativePending)} color={negativePending > 0 ? '#f87171' : undefined} />
+      </div>
+
+      <div className="sessions-container" style={{ marginTop: 16 }}>
+        <h3 className="detail-title">评分分布</h3>
+        <div className="sat-dist">
+          {distribution.map(d => (
+            <div key={d.star} className="sat-dist-row">
+              <span className="sat-dist-label">{d.label}</span>
+              <div className="sat-dist-track">
+                <div
+                  className={`sat-dist-bar ${d.positive ? 'pos' : 'neg'}`}
+                  style={{ width: `${(d.count / maxCount) * 100}%` }}
+                />
+              </div>
+              <span className="sat-dist-count">{d.count}</span>
+            </div>
           ))}
         </div>
-      )}
+      </div>
+
       <div className="sessions-container" style={{ marginTop: 16 }}>
         <h3 className="detail-title">评价记录</h3>
         {records.length === 0 ? <p className="hint">暂无评价</p> : (
@@ -1144,12 +1184,71 @@ function RbacTab({ token, user, hasPermission }: { token: string; user: Props['u
     }
   }
 
+  const roleUserCount = (role: string) => users.filter(u => u.role === role).length
+
+  const RESOURCES: { key: string; label: string }[] = [
+    { key: 'dashboard', label: '仪表盘' },
+    { key: 'customer', label: '客户' },
+    { key: 'ticket', label: '工单' },
+    { key: 'knowledge', label: '知识库' },
+    { key: 'channel', label: '渠道' },
+    { key: 'user', label: '用户' },
+    { key: 'notification', label: '通知' },
+    { key: 'monitor', label: '监控' },
+    { key: 'config', label: '配置' },
+    { key: 'evaluation', label: '评估' },
+    { key: 'workflow', label: '工作流' },
+  ]
+  const hasRes = (perms: string[], res: string) => perms.some(p => p.startsWith(res + ':'))
+
   return (
     <div>
       <div className="filter-bar">
-        <span className="notification-count">共 {users.length} 位用户</span>
+        <span className="notification-count">共 {users.length} 位用户 · {roles.length} 个角色</span>
         <button className="refresh-btn" onClick={fetchAll} disabled={loading}>刷新</button>
       </div>
+
+      <h3 className="detail-title" style={{ marginTop: 16 }}>角色概览</h3>
+      <div className="role-grid">
+        {roles.map(r => (
+          <div key={r.role} className="role-card">
+            <div className="role-card-head">
+              <span className={`role-badge role-${r.role}`}>{r.label}</span>
+              <span className="role-card-count">{roleUserCount(r.role)} 人</span>
+            </div>
+            <div className="role-card-desc">{r.description}</div>
+            <div className="role-card-perms">{r.permissions.length} 项权限点</div>
+          </div>
+        ))}
+      </div>
+
+      <h3 className="detail-title" style={{ marginTop: 20 }}>权限矩阵</h3>
+      <div className="sessions-table-wrap">
+        <table className="sessions-table rbac-matrix">
+          <thead>
+            <tr>
+              <th>角色</th>
+              {RESOURCES.map(res => <th key={res.key} title={res.label}>{res.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {roles.map(r => (
+              <tr key={r.role}>
+                <td><span className={`role-badge role-${r.role}`}>{r.label}</span></td>
+                {RESOURCES.map(res => (
+                  <td key={res.key} className="rbac-cell">
+                    {hasRes(r.permissions, res.key)
+                      ? <span className="rbac-dot on" title="有权限">●</span>
+                      : <span className="rbac-dot off" title="无权限">○</span>}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <h3 className="detail-title" style={{ marginTop: 20 }}>用户列表</h3>
       {loading && <div className="admin-loading">加载用户...</div>}
       {error && <div className="admin-error">{error}</div>}
       {!loading && !error && users.length === 0 && <div className="sessions-placeholder"><p>暂无用户</p></div>}
@@ -1240,8 +1339,7 @@ function ChannelsTab({ token }: { token: string }) {
 
   const loadChannels = useCallback(() => {
     setLoading(true)
-    fetch('/api/v1/admin/channels', { headers: { Authorization: `Bearer ${token}` } })
-      .then(checkResponse)
+    fetchJson('/admin/channels', token)
       .then(data => {
         const list = (data.channels || data || []) as ChannelData[]
         setChannels(list)
@@ -1293,13 +1391,7 @@ function ChannelsTab({ token }: { token: string }) {
       if (chatwootForm.api_token) body.api_token = chatwootForm.api_token
       if (chatwootForm.webhook_token) body.webhook_token = chatwootForm.webhook_token
 
-      const res = await fetch('/api/v1/admin/channels/chatwoot/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || data.message || '保存失败')
+      const data = await putJson('/admin/channels/chatwoot/config', token, body) as any
       setSaveMsg({ channel: 'chatwoot', type: 'success', text: '配置已保存' })
       setChannels(prev => prev.map(c => c.name === 'chatwoot' ? { ...c, enabled: data.enabled, config: data.config } : c))
     } catch (err) {
@@ -1314,11 +1406,7 @@ function ChannelsTab({ token }: { token: string }) {
     setTesting('chatwoot')
     setTestMsg(null)
     try {
-      const res = await fetch('/api/v1/admin/channels/chatwoot/test', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      const data = await res.json()
+      const data = await postJson('/admin/channels/chatwoot/test', token, {}) as any
       if (data.success) {
         setTestMsg({ channel: 'chatwoot', type: 'success', text: data.message || '连接成功' })
       } else {
@@ -1342,17 +1430,11 @@ function ChannelsTab({ token }: { token: string }) {
       }
       if (feishuForm.app_secret) body.app_secret = feishuForm.app_secret
 
-      const res = await fetch('/api/v1/admin/channels/feishu/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || data.message || '保存失败')
+      const data = await putJson('/admin/channels/feishu/config', token, body) as any
       setSaveMsg({ channel: 'feishu', type: 'success', text: '配置已保存' })
       setChannels(prev => prev.map(c => c.name === 'feishu' ? { ...c, enabled: data.enabled, config: data.config } : c))
     } catch (err) {
-      setSaveMsg({ channel: 'feishu', type: 'error', text: err instanceof Error ? err.message : '保存失败' })
+      setSaveMsg({ channel: 'feishu', type: 'error', text: err instanceof Error ? err.message || '保存失败' : '保存失败' })
     } finally {
       setSaving(null)
       setTimeout(() => setSaveMsg(null), 3000)
@@ -1363,11 +1445,7 @@ function ChannelsTab({ token }: { token: string }) {
     setTesting('feishu')
     setTestMsg(null)
     try {
-      const res = await fetch('/api/v1/admin/channels/feishu/test', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      const data = await res.json()
+      const data = await postJson('/admin/channels/feishu/test', token, {}) as any
       if (data.success) {
         setTestMsg({ channel: 'feishu', type: 'success', text: data.message || '连接成功' })
       } else {
@@ -1706,8 +1784,7 @@ function SessionsTab({ token }: { token: string }) {
 
   const fetchSessions = useCallback(() => {
     setLoading(true)
-    fetch('/api/v1/admin/sessions', { headers: { Authorization: `Bearer ${token}` } })
-      .then(checkResponse)
+    fetchJson('/admin/sessions', token)
       .then(data => setSessions((data.sessions || data || []) as SessionItemData[]))
       .catch(() => setSessions([]))
       .finally(() => setLoading(false))
@@ -1716,8 +1793,7 @@ function SessionsTab({ token }: { token: string }) {
   const fetchSessionDetail = (sessionId: string) => {
     setSessionDetailLoading(true)
     setSelectedSession(null)
-    fetch(`/api/v1/admin/sessions/${sessionId}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(checkResponse)
+    fetchJson(`/admin/sessions/${sessionId}`, token)
       .then(data => setSelectedSession(data as SessionItemData))
       .catch(() => setSelectedSession(null))
       .finally(() => setSessionDetailLoading(false))
@@ -1804,10 +1880,58 @@ function SessionsTab({ token }: { token: string }) {
                   </td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
         </div>
       )}
+
+      {/* LangGraph 五路径路由轨迹（概念示意，真实会话数据为空时展示） */}
+      <div className="sessions-container" style={{ marginTop: 16 }}>
+        <h3 className="detail-title">LangGraph 五路径路由轨迹</h3>
+        <p className="hint" style={{ marginBottom: 12 }}>每条会话进入后，由意图识别节点选择以下五条路径之一处理。当前环境暂无真实会话数据，下方为路由概念示意。</p>
+        <div className="route-flow">
+          <div className="route-node route-start">用户消息</div>
+          <div className="route-arrow">↓</div>
+          <div className="route-node route-router">意图识别 / 路由决策</div>
+          <div className="route-branches">
+            <div className="route-branch">
+              <span className="route-edge direct" />
+              <div className="route-card">
+                <div className="route-card-name" style={{ color: 'var(--brand-teal)' }}>① Direct 直答</div>
+                <div className="route-card-desc">高频简单问答，模型直出，不触发检索与工具</div>
+              </div>
+            </div>
+            <div className="route-branch">
+              <span className="route-edge rag" />
+              <div className="route-card">
+                <div className="route-card-name" style={{ color: 'var(--brand-blue)' }}>② RAG 知识问答</div>
+                <div className="route-card-desc">向量检索知识库，召回片段经阈值过滤后生成答案</div>
+              </div>
+            </div>
+            <div className="route-branch">
+              <span className="route-edge tool" />
+              <div className="route-card">
+                <div className="route-card-name" style={{ color: '#fbbf24' }}>③ Tool 工具调用</div>
+                <div className="route-card-desc">调用真实云 API（ECS/RDS/SLB/Redis/云监控）查询或诊断</div>
+              </div>
+            </div>
+            <div className="route-branch">
+              <span className="route-edge agent" />
+              <div className="route-card">
+                <div className="route-card-name" style={{ color: 'var(--brand-purple)' }}>④ Agent 多步编排</div>
+                <div className="route-card-desc">复杂任务多轮规划，串联多个工具与子目标</div>
+              </div>
+            </div>
+            <div className="route-branch">
+              <span className="route-edge human" />
+              <div className="route-card">
+                <div className="route-card-name" style={{ color: '#f87171' }}>⑤ Human 转人工</div>
+                <div className="route-card-desc">低置信 / 高风险 / 用户要求，转接坐席工作台</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -2619,27 +2743,27 @@ function ConfigTab({ token, hasPermission }: { token: string; hasPermission: (p:
             {currentCategory && (
               <>
                 <h3 className="detail-title">{currentCategory.label}</h3>
-                <p style={{ color: '#888', fontSize: 13, marginBottom: 12 }}>{currentCategory.description}</p>
+                <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>{currentCategory.description}</p>
                 <div className="sessions-container">
                   <table className="config-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
-                      <tr style={{ background: '#f5f5f5', textAlign: 'left' }}>
-                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>字段名</th>
-                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>类型</th>
-                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>当前值</th>
-                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>默认值</th>
-                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>状态</th>
-                        <th style={{ padding: 8, borderBottom: '1px solid #ddd' }}>操作</th>
+                      <tr style={{ background: 'var(--bg-deep)', textAlign: 'left' }}>
+                        <th style={{ padding: 8, borderBottom: '1px solid var(--border-subtle)' }}>字段名</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid var(--border-subtle)' }}>类型</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid var(--border-subtle)' }}>当前值</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid var(--border-subtle)' }}>默认值</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid var(--border-subtle)' }}>状态</th>
+                        <th style={{ padding: 8, borderBottom: '1px solid var(--border-subtle)' }}>操作</th>
                       </tr>
                     </thead>
                     <tbody>
                       {currentCategory.fields.map(field => (
-                        <tr key={field.name} style={{ borderBottom: '1px solid #eee' }}>
-                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 13 }}>{field.name}</td>
-                          <td style={{ padding: 8, fontSize: 12, color: '#888' }}>{field.type}</td>
-                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 13 }}>
+                        <tr key={field.name} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 13, color: 'var(--text-primary)' }}>{field.name}</td>
+                          <td style={{ padding: 8, fontSize: 12, color: 'var(--text-secondary)' }}>{field.type}</td>
+                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 13, color: 'var(--text-primary)' }}>
                             {field.is_sensitive ? (
-                              <span style={{ color: '#888' }}>{field.configured ? '已配置 ••••' : '未配置'}</span>
+                              <span style={{ color: 'var(--text-secondary)' }}>{field.configured ? '已配置 ••••' : '未配置'}</span>
                             ) : editingField === field.name ? (
                               <input
                                 type="text"
@@ -2649,21 +2773,21 @@ function ConfigTab({ token, hasPermission }: { token: string; hasPermission: (p:
                                 autoFocus
                               />
                             ) : (
-                              <span style={{ color: field.is_default ? '#888' : '#10b981', fontWeight: field.is_default ? 400 : 600 }}>
+                              <span style={{ color: field.is_default ? 'var(--text-secondary)' : 'var(--brand-teal)', fontWeight: field.is_default ? 400 : 600 }}>
                                 {String(field.value)}
                               </span>
                             )}
                           </td>
-                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 12, color: '#aaa' }}>
+                          <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
                             {field.is_sensitive ? '-' : String(field.default)}
                           </td>
                           <td style={{ padding: 8 }}>
                             {field.is_sensitive ? (
-                              <span className="role-badge" style={{ background: '#fef3c7', color: '#92400e' }}>敏感</span>
+                              <span className="role-badge sensitive">敏感</span>
                             ) : field.is_default ? (
-                              <span className="role-badge" style={{ background: '#e0e7ff', color: '#4338ca' }}>默认</span>
+                              <span className="role-badge default">默认</span>
                             ) : (
-                              <span className="role-badge" style={{ background: '#d1fae5', color: '#065f46' }}>已修改</span>
+                              <span className="role-badge modified">已修改</span>
                             )}
                           </td>
                           <td style={{ padding: 8 }}>
@@ -2702,7 +2826,7 @@ function ConfigTab({ token, hasPermission }: { token: string; hasPermission: (p:
                     <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 600 }}>{flag.name}</div>
                     <div style={{ fontSize: 11, color: '#888' }}>{flag.category_label}</div>
                   </div>
-                  <span className={`role-badge ${flag.enabled ? 'role-admin' : 'role-viewer'}`} style={{ background: flag.enabled ? '#d1fae5' : '#fee2e2', color: flag.enabled ? '#065f46' : '#991b1b' }}>
+                  <span className={`role-badge ${flag.enabled ? 'enabled' : 'disabled'}`}>
                     {flag.enabled ? '已启用' : '已禁用'}
                   </span>
                 </div>
@@ -2824,8 +2948,8 @@ function EvaluationTab({ token, hasPermission }: { token: string; hasPermission:
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <div>
                     <div style={{ fontWeight: 600 }}>{ds.name}</div>
-                    <div style={{ fontSize: 12, color: '#888' }}>{ds.description || '无描述'}</div>
-                    <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{ds.description || '无描述'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
                       {Array.isArray(ds.samples) ? ds.samples.length : 0} 个样本 · 创建于 {formatDate(ds.created_at)}
                     </div>
                   </div>
@@ -2837,7 +2961,7 @@ function EvaluationTab({ token, hasPermission }: { token: string; hasPermission:
                     )}
                     <button className="btn-secondary-small" onClick={() => setSelectedDataset(ds)}>查看</button>
                     {canManage && (
-                      <button className="btn-secondary-small" style={{ marginLeft: 4, color: '#ef4444' }} onClick={() => deleteDataset(ds.id)}>删除</button>
+                      <button className="btn-secondary-small kb-danger-btn" onClick={() => deleteDataset(ds.id)}>删除</button>
                     )}
                   </div>
                 </div>
@@ -2851,10 +2975,10 @@ function EvaluationTab({ token, hasPermission }: { token: string; hasPermission:
         <div className="sessions-container" style={{ marginTop: 16 }}>
           <button className="btn-secondary-small" onClick={() => setSelectedDataset(null)} style={{ marginBottom: 12 }}>← 返回列表</button>
           <h3 className="detail-title">{selectedDataset.name}</h3>
-          <p style={{ color: '#888', fontSize: 13 }}>{selectedDataset.description}</p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{selectedDataset.description}</p>
           <div style={{ marginTop: 12 }}>
             <h4 style={{ fontSize: 14, marginBottom: 8 }}>样本列表</h4>
-            <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 400, overflow: 'auto', fontSize: 12 }}>
+            <pre className="code-block">
               {JSON.stringify(selectedDataset.samples, null, 2)}
             </pre>
           </div>
@@ -2872,12 +2996,12 @@ function EvaluationTab({ token, hasPermission }: { token: string; hasPermission:
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <div>
                     <div style={{ fontWeight: 600 }}>{run.dataset_name || run.dataset_id}</div>
-                    <div style={{ fontSize: 12, color: '#888' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                       开始: {formatDate(run.started_at)} · 耗时: {run.finished_at ? `${((run.finished_at - run.started_at)).toFixed(1)}s` : '进行中'}
                     </div>
                   </div>
                   <div>
-                    <span className={`role-badge ${run.status === 'completed' ? 'role-admin' : run.status === 'running' ? 'role-agent' : 'role-viewer'}`} style={{ background: run.status === 'completed' ? '#d1fae5' : run.status === 'running' ? '#fef3c7' : '#fee2e2', color: run.status === 'completed' ? '#065f46' : run.status === 'running' ? '#92400e' : '#991b1b' }}>
+                    <span className={`role-badge ${run.status === 'completed' ? 'published' : run.status === 'running' ? 'running' : 'disabled'}`}>
                       {run.status}
                     </span>
                     <button className="btn-secondary-small" style={{ marginLeft: 8 }} onClick={() => setSelectedRun(run)}>查看报告</button>
@@ -3027,11 +3151,11 @@ function WorkflowTab({ token, hasPermission }: { token: string; hasPermission: (
                   <div>
                     <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
                       {wf.name}
-                      {wf.is_default && <span className="role-badge" style={{ background: '#dbeafe', color: '#1e40af' }}>默认</span>}
-                      {wf.is_published && <span className="role-badge" style={{ background: '#d1fae5', color: '#065f46' }}>已发布</span>}
+                      {wf.is_default && <span className="role-badge default-wf">默认</span>}
+                      {wf.is_published && <span className="role-badge published">已发布</span>}
                     </div>
-                    <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>{wf.description || '无描述'}</div>
-                    <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{wf.description || '无描述'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
                       v{wf.version} · {wf.node_count} 节点 · {wf.edge_count} 边 · 更新于 {formatDate(wf.updated_at)}
                     </div>
                   </div>
@@ -3042,7 +3166,7 @@ function WorkflowTab({ token, hasPermission }: { token: string; hasPermission: (
                       <>
                         {!wf.is_published && <button className="btn-secondary-small" onClick={() => publishWorkflow(wf.id)}>发布</button>}
                         <button className="btn-secondary-small" onClick={() => cloneWorkflow(wf.id)}>克隆</button>
-                        {!wf.is_default && <button className="btn-secondary-small" style={{ color: '#ef4444' }} onClick={() => deleteWorkflow(wf.id)}>删除</button>}
+                        {!wf.is_default && <button className="btn-secondary-small kb-danger-btn" onClick={() => deleteWorkflow(wf.id)}>删除</button>}
                       </>
                     )}
                   </div>
@@ -3055,10 +3179,10 @@ function WorkflowTab({ token, hasPermission }: { token: string; hasPermission: (
         <div className="sessions-container" style={{ marginTop: 16 }}>
           <button className="btn-secondary-small" onClick={() => setSelectedWf(null)} style={{ marginBottom: 12 }}>← 返回列表</button>
           <h3 className="detail-title">{selectedWf.name} 详情</h3>
-          <p style={{ color: '#888', fontSize: 13 }}>{selectedWf.description}</p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{selectedWf.description}</p>
           <div style={{ marginTop: 12 }}>
             <h4 style={{ fontSize: 14, marginBottom: 8 }}>工作流定义（JSON）</h4>
-            <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 500, overflow: 'auto', fontSize: 12 }}>
+            <pre className="code-block">
               {JSON.stringify(wfDetail, null, 2)}
             </pre>
           </div>
@@ -3165,15 +3289,9 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
   const isAdmin = user?.role === 'admin'
   const canEdit = hasPermission('agent:workspace')
 
-  const srcBtn = (t: 'document' | 'url' | 'text') => ({
-    padding: '6px 12px',
-    borderRadius: 6,
-    border: `1px solid ${docSourceType === t ? '#2563eb' : '#d1d5db'}`,
-    background: docSourceType === t ? '#eff6ff' : '#fff',
-    color: docSourceType === t ? '#2563eb' : '#374151',
-    cursor: addingDoc ? 'not-allowed' : 'pointer',
-    fontSize: 13,
-  })
+  const totalDocs = kbs.reduce((s, k) => s + (k.document_count || 0), 0)
+  const totalChunks = kbs.reduce((s, k) => s + (k.total_chunks || 0), 0)
+  const avgThreshold = kbs.length ? kbs.reduce((s, k) => s + (Number(k.similarity_threshold) || 0), 0) / kbs.length : 0
 
   const fetchList = useCallback(() => {
     setLoading(true)
@@ -3311,8 +3429,27 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
         <button className="refresh-btn" onClick={fetchList} disabled={loading}>刷新</button>
       </div>
 
+      <div className="metrics-grid" style={{ marginBottom: 16 }}>
+        <div className="stat-card">
+          <div className="stat-label">知识库总数</div>
+          <div className="stat-value">{kbs.length}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">文档总数</div>
+          <div className="stat-value">{totalDocs}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">切片总数</div>
+          <div className="stat-value">{totalChunks}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">平均相似度阈值</div>
+          <div className="stat-value">{avgThreshold.toFixed(2)}</div>
+        </div>
+      </div>
+
       {showCreate && (
-        <div style={{ margin: '12px 0', padding: 16, border: '1px solid #e5e7eb', borderRadius: 8 }}>
+        <div className="kb-form">
           <div style={{ marginBottom: 8 }}>
             <label style={{ display: 'block', marginBottom: 4 }}>名称</label>
             <input className="filter-input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="如：产品手册知识库" />
@@ -3340,28 +3477,24 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
       {!loading && !error && kbs.length === 0 && <div className="sessions-placeholder"><p>暂无知识库，点击「新建知识库」开始</p></div>}
 
       {!loading && !error && kbs.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12, marginTop: 12 }}>
+        <div className="kb-grid">
           {kbs.map(kb => (
             <div key={kb.id} onClick={() => selectKb(kb)}
-              style={{
-                border: `1px solid ${selectedId === kb.id ? '#2563eb' : '#e5e7eb'}`,
-                borderRadius: 8, padding: 14, cursor: 'pointer',
-                background: selectedId === kb.id ? '#eff6ff' : '#fff',
-              }}>
+              className={`kb-card${selectedId === kb.id ? ' selected' : ''}`}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600 }}>{kb.name}</span>
+                <span className="kb-card-name">{kb.name}</span>
                 <span className={`badge status-${kb.kb_type}`}>{kb.kb_type}</span>
               </div>
-              {kb.description && <div style={{ color: '#6b7280', fontSize: 13, margin: '6px 0' }}>{kb.description}</div>}
-              <div style={{ display: 'flex', gap: 12, fontSize: 12, color: '#6b7280' }}>
+              {kb.description && <div className="kb-card-desc">{kb.description}</div>}
+              <div className="kb-card-meta">
                 <span>文档 {kb.document_count}</span>
                 <span>切片 {kb.total_chunks}</span>
                 <span>阈值 {kb.similarity_threshold}</span>
               </div>
-              <div style={{ marginTop: 10, display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
+              <div className="kb-card-actions" onClick={e => e.stopPropagation()}>
                 <button className="btn-secondary-small" onClick={() => reindexKb(kb)}>重建索引</button>
                 {isAdmin && (
-                  <button className="btn-secondary-small" style={{ color: '#dc2626', borderColor: '#dc2626' }} onClick={() => deleteKb(kb)}>删除</button>
+                  <button className="btn-secondary-small kb-danger-btn" onClick={() => deleteKb(kb)}>删除</button>
                 )}
               </div>
             </div>
@@ -3374,9 +3507,9 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
           <h3 className="detail-title">文档列表 · {selectedKb.name}</h3>
           <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div className="filter-bar" style={{ marginBottom: 0 }}>
-              <button onClick={() => setDocSourceType('document')} disabled={addingDoc} style={srcBtn('document')}>上传文档</button>
-              <button onClick={() => setDocSourceType('url')} disabled={addingDoc} style={srcBtn('url')}>网页URL</button>
-              <button onClick={() => setDocSourceType('text')} disabled={addingDoc} style={srcBtn('text')}>纯文本</button>
+              <button className={`kb-src-btn${docSourceType === 'document' ? ' active' : ''}`} onClick={() => setDocSourceType('document')} disabled={addingDoc}>上传文档</button>
+              <button className={`kb-src-btn${docSourceType === 'url' ? ' active' : ''}`} onClick={() => setDocSourceType('url')} disabled={addingDoc}>网页URL</button>
+              <button className={`kb-src-btn${docSourceType === 'text' ? ' active' : ''}`} onClick={() => setDocSourceType('text')} disabled={addingDoc}>纯文本</button>
             </div>
 
             {docSourceType === 'document' && (
@@ -3427,7 +3560,7 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
                       <td>{formatDate(d.created_at)}</td>
                       <td>
                         {isAdmin && (
-                          <button className="btn-secondary-small" style={{ color: '#dc2626', borderColor: '#dc2626' }} onClick={() => deleteDoc(d)}>删除</button>
+                          <button className="btn-secondary-small kb-danger-btn" onClick={() => deleteDoc(d)}>删除</button>
                         )}
                       </td>
                     </tr>
@@ -3448,7 +3581,7 @@ function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Pro
                 const threshold = selectedKb?.similarity_threshold ?? 0
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ fontSize: 12, color: '#6b7280' }}>
+                    <div className="kb-note">
                       共召回 {hitResults.length} 段 · 当前库阈值 {threshold.toFixed(3)}（低于阈值的片段在真实对话中不会被采用）
                     </div>
                     {hitResults.map((h, i) => {

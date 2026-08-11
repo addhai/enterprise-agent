@@ -862,9 +862,11 @@ def create_tools(
             return "知识库当前不可用。请转人工客服。"
 
         try:
+            # top_k=5：技术文档答案常分散在相邻 chunk（如参数表在前、
+            # 状态码说明在后），召回过少会导致关键事实进不了 LLM 上下文
             results = retriever.search(
                 query,
-                top_k=3,
+                top_k=5,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 user_access_levels=checker.access_levels,
@@ -872,15 +874,17 @@ def create_tools(
             if not results:
                 return "未找到相关文档。建议转人工客服获取帮助。"
 
-            # 检查是否有权限过滤
+            # 检查是否有权限过滤（retriever.search 返回 Document 列表，分数已剥离）
             access_filtered = sum(
-                doc.metadata.get("access_filtered", 0) for doc, _ in results
+                doc.metadata.get("access_filtered", 0) for doc in results
             )
 
             parts = []
-            for i, (doc, _) in enumerate(results, 1):
+            for i, doc in enumerate(results, 1):
                 source = doc.metadata.get("source", "unknown")
-                content = doc.page_content[:500]
+                # 1200 字符：512-token chunk 完整放入，避免答案（状态码、
+                # 参数上限等）落在 500 字截断线之后被丢弃
+                content = doc.page_content[:1200]
                 parts.append(f"[Doc {i} - {source}]\n{content}")
 
             result_text = "\n\n---\n\n".join(parts)

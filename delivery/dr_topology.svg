@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560">
+<rect x="0" y="0" width="980" height="560" fill="#ffffff"/>
+<text x="490.0" y="26" font-size="16" font-weight="bold" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#0f172a">图3 故障域划分与容灾拓扑</text>
+<rect x="40" y="70" width="420" height="380" rx="8" fill="#f0f9ff" stroke="#0369a1" stroke-width="1.5"/>
+<text x="250.0" y="256.0" font-size="14" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">compose 演示态（单 AZ 自托管）</text>
+<text x="250.0" y="272.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">【已实现·诚实标注】</text>
+<rect x="70" y="120" width="360" height="44" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+<text x="250.0" y="138.0" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">单 Pod 故障</text>
+<text x="250.0" y="154.0" font-size="9" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">多副本接管 · RTO ≤ 30s</text>
+<rect x="70" y="185" width="360" height="44" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+<text x="250.0" y="203.0" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">单 Node 故障</text>
+<text x="250.0" y="219.0" font-size="9" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">重建到其他 Node · RTO ≤ 1min</text>
+<rect x="70" y="250" width="360" height="44" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+<text x="250.0" y="268.0" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">单服务故障</text>
+<text x="250.0" y="284.0" font-size="9" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">多副本+摘流 · RTO ≤ 5min</text>
+<rect x="70" y="315" width="360" height="44" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+<text x="250.0" y="333.0" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">单区域故障</text>
+<text x="250.0" y="349.0" font-size="9" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">依赖备份恢复 · RTO ≤ 15min</text>
+<rect x="520" y="70" width="420" height="380" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="730.0" y="256.0" font-size="14" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">完整版/假设（多 AZ 容灾）</text>
+<text x="730.0" y="272.0" font-size="10" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">K8s 跨 AZ · 托管 PaaS</text>
+<rect x="550" y="120" width="360" height="44" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="730.0" y="138.0" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">单 Pod/AZ 内</text>
+<text x="730.0" y="154.0" font-size="9" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">K8s 自动调度 · RTO ≤ 1min</text>
+<rect x="550" y="185" width="360" height="44" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="730.0" y="203.0" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">单 AZ 故障</text>
+<text x="730.0" y="219.0" font-size="9" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">跨 AZ 切换 · RTO ≤ 5min</text>
+<rect x="550" y="250" width="360" height="44" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="730.0" y="268.0" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">跨 Region 灾备</text>
+<text x="730.0" y="284.0" font-size="9" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">容灾 Region 切换 · RTO < 1h</text>
+<rect x="550" y="315" width="360" height="44" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="730.0" y="333.0" font-size="12" font-family="Microsoft YaHei,SimHei,sans-serif" font-weight="bold" text-anchor="middle" fill="#0f172a">数据层 RPO</text>
+<text x="730.0" y="349.0" font-size="9" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">PG WAL ≤ 5min · 备份隔离</text>
+<text x="490" y="500" font-size="11" font-family="Microsoft YaHei,SimHei,sans-serif" text-anchor="middle" fill="#334155">演示态：容灾级别=单 AZ（自托管）；完整版：跨 AZ/跨 Region 双活/切换（假设性演进）</text>
+</svg>

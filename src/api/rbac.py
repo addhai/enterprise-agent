@@ -1,4 +1,4 @@
-"""RBAC 权限控制 — 4 级角色与资源权限校验
+"""RBAC 权限控制 — 5 级角色与资源权限校验
 
 角色定义：
     - super_admin: 超级管理员，可操作所有功能、管理用户角色
@@ -107,6 +107,24 @@ ROLE_PERMISSIONS: Dict[UserRole, List[Permission]] = {
         Permission.EVALUATION_VIEW,
         Permission.WORKFLOW_VIEW,
     ],
+    UserRole.SUPERVISOR: [
+        # 主管：团队视角，查看为主 + 工单处置/分配（团队管理职责）
+        Permission.DASHBOARD_VIEW,
+        Permission.CUSTOMER_VIEW,
+        Permission.TICKET_VIEW,
+        Permission.TICKET_MANAGE,
+        Permission.TICKET_ASSIGN,
+        Permission.AGENT_WORKSPACE,
+        Permission.SATISFACTION_VIEW,
+        Permission.KNOWLEDGE_VIEW,
+        Permission.CHANNEL_VIEW,
+        Permission.USER_VIEW,
+        Permission.NOTIFICATION_VIEW,
+        Permission.MONITOR_VIEW,
+        Permission.CONFIG_VIEW,
+        Permission.EVALUATION_VIEW,
+        Permission.WORKFLOW_VIEW,
+    ],
 }
 
 
@@ -189,15 +207,12 @@ def require_role(*roles: UserRole):
 
 
 # ====================================================================
-# 简化角色控制（基于 Role 枚举，用于关键 API 端点角色校验）
+# 简化角色控制（Role 为 UserRole 别名，单一真相，用于关键 API 端点角色校验）
 # ====================================================================
 
-class Role(str, Enum):
-    """简化角色枚举（用于关键 API 端点的角色校验）"""
-    ADMIN = "admin"            # 管理员
-    AGENT = "agent"            # 客服人员
-    VIEWER = "viewer"          # 只读用户
-    SUPERVISOR = "supervisor"  # 主管
+# 角色口径单一真相：UserRole（见 src/models/common.py）。
+# 此处仅保留别名以兼容既有 require_roles 调用，不再定义第二套枚举。
+Role = UserRole
 
 
 def require_roles(*roles: Role):
@@ -347,6 +362,7 @@ def _role_label(role: UserRole) -> str:
         UserRole.ADMIN: "管理员",
         UserRole.AGENT: "客服",
         UserRole.VIEWER: "只读用户",
+        UserRole.SUPERVISOR: "主管",
     }.get(role, role.value)
 
 
@@ -356,6 +372,7 @@ def _role_desc(role: UserRole) -> str:
         UserRole.ADMIN: "可查看全部数据、分配工单、管理知识库",
         UserRole.AGENT: "处理分配给自己的会话与工单",
         UserRole.VIEWER: "仅可查看数据，不能执行操作",
+        UserRole.SUPERVISOR: "团队主管视角，查看为主、可处置与分配工单",
     }.get(role, "")
 
 

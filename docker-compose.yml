@@ -23,6 +23,8 @@ services:
   # 网关层 — Apache APISIX (替代 Nginx)
   # =========================================================================
   apisix:
+    env_file:
+      - docker/no_proxy.env
     image: apache/apisix:3.14.1-debian
     container_name: agent-apisix
     restart: unless-stopped
@@ -44,12 +46,14 @@ services:
       - ws-service
       - frontend
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9080/apisix/status"]
+      test: ["CMD", "curl", "-f", "--noproxy", "*", "http://127.0.0.1:9080/apisix/status"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   apisix-dashboard:
+    env_file:
+      - docker/no_proxy.env
     image: apache/apisix-dashboard:3.0.1-alpine
     container_name: agent-apisix-dashboard
     restart: unless-stopped
@@ -70,6 +74,8 @@ services:
 
   # REST API 入口 — 同步对话、健康检查、管理接口
   api-service:
+    env_file:
+      - docker/no_proxy.env
     build:
       context: .
       dockerfile: docker/api/Dockerfile
@@ -95,8 +101,10 @@ services:
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
       - EVAL_LLM_JUDGE_ENABLED=false
       - EVAL_ONLINE_SAMPLING_RATE=0.0
-    ports:
-      - "8000:8000"
+    # 注意: 不把 8000 发布到主机。api-service 通过 apisix 网关(9080)对内路由，
+    # 多副本(replicas: 2)时若各自发布 8000 会与首个副本抢主机端口，导致
+    # "Bind for 0.0.0.0:8000 failed: port is already allocated"。
+    # 调试单副本: docker compose exec api-service curl -s localhost:8000/api/v1/health
     volumes:
       - ./src:/app/src:ro
     networks:
@@ -109,7 +117,7 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/v1/health"]
+      test: ['CMD-SHELL', 'python -c "import urllib.request, os; os.environ[''NO_PROXY'']=''*''; urllib.request.urlopen(''http://127.0.0.1:8000/api/v1/health'', timeout=5)"']
       interval: 15s
       timeout: 5s
       retries: 3
@@ -125,6 +133,8 @@ services:
 
   # LangGraph Agent Worker — 异步消费推理任务
   agent-worker:
+    env_file:
+      - docker/no_proxy.env
     build:
       context: .
       dockerfile: docker/worker/Dockerfile
@@ -161,6 +171,8 @@ services:
 
   # RAG 检索服务 — 文档加载/切块/嵌入/检索
   rag-service:
+    env_file:
+      - docker/no_proxy.env
     build:
       context: .
       dockerfile: docker/rag/Dockerfile
@@ -200,10 +212,11 @@ services:
 
   # WebSocket 长连接服务
   ws-service:
+    env_file:
+      - docker/no_proxy.env
     build:
       context: .
       dockerfile: docker/api/Dockerfile   # 共用 api 镜像
-      target: production
     restart: unless-stopped
     command: ["python", "-m", "src.websocket.server"]
     environment:
@@ -232,6 +245,8 @@ services:
 
   # 前端 — React SPA 静态服务
   frontend:
+    env_file:
+      - docker/no_proxy.env
     image: nginx:1.27-alpine
     restart: unless-stopped
     volumes:
@@ -240,7 +255,7 @@ services:
     networks:
       - agent-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      test: ["CMD", "wget", "-qO-", "--no-proxy", "http://127.0.0.1:80/"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -256,6 +271,8 @@ services:
 
   # PostgreSQL — 业务结构化数据
   postgres:
+    env_file:
+      - docker/no_proxy.env
     image: postgres:16-alpine
     container_name: agent-postgres
     restart: unless-stopped
@@ -283,6 +300,8 @@ services:
 
   # Milvus Standalone — 向量数据库 (替代 Chroma)
   milvus-standalone:
+    env_file:
+      - docker/no_proxy.env
     image: milvusdb/milvus:v2.5.9
     container_name: agent-milvus
     restart: unless-stopped
@@ -308,7 +327,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9091/healthz"]
+      test: ["CMD", "curl", "-f", "--noproxy", "*", "http://127.0.0.1:9091/healthz"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -319,7 +338,9 @@ services:
 
   # MinIO — 对象存储 (文档/图片/模型权重/日志归档)
   minio:
-    image: minio/minio:RELEASE.2025-06-26T15-28-46Z
+    env_file:
+      - docker/no_proxy.env
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
     container_name: agent-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -334,7 +355,7 @@ services:
     networks:
       - agent-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "--noproxy", "*", "http://127.0.0.1:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -345,6 +366,8 @@ services:
 
   # Redis — 缓存 + 分布式锁 + 会话
   redis:
+    env_file:
+      - docker/no_proxy.env
     image: redis:7-alpine
     container_name: agent-redis
     restart: unless-stopped
@@ -375,6 +398,8 @@ services:
   # 消息中间件 — RabbitMQ (异步任务队列)
   # =========================================================================
   rabbitmq:
+    env_file:
+      - docker/no_proxy.env
     image: rabbitmq:4.0-management-alpine
     container_name: agent-rabbitmq
     restart: unless-stopped
@@ -384,11 +409,11 @@ services:
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-agent}
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASS:-agent}
-      - RABBITMQ_DEFAULT_VHOST=/
-      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbitmq_management agent_metrics_collect_interval 10000
+      # 注意: 不要设置 RABBITMQ_DEFAULT_VHOST=/ —— "/" 是内建默认 vhost，
+      # 显式设置会与 load_definitions 引用 "/" 冲突，导致 boot 报
+      # "Please create virtual host / prior to importing definitions"。
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
-      - ./deploy/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
       - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     networks:
       - agent-net
