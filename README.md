@@ -374,7 +374,7 @@ make lint            # ruff 检查 + 格式化
 ```
 
 **可验证指标（CI 裸环境真实运行：无 API Key / 无 .env）：**
-- 测试：**856 passed / 17 skipped**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / 多租户 WS 隔离 / API 接线守卫等
+- 测试：**868 passed / 19 skipped**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / 多租户 WS 隔离 / API 接线守卫 / 租户管理端点等
 - 覆盖率：**48.83%**（门禁 40%），`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致
 - 多租户 WS 隔离守卫（`tests/test_websocket/test_ws_tenant_isolation.py`）：匿名按连接隔离、登录派生真实租户、客户端注入 tenant 被忽略、伪造 token 降级匿名，4 点全绿
 - 应用接线守卫（`tests/test_api/test_app_wiring.py`）：19 个 router 模块逐个导入探测 + 鉴权关键路由存在性断言，任一 router 静默消失立即红灯

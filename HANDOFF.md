@@ -308,3 +308,9 @@ git commit -m "fix: 全栈实跑三道缝前置修复（代理注入/RabbitMQ死
 
 ### 10.4 仍属完整版（诚实声明，与交付文档三态标注一致）
 - 运行态仅 `default` 单租户；RBAC 租户维度（R4）仍架构就绪；milvus 12 服务联跑受 R-01（2G 内存）卡点；真实阿里云 API 需用户付费 + 真实 key（红线：永不上公网）。
+
+### 10.5 提交与推送结论
+- **Commit**：`7cd96d2`（前序 `bcb4a86`），message `chore(polish): P0->P2 自主打磨收口 + 全量测试复验 + 文档/CI 完善`。
+- **Push**：`git push origin master` 成功（`bcb4a86..7cd96d2`，走 `.git/config` 已配代理 `127.0.0.1:7890` + `helper-selector` 凭据；注意**勿**再套 HANDOFF 旧「清代理直连」配方，当前环境代理已开、清掉反而无凭据）。
+- **CI**：GitHub Actions 4 job 触发（run `31528558194`），结果待 watch 收口（历史同流水线均 `success`）。
+- **README 主页**：测试计数更新为 868/19；CI 徽章已在顶部；`workflow_dispatch` + `concurrency` + pip 缓存已入 `ci.yml`。
