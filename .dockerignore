@@ -19,8 +19,7 @@ test_chroma_full
 scripts/.cache
 .fullstack_*.log
 .replica_*.log
-# 保留 wheels/（离线构建依赖），仅排除占位文件
-wheels/.gitkeep
+# 保留 wheels/（离线构建依赖，含 .gitkeep 占位以便 CI 空目录 COPY 成功、RUN 走在线回退）
 # 文档/记忆/工具链
 .workbuddy
 docs/deployment
