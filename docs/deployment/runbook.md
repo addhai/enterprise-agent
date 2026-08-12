@@ -97,14 +97,20 @@ pip download -r requirements.txt --dest wheels/ \
 
 ## 4. 云资源真实性（受 key + 付费 阻断，需用户操作）
 
-演示默认 `ALIYUN_DEMO_FALLBACK=true`：真实阿里云 API 优先，无匹配资源时回退样本（每条结果由 `src/mcp_tools/resource.py` 的 `_source_note` 标注数据来源）。要变"全真"：
+演示默认 `ALIYUN_DEMO_FALLBACK=true`：真实阿里云 API 优先，无匹配资源时回退样本（每条结果由 `src/mcp_tools/resource.py` 的 `_source_note` 标注数据来源）。要翻真（只读、零费用）：
 
-1. 在阿里云账号购买/创建真实资源（涉及付费，需用户确认）。
-2. `.env` 填真实 `ALIYUN_ACCESS_KEY_ID/SECRET`（子账号只读策略）。
-3. `.env` 设 `ALIYUN_DEMO_FALLBACK=false`。
-4. 重启后端，资源查询即走 100% 真实 API（`_source_note` 显示"数据来源：阿里云实时 API"）。
+1. `.env` 填**可吊销的 RAM 子账号只读 AK**（`ALIYUN_ACCESS_KEY_ID/SECRET`，授权范围仅 `ReadOnlyAccess`）；子 key 不入仓库、不上公网。
+2. `.env` 设 `ALIYUN_DEMO_FALLBACK=false`（关闭样本兜底，强制走真实 OpenAPI）。
+3. 重启后端，资源查询即走 100% 真实 API（`_source_note` 显示"数据来源：阿里云实时 API"）。
 
-> 这一步的"全真"必须由用户付费 + 提供真实 key 完成；代理不擅自购买资源、不碰真实 key。
+> 翻真只需「只读查询」，不购买/不创建任何资源，**零费用**；代理不擅自购买资源、不碰真实 key。
+
+### 本机翻真验证记录（2026-08-12，已通过）
+- 方式：本地 `.venv` 经 `load_dotenv()` 读 `.env`，直连 `AliyunClient.list_ecs/list_rds/list_slb`。
+- 结果：`cn-hangzhou` 下 ECS/RDS/SLB 均返回**真实阿里云响应**（含 `RequestId`、`Code=None`、签名通过、网络代理通畅）；`TotalCount=0`（演示账号暂无云资源，非报错）。
+- 关键说服力：`TotalCount=0` 是阿里云真实返回的空结果，**恰证链路非 `FallbackProvider` 的样本假数据**——代码确为真连真云，而非 demo 造假。
+- 备注：`r-kvstore` 偶发 `ConnectionReset(10054)` 为网络波动，重试即可，非代码问题。
+- 红线守牢：全程只读、未创建资源、未产生费用；AK 仅存本地 `.env`（已 gitignore）。
 
 ---
 

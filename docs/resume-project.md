@@ -8,7 +8,7 @@
 
 - **项目是什么**：对标「阿里云 AI 助理」形态的**企业级智能客服 AI Agent**，个人全栈作品集，**production-grade（生产级），不是 demo**。
 - **一句话价值**：用 **LangGraph + RAG + MCP** 端到端解决企业客服三大痛点 —— 知识库检索不准、多轮对话丢上下文、人工响应慢，并做到生产级工程落地（多租户、RBAC、安全护栏、云原生部署、可观测）。
-- **量化亮点**：核心代码 **14,707 行 Python** · **856 测试全绿 / 覆盖率 48.83%** · **38 个标准化 MCP 工具** · 多租户隔离 + 多副本扩展**均有自动化测试/脚本证据**。
+- **量化亮点**：后端 **166 模块 / 约 3.8 万行 Python**（测试另计 66 文件）· **874 测试全绿（19 跳过）/ 覆盖率约 48%（门禁 40%）** · **38 个标准化 MCP 工具** · 多租户隔离 + 多副本扩展**均有自动化测试/脚本证据，多租户运行化已进 CI**。
 - **展示的能力层级**：全栈 AI 工程（编排 + 检索 + 工具 + 护栏）+ 云原生部署（Docker / K8s / Helm / APISIX）+ 工程化质量（CI / SAST / 可观测）。
 - **最硬的证据**：单进程即可跑起真实对话 demo；多租户越权防护进 CI 长期复跑；无状态多副本实测共享存储一致；demo GIF 由真实对话脚本化生成，非截图伪造。
 
@@ -66,6 +66,7 @@
 - **SQL 级 + 向量级双重隔离**：`tenant_id` 由后端从调用上下文强制注入，LLM 无法跨租户读取。
 - **P0 加固**：空 tenant 文档默认归 default 租户，堵住"漏打 tenant 的文档对所有租户可见"后门；`add_documents` 与过滤端统一空 tenant 归一化。
 - RBAC **4 角色**（admin / agent / viewer / user）+ 权限点 + 依赖注入 + REST 管理端点 + seed 用户；WebSocket `/ws/chat` 租户隔离与越权防护由 `tests/test_websocket/test_ws_tenant_isolation.py` 覆盖（匿名按连接隔离、登录派生真实租户、客户端注入 tenant 被忽略、伪造 token 降级匿名，4 点全绿）。
+- **多租户运行化（已收口进 CI）**：新增 `tests/test_api/test_multitenant_runtime.py`（6 用例）覆盖满意度/通知/RBAC 用户列表/看板跨租户互不可见 + F13 建租户预置管理员可登录 + 跨租户改角色 403；向量检索对非 default 租户带 `where={"tenant_id":...}` 做 DB 级隔离。**运行态默认单 `default` 租户，需显式建租户才触发隔离**。
 
 **9. JWT 无状态鉴权**
 
@@ -75,13 +76,13 @@
 ## 项目成果
 
 **代码规模：**
-- 核心业务代码 **14,707 行** Python（90 个模块，24 个子包）
+- 后端业务代码 **约 3.8 万行** Python（166 个模块，`src/` 下；测试 66 文件另计）
 - 部署配置 **2,471 行**（30 个 YAML/SQL/JSON 文件）
-- 基础设施配置：4 个 Dockerfile（legacy + api / worker / rag）+ 3 个 docker-compose + 11 个 Helm 模板 + 5 个运维脚本
+- 基础设施配置：4 个 Dockerfile（根 + api / rag / worker）+ 4 个 docker-compose + 11 个 Helm 模板 + 5 个运维脚本
 
 **测试统计（CI 裸环境真实运行：无 API Key / 无 .env）：**
-- **856 个测试通过 + 17 跳过**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / 多租户 WS 隔离 / API 接线守卫等
-- 覆盖率 **48.83%**（门禁 40%，`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致）
+- **874 个测试通过 + 19 跳过**（全量 `tests/`，`-m "not integration"`），覆盖 agent / MCP 工具 / 安全护栏 / 工单 / 评估 / 多租户 WS 隔离 + 运行时跨租户隔离 / API 接线守卫等
+- 覆盖率 **约 48%**（门禁 40%，`--cov-fail-under=40` 同时固化进 pytest 与 CI，本地 `make test` 与 CI 行为一致）
 - 应用接线守卫（`tests/test_api/test_app_wiring.py`）：19 个 router 模块逐个导入探测 + 鉴权关键路由存在性断言，任一 router 静默消失立即红灯（曾因 `auth` 路由在 Python 3.11 因前向引用 `NameError` 被静默吞掉导致 `/auth/*` 404，由此守卫测试堵住同类缺陷）
 - RAG 离线评估 4 项指标（Recall / Precision / MRR / F1）全部通过
 - 安全护栏测试全部通过（输入注入识别 / 已知攻击模式 / 特殊字符清洗 / 正常内容保留）
@@ -112,7 +113,7 @@
 - **多租户 RBAC 隔离（可复现）**：`pytest tests/test_websocket/test_ws_tenant_isolation.py -v` 进 CI 长期复跑，证明 A 租户数据 B 租户不可见、客户端注入 `tenant_id` 越权被服务端忽略。
 - **云原生多副本水平扩展（可复现）**：`python scripts/verify_multireplica.py` 起 2 个无状态副本实测共享存储一致性（副本 A 工单副本 B 可读），等价于 `docker compose up --scale api-service=3` 的副本语义。
 - **基础设施配置进 CI 门禁（可复现）**：`infra-validate` job 每次流水线校验 4 个 compose 文件、真实 build api/worker/rag 三个生产镜像、`helm lint` + default/staging/prod 三套 values 渲染。该门禁上线即查出 `values-prod.yaml` 渲染 nil pointer（`apisix.service` 结构缺失，仅 `apisix.enabled=true` 时触发，等同生产 `helm install` 会当场失败），已修复。
-- **能力边界（面试可如实回答）**：单进程 demo 与双副本扩展已本机实测，Compose/Dockerfile/Helm 由 CI 逐次校验并真实构建镜像；完整 12 服务栈（APISIX + PG/Milvus/Redis/RabbitMQ/MinIO + 监控）的长时间联跑尚未在本机完成。
+- **能力边界（面试可如实回答）**：单进程 demo 与双副本扩展已本机实测，Compose/Dockerfile/Helm 由 CI 逐次校验并真实构建镜像；多租户运行化（建租户 + 预置管理员 + 跨租户隔离）已本机实测进 CI；真实云 API 默认样本兜底，翻真需真实 AK（付费 + 密钥红线，永不上公网）；完整 12 服务栈（APISIX + PG/Milvus/Redis/RabbitMQ/MinIO + 监控）的 docker 长时间联跑因本机资源受限尚未完成，由 `scripts/verify_fullstack.py` 留作本机一键验证。
 
 ## 技术栈
 

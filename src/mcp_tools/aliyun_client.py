@@ -32,6 +32,13 @@ from typing import Any, Dict, Optional
 
 import requests
 
+# 自动从本地项目根目录的 .env 读取密钥（.env 已被 .gitignore 忽略，不进仓库、不上公网）
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:  # 未安装 python-dotenv 时跳过，不影响其他逻辑
+    pass
+
 logger = logging.getLogger(__name__)
 
 # 各产品的接入点模板与 API 版本

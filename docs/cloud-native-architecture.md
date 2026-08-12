@@ -245,7 +245,7 @@ Slack/钉钉 通知部署结果
 
 ### 3.2 迁移方案（Chroma → Milvus）
 
-当前项目使用 Chroma 做向量存储。**Chroma 适合单机开发和 PoC，但生产环境有硬伤**：
+当前项目使用 Chroma 做向量存储。**运行态（演示 / MVP）选 Chroma 的直接原因：本机资源受 R-01 约束仅约 2G 可用，milvus-standalone 起不来，故用 Chroma 规避；生产完整版按下方迁移方案上 Milvus。** Chroma 适合单机开发和 PoC，但生产环境有硬伤：
 
 | 维度 | Chroma | Milvus |
 |------|--------|--------|
