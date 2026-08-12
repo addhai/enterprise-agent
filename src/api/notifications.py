@@ -63,8 +63,10 @@ async def list_notifications(
     user_id = current_user["user_id"]
     user_role = current_user.get("role", "viewer")
     username = current_user.get("username", "")
+    tenant_id = current_user.get("tenant_id") or "default"
 
-    all_notes = notification_list_all(limit=500)
+    # 仅列出本租户通知（租户隔离）
+    all_notes = notification_list_all(limit=500, tenant_id=tenant_id)
 
     # 筛选对当前用户可见的通知
     visible = []
@@ -108,7 +110,7 @@ async def get_unread_count(
     username = current_user.get("username", "")
 
     count = 0
-    for n in notification_list_all(limit=500):
+    for n in notification_list_all(limit=500, tenant_id=current_user.get("tenant_id") or "default"):
         if user_id in n.get("read_by", []):
             continue
         if n.get("target_users") and (username in n["target_users"] or user_id in n["target_users"]):

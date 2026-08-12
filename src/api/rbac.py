@@ -152,6 +152,7 @@ class UserWithRole(BaseModel):
     avatar: str
     role: str
     status: str
+    tenant_id: str = "default"
     created_at: float
 
 
@@ -276,16 +277,18 @@ async def list_permissions():
 async def list_users_with_roles(
     current_user: Dict[str, Any] = Depends(require_permissions(Permission.USER_VIEW))
 ):
-    """获取用户列表及其角色"""
-    from src.db.repositories import list_users
+    """获取用户列表及其角色（仅本租户，R4 租户维度）"""
+    from src.db.repositories import list_users, DEFAULT_TENANT
+    tenant_id = current_user.get("tenant_id") or DEFAULT_TENANT
     users = []
-    for u in list_users():
+    for u in list_users(tenant_id=tenant_id):
         users.append(UserWithRole(
             user_id=u["user_id"],
             username=u["username"],
             avatar=u.get("avatar", u["username"][0].upper() if u["username"] else "?"),
             role=u.get("role", "viewer"),
             status=u.get("status", "active"),
+            tenant_id=u.get("tenant_id", "default"),
             created_at=u.get("created_at", 0),
         ))
     users.sort(key=lambda x: x.created_at, reverse=True)
@@ -303,6 +306,9 @@ async def update_user_role(
     target = user_get_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # 租户维度 R4：禁止跨租户管理用户
+    if target.get("tenant_id") != current_user.get("tenant_id"):
+        raise HTTPException(status_code=403, detail="无权管理其他租户的用户")
     # 不能修改自己的角色，避免把自己锁死
     if target["user_id"] == current_user["user_id"]:
         raise HTTPException(status_code=400, detail="不能修改自己的角色")
@@ -327,6 +333,9 @@ async def update_user_status(
     target = user_get_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # 租户维度 R4：禁止跨租户管理用户
+    if target.get("tenant_id") != current_user.get("tenant_id"):
+        raise HTTPException(status_code=403, detail="无权管理其他租户的用户")
     if target["user_id"] == current_user["user_id"]:
         raise HTTPException(status_code=400, detail="不能禁用自己")
     if status not in ("active", "inactive", "suspended"):

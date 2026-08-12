@@ -150,9 +150,12 @@ def user_update(user_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return user_get_by_id(user_id)
 
 
-def list_users() -> List[Dict[str, Any]]:
+def list_users(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     with db_session() as s:
-        rows = s.query(User).order_by(User.created_at.desc()).all()
+        q = s.query(User)
+        if tenant_id:
+            q = q.filter(User.tenant_id == tenant_id)
+        rows = q.order_by(User.created_at.desc()).all()
         return [_user_row_to_dict(r) for r in rows]
 
 
@@ -602,7 +605,7 @@ def satisfaction_create(record: Dict[str, Any]) -> Dict[str, Any]:
     with db_session() as s:
         row = Satisfaction(
             id=record["id"],
-            tenant_id=DEFAULT_TENANT,
+            tenant_id=record.get("tenant_id") or DEFAULT_TENANT,
             session_id=record.get("session_id", ""),
             user_id=record.get("user_id", ""),
             score=record.get("score", 0),
@@ -619,10 +622,13 @@ def satisfaction_list(
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
     agent_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
     with db_session() as s:
         q = s.query(Satisfaction)
+        if tenant_id:
+            q = q.filter(Satisfaction.tenant_id == tenant_id)
         if user_id:
             q = q.filter(Satisfaction.user_id == user_id)
         if session_id:
@@ -657,7 +663,7 @@ def notification_create(record: Dict[str, Any]) -> Dict[str, Any]:
     with db_session() as s:
         row = Notification(
             id=record["id"],
-            tenant_id=DEFAULT_TENANT,
+            tenant_id=record.get("tenant_id") or DEFAULT_TENANT,
             type=record.get("type", ""),
             level=record.get("level", "info"),
             title=record.get("title", ""),
@@ -672,9 +678,12 @@ def notification_create(record: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
-def notification_list_all(limit: int = 500) -> List[Dict[str, Any]]:
+def notification_list_all(limit: int = 500, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     with db_session() as s:
-        rows = s.query(Notification).order_by(
+        q = s.query(Notification)
+        if tenant_id:
+            q = q.filter(Notification.tenant_id == tenant_id)
+        rows = q.order_by(
             Notification.created_at.desc()).limit(limit).all()
         return [_note_row_to_dict(r) for r in rows]
 

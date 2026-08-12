@@ -77,7 +77,8 @@ async def get_dashboard_kpi(
         from src.ticket.store import get_default_store
         from src.ticket.models import TicketListFilter, TicketPriority, TicketStatus
         store = get_default_store()
-        tickets = store.list(TicketListFilter(tenant_id="default", limit=10000))
+        tickets = store.list(TicketListFilter(
+            tenant_id=current_user.get("tenant_id") or "default", limit=10000))
         ticket_stats["total"] = len(tickets)
         ticket_stats["open"] = sum(1 for t in tickets if t.status == TicketStatus.OPEN)
         ticket_stats["in_progress"] = sum(1 for t in tickets if t.status == TicketStatus.IN_PROGRESS)
@@ -90,7 +91,9 @@ async def get_dashboard_kpi(
     satisfaction = {"avg_score": 0, "csat_rate": 0, "total": 0}
     try:
         from src.db.repositories import satisfaction_list
-        records = [r for r in satisfaction_list(limit=10000) if r["created_at"] >= week_ago]
+        records = [r for r in satisfaction_list(
+            limit=10000, tenant_id=current_user.get("tenant_id") or "default",
+        ) if r["created_at"] >= week_ago]
         if records:
             scores = [r["score"] for r in records]
             satisfaction["avg_score"] = round(sum(scores) / len(scores), 2)

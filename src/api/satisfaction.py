@@ -15,7 +15,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 from src.api.rbac import get_current_user, require_permissions, Permission
-from src.db.repositories import satisfaction_create, satisfaction_list
+from src.db.repositories import satisfaction_create, satisfaction_list, user_get_by_id, DEFAULT_TENANT
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["satisfaction"])
@@ -61,9 +61,10 @@ async def list_satisfaction(
     limit: int = Query(50, ge=1, le=200),
     current_user: Dict[str, Any] = Depends(require_permissions(Permission.SATISFACTION_VIEW)),
 ):
-    """获取满意度评价列表"""
+    """获取满意度评价列表（仅本租户）"""
     records = satisfaction_list(
-        user_id=user_id, session_id=session_id, agent_id=agent_id, limit=limit,
+        user_id=user_id, session_id=session_id, agent_id=agent_id,
+        tenant_id=current_user.get("tenant_id") or DEFAULT_TENANT, limit=limit,
     )
     return {"total": len(records), "records": records}
 
@@ -74,10 +75,15 @@ async def submit_satisfaction(request: SubmitSatisfactionRequest):
     if not 1 <= request.score <= 5:
         raise HTTPException(status_code=400, detail="评分必须在 1-5 之间")
 
+    # 满意度归属提交用户所在租户（租户隔离：与登录用户同空间）
+    submitter = user_get_by_id(request.user_id)
+    tenant_id = submitter.get("tenant_id") if submitter else DEFAULT_TENANT
+
     record = {
         "id": f"SAT-{int(time.time() * 1000)}",
         "session_id": request.session_id,
         "user_id": request.user_id,
+        "tenant_id": tenant_id,
         "score": request.score,
         "tags": list(set(request.tags)),
         "comment": request.comment,
@@ -113,7 +119,9 @@ async def get_satisfaction_stats(
 ):
     """获取满意度统计"""
     cutoff = time.time() - days * 24 * 3600
-    records = [r for r in satisfaction_list(limit=100000) if r["created_at"] >= cutoff]
+    records = [r for r in satisfaction_list(
+        limit=100000, tenant_id=current_user.get("tenant_id") or DEFAULT_TENANT,
+    ) if r["created_at"] >= cutoff]
 
     stats = SatisfactionStats(total=len(records))
     if records:
@@ -148,7 +156,10 @@ async def get_agent_satisfaction_stats(
     """获取指定客服的满意度统计"""
     cutoff = time.time() - days * 24 * 3600
     records = [
-        r for r in satisfaction_list(agent_id=agent_id, limit=100000)
+        r for r in satisfaction_list(
+            agent_id=agent_id, limit=100000,
+            tenant_id=current_user.get("tenant_id") or DEFAULT_TENANT,
+        )
         if r.get("agent_id") == agent_id and r["created_at"] >= cutoff
     ]
 

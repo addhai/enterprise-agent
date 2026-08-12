@@ -3,6 +3,7 @@
 """
 import os
 import time
+import uuid
 import logging
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Path, Depends, Header, Body
@@ -660,6 +661,8 @@ class TenantCreateRequest(BaseModel):
     tenant_id: str = Field(..., min_length=2, max_length=50, description="租户唯一标识")
     name: str = Field(..., min_length=1, max_length=100, description="租户名称")
     plan: str = Field("free", description="套餐: free/standard/pro")
+    admin_username: Optional[str] = Field(None, description="可选：为新租户预置一个管理员账号用户名")
+    admin_password: Optional[str] = Field(None, description="可选：预置管理员密码（提供 admin_username 时必填）")
 
 
 class TenantResponse(BaseModel):
@@ -670,6 +673,7 @@ class TenantResponse(BaseModel):
     status: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    admin_username: Optional[str] = None
 
 
 def _to_tenant_response(d: Dict[str, Any]) -> TenantResponse:
@@ -696,7 +700,33 @@ async def create_tenant(
             "plan": request.plan,
             "status": "active",
         })
-        return _to_tenant_response(created)
+        admin_username = None
+        # 可选：为新租户预置一个管理员账号，使其创建后即可登录（不再是空壳）
+        if request.admin_username:
+            if not request.admin_password:
+                raise HTTPException(status_code=400, detail="提供 admin_username 时必须提供 admin_password")
+            from src.api.auth import _get_user_by_username, hash_password
+            from src.db.repositories import user_create
+            if _get_user_by_username(request.admin_username):
+                raise HTTPException(status_code=400, detail=f"管理员用户名已存在: {request.admin_username}")
+            user_create({
+                "user_id": str(uuid.uuid4()),
+                "username": request.admin_username,
+                "password_hash": hash_password(request.admin_password),
+                "avatar": request.admin_username[0].upper(),
+                "created_at": time.time(),
+                "is_admin": True,
+                "role": "admin",
+                "status": "active",
+                "tenant_id": request.tenant_id,
+                "email": f"{request.admin_username}@{request.tenant_id}.local",
+                "department": "租户管理员",
+            })
+            admin_username = request.admin_username
+        resp = _to_tenant_response(created)
+        if admin_username:
+            resp.admin_username = admin_username
+        return resp
     except HTTPException:
         raise
     except Exception as e:

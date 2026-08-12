@@ -348,7 +348,12 @@ class HybridRetriever:
             )
 
         # ---- Chroma 模式 (默认/降级) ----
-        results = self.vector_store.search_with_scores(query, top_k)
+        # DB 级租户隔离：非 default 租户在向量查询时直接带 where 过滤，
+        # 即便应用层后过滤（_filter_by_permission）出 bug 也不会跨租户串台；
+        # default 沿用历史行为（历史文档可能无 tenant_id 元数据，避免误伤）。
+        tenant_id = (filter_by or {}).get("tenant_id")
+        where = {"tenant_id": tenant_id} if tenant_id and tenant_id != "default" else None
+        results = self.vector_store.search_with_scores(query, top_k, where=where)
         if filter_by:
             results = self._apply_filter(results, filter_by)
         return self._filter_by_similarity(results)

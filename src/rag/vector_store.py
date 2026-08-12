@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import logging
 
@@ -93,8 +93,12 @@ class VectorStoreManager:
             return []
         return self.store.similarity_search(query, k=k)
 
-    def search_with_scores(self, query: str, top_k: int = None) -> List[tuple]:
-        """带相似度分数的搜索"""
+    def search_with_scores(self, query: str, top_k: int = None, where: Optional[dict] = None) -> List[tuple]:
+        """带相似度分数的搜索
+
+        where: Chroma 元数据过滤条件（如 {"tenant_id": "acme"}），
+               用于向量层 DB 级租户隔离，与应用层后过滤形成纵深防御。
+        """
         k = top_k or settings.retrieval_top_k
 
         if self.backend == "milvus":
@@ -106,6 +110,8 @@ class VectorStoreManager:
 
         if self.store._collection.count() == 0:
             return []
+        if where:
+            return self.store.similarity_search_with_relevance_scores(query, k=k, filter=where)
         return self.store.similarity_search_with_relevance_scores(query, k=k)
 
     def delete_collection(self) -> None:
