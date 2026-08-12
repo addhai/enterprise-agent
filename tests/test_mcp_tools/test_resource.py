@@ -81,8 +81,9 @@ def test_anonymous_denied():
     assert "权限不足" in out
 
 
-def test_tenant_scoped_visibility():
-    """tenant_A 用户应只看到本租户资源"""
+def test_tenant_scoped_visibility(monkeypatch):
+    """tenant_A 用户应只看到本租户资源（强制走 SampleProvider，隔离环境 .env 干扰）"""
+    monkeypatch.setattr("src.mcp_tools.cloud_provider.get_credentials", lambda: None)
     ta = create_resource_tools(user_id="admin_1", tenant_id="tenant_A", roles=["admin"], plan="free")
     m = _map(ta)
     out = m["query_resources"].invoke({})
