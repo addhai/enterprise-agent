@@ -307,7 +307,7 @@ git commit -m "fix: 全栈实跑三道缝前置修复（代理注入/RabbitMQ死
 - **未提交（本地调试产物，非交付物，勿混入）**：`scripts/probe*.py`、`proxy_relay.py`、`retriever_probe.py`、`screenshot_admin.py`、`ws_rag_verify.py`、`.coverage`、`coverage.xml`、`*.log`、`wheels/`、`.trae/`、`.workbuddy/`。
 
 ### 10.4 仍属完整版（诚实声明，与交付文档三态标注一致）
-- 运行态仅 `default` 单租户；RBAC 租户维度（R4）仍架构就绪；milvus 12 服务联跑受 R-01（2G 内存）卡点；真实阿里云 API 需用户付费 + 真实 key（红线：永不上公网）。
+- 多租户 **已运行化**（2026-08-12 收口，见 §10.8）：建租户（含预置管理员）+ 跨实体隔离已端到端验证；RBAC 租户维度（R4）已实现。运行态默认仍单 `default` 租户（需显式建租户）。milvus 12 服务联跑受 R-01（2G 内存）卡点；真实阿里云 API 需用户付费 + 真实 key（红线：永不上公网）。
 
 ### 10.5 提交与推送结论
 - **Commit 链**：`7cd96d2`（P0→P2 打磨 + 文档/CI）+ `8914b56`（HANDOFF §10.5 + README 计数）+ `8fac28d`（修 wheels CI 红）+ `85ef21d`（HANDOFF §10.6/10.7 终态记录）。
@@ -324,4 +324,17 @@ git commit -m "fix: 全栈实跑三道缝前置修复（代理注入/RabbitMQ死
 - 代码层：RBAC 5 角色单一真相统一；RAG 三 bug 修复随全量测试复验通过；F13 多租户端点补单测钉成已实现；可观测 Grafana 已由测试锁死。
 - 文档层：`delivery/` 四份文档三态标注据实刷新；README 架构文档章节 + 测试计数 + CI 徽章；HANDOFF §10 全记录。
 - CI/CD：4 job 全绿，`workflow_dispatch`+`concurrency`+pip 缓存已就位，可手动触发与并发去重。
-- 诚实边界：运行态仅 `default` 单租户；RBAC 租户维度（R4）架构就绪；milvus 12 服务受 R-01（2G）卡点；真实阿里云 API 需付费 + 真实 key（红线永不上公网）。
+- 诚实边界：运行态默认仍单 `default` 租户（需显式建租户）；多租户运行化 + RBAC 租户维度（R4）已实现并含集成测试；milvus 12 服务受 R-01（2G）卡点；真实阿里云 API 需付费 + 真实 key（红线永不上公网）。
+
+### 10.8 多租户运行化收口（2026-08-12，用户指令「多租户运行化从架构就绪变成真跑起来」）
+- **Commit**：`53429d6`（前序 `a2228ae`），message `feat(multitenant): 多租户从架构就绪变为真运行化`。
+- **本批补齐的「架构就绪→真运行」缺口**（探查 agent 全量核查后定位）：
+  1. **RBAC 租户维度 R4**：`src/api/rbac.py` 的 `/rbac/users` 仅列本租户用户；`update_user_role`/`update_user_status` 校验目标用户属同租户（跨租户 403）；`UserWithRole` 响应补 `tenant_id`。`src/db/repositories.py` 的 `list_users` 支持 `tenant_id` 过滤。
+  2. **满意度/通知硬编码 `default` 泄漏**：`satisfaction_create`/`notification_create` 改读 `record.get("tenant_id") or DEFAULT_TENANT`；`satisfaction_list`/`notification_list_all` 增 `tenant_id` 过滤；`satisfaction.py` 列表/统计透传调用方租户，`submit_satisfaction` 由提交用户解析租户；`notifications.py` 列表/未读数按调用方租户过滤。
+  3. **看板硬编码 `default`**：`dashboard.py` 工单统计 + 满意度统计改用 `current_user` 的 `tenant_id`。
+  4. **F13 新建租户空壳**：`admin.py` 的 `create_tenant` 支持可选 `admin_username`/`admin_password`，为新租户预置管理员账号（建完即可登录），回应「空壳」痛点。
+  5. **向量隔离加固**：`vector_store.search_with_scores` 支持 `where`；`retriever` 的 Chroma 路径对非 `default` 租户带 `{"tenant_id": ...}` 做 DB 级隔离（保留 `_filter_by_permission` 应用层后过滤纵深防御）。
+- **测试**：新增 `tests/test_api/test_multitenant_runtime.py`（建两租户、各注册/预置用户，断言 满意度/通知/RBAC用户列表/看板 跨租户互不可见 + F13 预置管理员可登录 + 跨租户改角色 403），共 6 用例。
+- **全量测试**：874 passed / 19 skipped（较 §10.2 的 868 增 6，全绿无回归）。
+- **文档**：`delivery/` 的 `UserStory.md`(F5/F6/F13) / `安全设计.md`(§2.2.3/§3.4) / `系统设计.md`(F5/F12) / `交付总览.md` 多租户三态标注由「架构就绪未运行化」更新为「已实现（运行化）」，并注明运行态默认仍单 `default` 租户（需显式建租户）。
+- **Push**：GCM 凭据再过期，`git push` 报 `could not read Username`；沿用 §10.5 兜底——`gh auth token` 临时 remote URL 推送（`a2228ae..53429d6`）后 `git remote set-url` 还原，无令牌残留。CI run `31569172885` 在跑待收口。
