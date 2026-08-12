@@ -310,7 +310,17 @@ git commit -m "fix: 全栈实跑三道缝前置修复（代理注入/RabbitMQ死
 - 运行态仅 `default` 单租户；RBAC 租户维度（R4）仍架构就绪；milvus 12 服务联跑受 R-01（2G 内存）卡点；真实阿里云 API 需用户付费 + 真实 key（红线：永不上公网）。
 
 ### 10.5 提交与推送结论
-- **Commit**：`7cd96d2`（前序 `bcb4a86`），message `chore(polish): P0->P2 自主打磨收口 + 全量测试复验 + 文档/CI 完善`。
-- **Push**：`git push origin master` 成功（`bcb4a86..7cd96d2`，走 `.git/config` 已配代理 `127.0.0.1:7890` + `helper-selector` 凭据；注意**勿**再套 HANDOFF 旧「清代理直连」配方，当前环境代理已开、清掉反而无凭据）。
-- **CI**：GitHub Actions 4 job 触发（run `31528558194`），结果待 watch 收口（历史同流水线均 `success`）。
+- **Commit 链**：`7cd96d2`（P0→P2 打磨 + 文档/CI）+ `8914b56`（HANDOFF §10.5 + README 计数）+ `8fac28d`（修 wheels CI 红）。
+- **Push**：`git push origin master` 成功（`bcb4a86..8fac28d`，走 `.git/config` 已配代理 `127.0.0.1:7890` + `helper-selector` 凭据；注意**勿**再套 HANDOFF 旧「清代理直连」配方，当前环境代理已开、清掉反而无凭据）。
 - **README 主页**：测试计数更新为 868/19；CI 徽章已在顶部；`workflow_dispatch` + `concurrency` + pip 缓存已入 `ci.yml`。
+
+### 10.6 CI 收口与一处红转绿（关键）
+- 首跑 run `31528558194`（commit 8914b56）**红**：`Infra Validate` 的 `Build api image` 失败，根因 `docker/api|rag|worker` 三个 Dockerfile 均 `COPY wheels/ /wheels/`，但 `wheels/` 从未入库（`.gitignore` 第45行 `wheels/*` 忽略全部、第46行 `!wheels/.gitkeep` 仅给占位开例外却从未提交），且 `.dockerignore` 把 `.gitkeep` 排除出构建上下文 → CI 空目录 COPY 报 `not found`。
+- 修法（commit `8fac28d`）：① 提交 `wheels/.gitkeep` 占位（`.gitignore` 第46行例外本就为它准备）；② 去掉 `.dockerignore` 排除 `.gitkeep` 那行。效果：CI 构建上下文含空 `wheels/` → COPY 成功 → RUN 走在线回退（绿）；本地放真轮子仍走离线（能力保留）。
+- **终态 run `31529231774`（commit 8fac28d）全绿**：Infra Validate（32m47s）/ SAST / Tests+Coverage / Frontend Build 四 job 均 `success`。仅 Node.js 20 弃用告警（非阻断，强跑 Node 24）。
+
+### 10.7 本批可交付结论（用户明早验收用）
+- 代码层：RBAC 5 角色单一真相统一；RAG 三 bug 修复随全量测试复验通过；F13 多租户端点补单测钉成已实现；可观测 Grafana 已由测试锁死。
+- 文档层：`delivery/` 四份文档三态标注据实刷新；README 架构文档章节 + 测试计数 + CI 徽章；HANDOFF §10 全记录。
+- CI/CD：4 job 全绿，`workflow_dispatch`+`concurrency`+pip 缓存已就位，可手动触发与并发去重。
+- 诚实边界：运行态仅 `default` 单租户；RBAC 租户维度（R4）架构就绪；milvus 12 服务受 R-01（2G）卡点；真实阿里云 API 需付费 + 真实 key（红线永不上公网）。
