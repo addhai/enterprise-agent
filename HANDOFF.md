@@ -2,7 +2,7 @@
 
 > 写给完全没上下文的接手者：假设你是新对话，没参加过之前任何会话、没看过仓库里其它文件。请严格从「第 0 节」往下读，读完就能接手继续干。
 >
-> 最后更新：**2026-08-13 补A 覆盖率冲刺版**。本文件含多任务线：第 1-8 节 Docker 三道缝、第 9 节 RAG 灌库、第 11 节 补A 测试覆盖率冲刺（当前活跃任务）。接手者从「第 0 节」往下读；只想看补A 直接跳第 11 节。
+> 最后更新：**2026-08-13 A2A 链路修复版**。本文件含多任务线：第 1-8 节 Docker 三道缝、第 9 节 RAG 灌库、第 11 节 补A 测试覆盖率冲刺、第 12 节 A2A 委托链路修复（当前活跃任务）。接手者从「第 0 节」往下读；只想看 A2A 链路直接跳第 12 节。
 >
 > 代码位置：`C:\Users\hai\enterprise-agent`
 > 仓库：`https://github.com/addhai/enterprise-agent`（GitHub，master 分支）
@@ -409,4 +409,64 @@ T7 测试跨运行脏数据（坑 28）：conftest 固定 test_agent.db 在 Wind
 | coverage.xml | 本地干净跑结果（line 60.34%）；CI 的 Linux 全量跑会重出，含 5 个 WS 文件 | 运行时生成，勿提交 |
 
 ### 11.7 一句话交接
-补A 测试增量已写完且本地全 PASS：8 个测试文件约 160+ 用例（multimodal 24 / ticket 30 / dispatcher 21 / outline 23 / vector_store 11 / routes_logic 25 / ws_branches 4 / session_manager 24），干净跑 line-rate 60.34% 已达 P2-5 的 60% 线；另修了 tools.py 的 3.14 兼容 bug。唯一卡点是全量 pytest 在本 Windows 沙箱因 anyio 线程挂起、写不出含 5 个 websocket_connect 文件的完整 coverage.xml（CI 的 Linux 不挂）。下一步：只 add 指定测试文件 + tools.py 提交（不整批、绝不 git add .），push 交本机。切记坑 T3：别用 --collect-only 探头，它会用 12.61% 的残次 xml 覆盖你的好 xml。
+补A 测试增量已写完且本地全 PASS：8 个测试文件约 160+ 用例（multimodal 24 / ticket 30 / dispatcher 21 / outline 23 / vector_store 11 / routes_logic 25 / ws_branches 4 / session_manager 24），干净跑 line-rate 60.34% 已达 P2-5 的 60% 线；另修了 tools.py 的 3.14 兼容 bug。唯一卡点是全量 pytest 在本 Windows 沙箱因 anyio 线程挂起、写不出含 5 个 websocket_connect 文件的完整 coverage.xml（CI 的 Linux 不挂）。下一步：只 add 指定测试文件 + tools.py 提交（不整批、绝不 git add .），push 交本机。切记坑 T3：
+别用 --collect-only 探头，它会用 12.61% 的残次 xml 覆盖你的好 xml。
+
+---
+
+## 12. A2A 委托链路修复 + 四 Agent 端到端演示（2026-08-13，已收口）
+
+> 本任务线目标：修复 orchestrator 到三个专家 agent（客服/性能/安全）的 A2A 委托链路，使四个 agent 进程能端到端跑通真实演示。与 §11 覆盖率冲刺是同一仓库的不同收口任务线。接手者先读第 0 节了解项目背景。
+
+### 12.1 背景：为什么 A2A 链路之前不通
+项目有四个内置 A2A Agent：orchestrator(9000，入口协调器)、customer_service(9001，客服)、perf_agent(9002，性能专家)、security_agent(9003，安全专家)。orchestrator 收到用户查询后按关键词路由，通过 A2A 协议委托对应专家处理。但升级到 a2a-sdk 1.1.x 后链路全断——SDK API 大改，旧代码（`a2a.Server`、同步 `execute(message)`、`client.send_message` 返回单对象）全部不兼容。
+
+### 12.2 修复了什么（5 个 bug，5 个 commit，均已推送）
+
+| commit | bug | 根因与修复 |
+|---|---|---|
+| `041369c` | orchestrator 无法启动 + 委托返回空 | ① a2a-sdk 1.1.x 移除 `a2a.Server`，改用 FastAPI + DefaultRequestHandler；② `OrchestratorExecutor.execute` 签名从 `(message)` 改为新版 `(context, event_queue)`，通过 event_queue 发布结果；③ `_delegate_via_a2a` 的 `client.send_message` 返回 AsyncIterator 而非单对象，改用 `async for` 消费取首个响应；④ 四个 agent 的 `AgentInterface.url` 用相对路径 `/`，客户端直接用未拼接 base url，补全为绝对 URL `http://127.0.0.1:{port}/` |
+| `1ae6a3a` | 委托报 `Task not found` | `_delegate_via_a2a` 预生成 `task_id` 传给服务端，但 a2a-sdk `DefaultRequestHandler` 要求：若 `message.task_id` 非空则该 task 必须已存在，否则抛 `TaskNotFoundError`。修复：不传 task_id（留空），让服务端自动创建 |
+| `4887d98` | cs agent(9001) 调用必超时 | `CustomerServiceExecutor.execute` 是 async 方法却调用**同步** `workflow.invoke()`，LLM 调用期间阻塞整个事件循环，SSE 流式响应无法保活。修复：改为 `await workflow.ainvoke()` |
+| `86b6f76` | 路由误判：CloudSync 含 sync 误命中 perf | `route_request` 用 `kw in query_lower` 子串匹配，`CloudSync` 含 `sync` 子串。修复：① 新增 `_keyword_match` 工具函数，英文用 `\b` 词边界匹配、中文子串匹配、纯数字子串匹配；② perf 关键词拆为症状词（慢/卡/超时/瓶颈）+ 领域词（sync/同步/传输），仅症状词命中才判性能问题，避免"配置同步设置"误路由 |
+| `34bf92a` | orchestrator 委托 cs 3 次重试全超时 | `_delegate_via_a2a` 的 `create_client` 未传 ClientConfig，用默认 httpx 超时（短），cs 调 LLM 慢导致超时。修复：① 用 `async with httpx.AsyncClient` 创建高超时 client 并通过 ClientConfig 传入（async with 确保重试时自动关闭避免泄漏）；② `a2a_expert_timeout` 默认值 30s→120s（cs 调 LLM 慢，perf/security 规则匹配快不受影响）|
+
+### 12.3 端到端验证结果（四链路全通）
+
+| 链路 | 测试查询 | 结果 |
+|---|---|---|
+| orchestrator(9000) → perf(9002) | "CloudSync 同步速度很慢，大文件传输有瓶颈" | ✅ 返回性能诊断（分块上传/multipart/断点续传/gzip 建议）|
+| customer_service(9001) 直连 | "如何安装客户端？请提供使用指南" | ✅ 返回通义千问生成的安装指南 |
+| security(9003) 直连 | "API key 泄露了，请做安全审计" | ✅ 返回安全审计报告（风险评估 4 项 + 处置建议 5 项）|
+| orchestrator(9000) → cs(9001) 端到端路由 | "如何配置 CloudSync 的同步设置？需要帮助" | ✅ 正确路由到 cs（不再误路由 perf），返回工单创建结果 TKT-E4423216 |
+
+### 12.4 进程启动方式（重要，复现必读）
+四个 agent 需各自单独启动进程。客服 agent(9001) 和性能 agent(9002) 因 OpenBLAS 多线程内存竞争会崩溃（`Memory allocation failed`），**必须设环境变量** `OPENBLAS_NUM_THREADS=1` + `OMP_NUM_THREADS=1`：
+
+```powershell
+# orchestrator（带 --register 注册到 registry）
+venv\Scripts\python.exe -m src.protocols.orchestrator_agent --register --port 9000
+
+# 客服 agent（必须设 OpenBLAS 线程数）
+$env:OPENBLAS_NUM_THREADS=1; $env:OMP_NUM_THREADS=1; venv\Scripts\python.exe -m src.protocols.a2a_server
+
+# 性能 agent（必须设 OpenBLAS 线程数）
+$env:OPENBLAS_NUM_THREADS=1; $env:OMP_NUM_THREADS=1; venv\Scripts\python.exe -m src.protocols.perf_agent --port 9002
+
+# 安全 agent
+venv\Scripts\python.exe -m src.protocols.security_agent --port 9003
+```
+
+演示脚本：`_a2a_call.py`（未提交，工作区临时文件），改 `orchestrator_url` 和 `query` 后 `venv\Scripts\python.exe _a2a_call.py` 运行。客户端需配高超时 httpx client（脚本已配 300s）。
+
+### 12.5 关键文件速查
+| 文件 | 改动 | commit |
+|---|---|---|
+| src/protocols/orchestrator_agent.py | 新增 `_keyword_match`；`_delegate_via_a2a` 重写（async with httpx + ClientConfig + task_id 留空 + async for 消费）；`OrchestratorExecutor.execute` 适配新签名；`build_orchestrator_server` 补全 URL | 041369c, 1ae6a3a, 86b6f76, 34bf92a |
+| src/protocols/a2a_server.py | `execute` 改 `await ainvoke`；`build_a2a_server` 加 port 参数 + URL 补全 | 4887d98, 041369c |
+| src/protocols/perf_agent.py / security_agent.py | `build_xxx_server` 加 port 参数 + URL 补全 | 041369c |
+| src/config.py | `a2a_expert_timeout` 30→120s | 34bf92a |
+| _a2a_call.py | 演示脚本（未提交）| — |
+
+### 12.6 一句话交接
+A2A 委托链路 5 个 bug 全修完且端到端验证通过（orchestrator 正确路由到三个专家 agent 并返回真实结果），5 个 commit 已推送（`041369c..34bf92a`）。复现演示时记得给 cs/perf agent 设 `OPENBLAS_NUM_THREADS=1`，否则会因 OpenBLAS 内存竞争崩溃。`_a2a_call.py` 是临时演示脚本未提交，需要可自行保留或删除。
