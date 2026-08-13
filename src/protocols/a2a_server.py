@@ -108,7 +108,7 @@ class CustomerServiceExecutor(_ExecutorBase):
             has_reflected=False,
         )
 
-        result = self.workflow.invoke(
+        result = await self.workflow.ainvoke(
             state,
             config={"configurable": {"thread_id": context.task_id}},
         )
