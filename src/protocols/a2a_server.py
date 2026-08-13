@@ -165,7 +165,7 @@ def _build_service_agent_card():
     if SERVICE_AGENT_CARD is not None:
         return SERVICE_AGENT_CARD
 
-    from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+    from a2a.types import AgentCard, AgentCapabilities, AgentSkill, AgentInterface
 
     SERVICE_AGENT_CARD = AgentCard(
         name="CloudSync Customer Service Agent",
@@ -187,6 +187,13 @@ def _build_service_agent_card():
                 examples=s["examples"],
             )
             for s in SERVICE_AGENT_SKILLS
+        ],
+        supported_interfaces=[
+            AgentInterface(
+                url="/",
+                protocol_binding="JSONRPC",
+                protocol_version="1.0",
+            )
         ],
     )
     return SERVICE_AGENT_CARD

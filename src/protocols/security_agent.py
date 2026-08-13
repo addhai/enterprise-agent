@@ -161,7 +161,7 @@ def _build_security_agent_card():
     if SECURITY_AGENT_CARD is not None:
         return SECURITY_AGENT_CARD
 
-    from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+    from a2a.types import AgentCard, AgentCapabilities, AgentSkill, AgentInterface
 
     SECURITY_AGENT_CARD = AgentCard(
         name="Security Audit Expert Agent",
@@ -183,6 +183,13 @@ def _build_security_agent_card():
                 examples=s["examples"],
             )
             for s in SECURITY_AGENT_SKILLS
+        ],
+        supported_interfaces=[
+            AgentInterface(
+                url="/",
+                protocol_binding="JSONRPC",
+                protocol_version="1.0",
+            )
         ],
     )
     return SECURITY_AGENT_CARD

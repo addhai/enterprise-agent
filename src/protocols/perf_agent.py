@@ -158,7 +158,7 @@ def _build_perf_agent_card():
     if PERF_AGENT_CARD is not None:
         return PERF_AGENT_CARD
 
-    from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+    from a2a.types import AgentCard, AgentCapabilities, AgentSkill, AgentInterface
 
     PERF_AGENT_CARD = AgentCard(
         name="Performance Diagnosis Expert Agent",
@@ -180,6 +180,13 @@ def _build_perf_agent_card():
                 examples=s["examples"],
             )
             for s in PERF_AGENT_SKILLS
+        ],
+        supported_interfaces=[
+            AgentInterface(
+                url="/",
+                protocol_binding="JSONRPC",
+                protocol_version="1.0",
+            )
         ],
     )
     return PERF_AGENT_CARD
