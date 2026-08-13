@@ -261,37 +261,48 @@ class Orchestrator:
         last_error = None
         for attempt in range(1, max_retries + 1):
             try:
-                client = await create_client(
-                    url,
-                    relative_card_path="/.well-known/agent.json",
-                    resolver_http_kwargs={"timeout": float(timeout_seconds)},
-                )
-                context_id = str(uuid4())
-                # task_id 留空：a2a-sdk 服务端要求若指定 task_id 则该 task 必须已存在，
-                # 否则抛 TaskNotFoundError；让服务端自动创建新 task。
-                from a2a.types import Role
-                message = _make_text_message(
-                    query, context_id, "", role=Role.ROLE_USER
-                )
-                request = SendMessageRequest(message=message)
-                # send_message 返回流式 AsyncIterator[StreamResponse]，
-                # 取第一个响应；外层用 asyncio.wait_for 兜底超时
-                async def _consume_response():
-                    async for resp in client.send_message(request):
-                        return resp
-                    return None
-
-                response = await _asyncio.wait_for(
-                    _consume_response(),
-                    timeout=timeout_seconds,
-                )
-
-                # StreamResponse.payload oneof: message | task | status_update | artifact_update
-                if response and response.message and response.message.parts:
-                    return "\n".join(
-                        p.text for p in response.message.parts if p.text
+                # 创建高超时 httpx client 并通过 ClientConfig 传入，
+                # 避免 cs agent 调 LLM 慢响应导致默认超时失败
+                # 用 async with 确保重试时旧 client 自动关闭，避免连接泄漏
+                import httpx as _httpx
+                from a2a.client.client import ClientConfig as _ClientConfig
+                async with _httpx.AsyncClient(
+                    trust_env=False,
+                    timeout=_httpx.Timeout(float(timeout_seconds), connect=30.0),
+                ) as _http:
+                    _cfg = _ClientConfig(httpx_client=_http)
+                    client = await create_client(
+                        url,
+                        client_config=_cfg,
+                        relative_card_path="/.well-known/agent.json",
+                        resolver_http_kwargs={"timeout": float(timeout_seconds)},
                     )
-                return None
+                    context_id = str(uuid4())
+                    # task_id 留空：a2a-sdk 服务端要求若指定 task_id 则该 task 必须已存在，
+                    # 否则抛 TaskNotFoundError；让服务端自动创建新 task。
+                    from a2a.types import Role
+                    message = _make_text_message(
+                        query, context_id, "", role=Role.ROLE_USER
+                    )
+                    request = SendMessageRequest(message=message)
+                    # send_message 返回流式 AsyncIterator[StreamResponse]，
+                    # 取第一个响应；外层用 asyncio.wait_for 兜底超时
+                    async def _consume_response():
+                        async for resp in client.send_message(request):
+                            return resp
+                        return None
+
+                    response = await _asyncio.wait_for(
+                        _consume_response(),
+                        timeout=timeout_seconds,
+                    )
+
+                    # StreamResponse.payload oneof: message | task | status_update | artifact_update
+                    if response and response.message and response.message.parts:
+                        return "\n".join(
+                            p.text for p in response.message.parts if p.text
+                        )
+                    return None
 
             except _asyncio.TimeoutError:
                 last_error = f"timeout after {timeout_seconds}s"

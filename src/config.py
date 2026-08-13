@@ -241,7 +241,7 @@ class Settings(BaseSettings):
     a2a_security_expert_enabled: bool = True
     a2a_orchestrator_url: str = "http://localhost:9000"      # Orchestrator Agent
     a2a_orchestrator_enabled: bool = True
-    a2a_expert_timeout: int = 30                              # A2A 委托超时秒数
+    a2a_expert_timeout: int = 120                             # A2A 委托超时秒数（cs 调 LLM 较慢）
 
     # ---- 外部 MCP 消费配置（客服 Agent 作为 Client）----
     mcp_client_github_url: str = ""                           # GitHub MCP Server URL (如 http://localhost:9000/mcp)
