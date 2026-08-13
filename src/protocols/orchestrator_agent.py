@@ -212,9 +212,15 @@ class Orchestrator:
         - 重试：最多 3 次，间隔 0.5s → 1s → 2s
         - 重试条件：网络异常 / 超时（业务错误不重试）
         """
-        from src.protocols.a2a_server import _make_text_message
+        from a2a.client import create_client
+        from a2a.types.a2a_pb2 import SendMessageRequest
         from uuid import uuid4
         import asyncio as _asyncio
+        import os
+
+        # 确保 localhost 直连不走代理
+        os.environ.setdefault("NO_PROXY", "*")
+        os.environ.setdefault("no_proxy", "*")
 
         # 读取超时配置（a2a_server 中已有 a2a_expert_timeout，这里复用）
         try:
@@ -229,19 +235,33 @@ class Orchestrator:
         last_error = None
         for attempt in range(1, max_retries + 1):
             try:
-                client = a2a.Client(url, timeout=timeout_seconds)
+                client = await create_client(
+                    url,
+                    relative_card_path="/.well-known/agent.json",
+                    resolver_http_kwargs={"timeout": float(timeout_seconds)},
+                )
                 context_id = str(uuid4())
                 task_id = str(uuid4())
 
                 message = _make_text_message(query, context_id, task_id)
-                # send_message 本身是 async，外层用 asyncio.wait_for 兜底超时
+                request = SendMessageRequest(message=message)
+                # send_message 返回流式 AsyncIterator[StreamResponse]，
+                # 取第一个响应；外层用 asyncio.wait_for 兜底超时
+                async def _consume_response():
+                    async for resp in client.send_message(request):
+                        return resp
+                    return None
+
                 response = await _asyncio.wait_for(
-                    client.send_message(message),
+                    _consume_response(),
                     timeout=timeout_seconds,
                 )
 
-                if response and response.parts:
-                    return "\n".join(p.text for p in response.parts if p.text)
+                # StreamResponse.payload oneof: message | task | status_update | artifact_update
+                if response and response.message and response.message.parts:
+                    return "\n".join(
+                        p.text for p in response.message.parts if p.text
+                    )
                 return None
 
             except _asyncio.TimeoutError:
@@ -407,40 +427,61 @@ def _build_orchestrator_agent_card():
 # ---------------------------------------------------------------------------
 
 
+def _make_text_message(text: str, context_id: str, task_id: str):
+    """Create a Message with a text Part (a2a-sdk 1.1.x compatible)"""
+    from uuid import uuid4
+    from a2a.types import Message, Part, Role
+    return Message(
+        message_id=str(uuid4()),
+        role=Role.ROLE_AGENT,
+        context_id=context_id,
+        task_id=task_id,
+        parts=[Part(text=text)],
+    )
+
+
 class OrchestratorExecutor:
     """A2A AgentExecutor — 处理 A2A 委托请求"""
 
     def __init__(self):
         self.orchestrator = Orchestrator()
 
-    async def execute(self, message):
-        """执行 A2A 请求"""
-        from a2a.types import Message, Part, Role
-        from uuid import uuid4
+    async def execute(self, context, event_queue) -> None:
+        """执行 A2A 请求（a2a-sdk 1.1.x AgentExecutor 接口）
+
+        从 context 读取用户输入，调 orchestrator 协调路由，
+        将最终回复通过 event_queue 发布为 Message 事件。
+        """
+        query = context.get_user_input()
+
+        if not query:
+            await event_queue.enqueue_event(
+                _make_text_message(
+                    "请提供需要协调处理的问题描述。",
+                    context.context_id,
+                    context.task_id,
+                )
+            )
+            return
+
+        logger.info("Orchestrator received query: %s", query[:100])
 
         try:
-            query = "\n".join(p.text for p in message.parts if p.text)
-            logger.info("Orchestrator received query: %s", query[:100])
-
             result = await self.orchestrator.orchestrate(query)
             final_response = result.get("final_response", "No response")
-
-            return Message(
-                message_id=str(uuid4()),
-                role=Role.ROLE_AGENT,
-                context_id=message.context_id,
-                task_id=message.task_id,
-                parts=[Part(text=final_response)],
-            )
         except Exception as e:
             logger.error("Orchestrator execution error: %s", e)
-            return Message(
-                message_id=str(uuid4()),
-                role=Role.ROLE_AGENT,
-                context_id=message.context_id,
-                task_id=message.task_id,
-                parts=[Part(text=f"Orchestrator error: {str(e)}")],
+            final_response = f"Orchestrator error: {str(e)}"
+
+        await event_queue.enqueue_event(
+            _make_text_message(
+                final_response, context.context_id, context.task_id
             )
+        )
+
+    async def cancel(self, context, event_queue) -> None:
+        """取消任务（a2a-sdk 1.1.x AgentExecutor 接口要求）"""
+        pass
 
 
 def build_orchestrator_server(port: int = 9000):
@@ -463,6 +504,12 @@ def build_orchestrator_server(port: int = 9000):
     from a2a.server.routes.rest_routes import create_rest_routes
 
     card = _build_orchestrator_agent_card()
+
+    # a2a-sdk 1.1.x 客户端直接用 AgentInterface.url 作为请求 URL（不拼接 base url），
+    # 故需把相对路径 "/" 补全为绝对 URL，否则客户端报 "Request URL is missing an 'http://' protocol"。
+    for _iface in card.supported_interfaces:
+        if _iface.url.startswith("/"):
+            _iface.url = f"http://127.0.0.1:{port}{_iface.url}"
 
     app = FastAPI(
         title="CloudSync Orchestrator A2A Agent",

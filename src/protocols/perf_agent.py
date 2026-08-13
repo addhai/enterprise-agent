@@ -242,7 +242,7 @@ class PerfExpertExecutor:
         pass
 
 
-def build_perf_agent_server():
+def build_perf_agent_server(port: int = 9002):
     """构建性能诊断专家 Agent 的 A2A Server"""
     from fastapi import FastAPI
     from a2a.server.request_handlers import DefaultRequestHandler
@@ -253,6 +253,12 @@ def build_perf_agent_server():
     from a2a.server.routes.rest_routes import create_rest_routes
 
     card = _build_perf_agent_card()
+
+    # a2a-sdk 1.1.x 客户端直接用 AgentInterface.url 作为请求 URL（不拼接 base url），
+    # 故需把相对路径 "/" 补全为绝对 URL，否则客户端报 "Request URL is missing an 'http://' protocol"。
+    for _iface in card.supported_interfaces:
+        if _iface.url.startswith("/"):
+            _iface.url = f"http://127.0.0.1:{port}{_iface.url}"
 
     app = FastAPI(
         title="CloudSync Performance Expert A2A Agent",
@@ -299,7 +305,7 @@ async def main():
     parser.add_argument("--port", type=int, default=9002)
     args = parser.parse_args()
 
-    app = build_perf_agent_server()
+    app = build_perf_agent_server(port=args.port)
 
     logger.info("Performance Expert Agent starting on http://localhost:%s", args.port)
     logger.info("Agent Card: http://localhost:%s/.well-known/agent.json", args.port)

@@ -199,7 +199,7 @@ def _build_service_agent_card():
     return SERVICE_AGENT_CARD
 
 
-def build_a2a_server(workflow=None):
+def build_a2a_server(workflow=None, port: int = 9001):
     """构建 A2A Server（基于 FastAPI + a2a-sdk routes）
 
     需要 a2a-sdk 已安装。若未安装会抛出 RuntimeError。
@@ -219,6 +219,12 @@ def build_a2a_server(workflow=None):
     from a2a.server.routes.rest_routes import create_rest_routes
 
     card = _build_service_agent_card()
+
+    # a2a-sdk 1.1.x 客户端直接用 AgentInterface.url 作为请求 URL（不拼接 base url），
+    # 故需把相对路径 "/" 补全为绝对 URL，否则客户端报 "Request URL is missing an 'http://' protocol"。
+    for _iface in card.supported_interfaces:
+        if _iface.url.startswith("/"):
+            _iface.url = f"http://127.0.0.1:{port}{_iface.url}"
 
     app = FastAPI(
         title="CloudSync Customer Service A2A Agent",
@@ -461,7 +467,7 @@ async def main():
     logger.info("Initializing LangGraph workflow for A2A agent...")
     workflow = create_workflow()
 
-    app = build_a2a_server(workflow=workflow)
+    app = build_a2a_server(workflow=workflow, port=9001)
 
     logger.info("A2A Customer Service Agent starting on http://localhost:9001")
     logger.info("Agent Card: http://localhost:9001/.well-known/agent.json")
