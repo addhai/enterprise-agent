@@ -205,7 +205,9 @@ async def parallel_tool_call(tool_calls: List[dict], timeout: float = 30.0) -> L
         except Exception as e:  # noqa: BLE001 - 并行任务隔离：单点失败不影响整体
             return {"success": False, "error": str(e)[:200]}
 
-    tasks = [_call_tool(c) for c in tool_calls]
+    # 显式包装成 Task：Python 3.14 起 asyncio.wait() 禁止直接传 coroutine
+    # （旧写法在 3.14 直接抛 TypeError，使并行工具调用永久不可用）。
+    tasks = [asyncio.create_task(_call_tool(c)) for c in tool_calls]
     done, pending = await asyncio.wait(tasks, timeout=timeout)
     for t in pending:
         t.cancel()

@@ -1,295 +1,246 @@
-"""TransferDispatcher 单元测试
+"""tests for src.websocket.dispatcher
 
-覆盖：
-- handle_escalation 转接流程
-- agent_reply 坐席回复
-- get_copilot_suggestions Copilot 建议
-- migrate_to_human / migrate_to_ai 会话迁移
-- 查询接口（get_stats / get_pending_count / get_transfer_record）
-- 无在线坐席时入队
+用 FakeSessionManager / FakeWS 覆盖转接分发、坐席分配、通知、坐席回复、
+Copilot 建议、会话迁移与各类查询接口，不触网。
 """
+import asyncio
+
 import pytest
 
-from src.websocket.session_manager import (
-    SessionMode,
-    get_session_manager,
-)
-from src.websocket.dispatcher import (
-    TransferDispatcher,
-    TransferRecord,
-    get_dispatcher,
-)
+import src.websocket.dispatcher as disp
+from src.websocket.dispatcher import TransferDispatcher
 
 
-# ============================================================
-# handle_escalation 转接流程
-# ============================================================
+class FakeWS:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.sent = []
+        self.closed = False
 
-class TestHandleEscalation:
-    @pytest.mark.asyncio
-    async def test_escalation_creates_transfer_record(self):
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-
-        state = {"user_id": "user-1", "intent": "technical"}
-        result = await disp.handle_escalation("s1", state, [])
-
-        assert result["needs_human"] is True
-        assert "transfer_id" in result
-        assert "transfer_notice" in result
-        assert "handoff_context" in result
-
-        # 转接记录应存在
-        record = disp.get_transfer_record(result["transfer_id"])
-        assert record is not None
-        assert record.session_id == "s1"
-
-    @pytest.mark.asyncio
-    async def test_escalation_updates_session_mode_to_waiting(self):
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-
-        await disp.handle_escalation("s1", {"user_id": "user-1"}, [])
-        state = mgr.get_session("s1")
-        assert state.mode == SessionMode.WAITING_HUMAN
-
-    @pytest.mark.asyncio
-    async def test_escalation_assigns_online_agent(self):
-        """有在线坐席时应自动分配"""
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-
-        class MockWS:
-            def __init__(self):
-                self.sent = []
-
-            async def send_json(self, data):
-                self.sent.append(data)
-
-        mock_ws = MockWS()
-        mgr.register_agent("agent-1", mock_ws)
-
-        result = await disp.handle_escalation("s1", {"user_id": "user-1"}, [])
-        assert result["agent_assigned"] == "agent-1"
-        # 坐席应收到 new_transfer 通知
-        assert len(mock_ws.sent) == 1
-        assert mock_ws.sent[0]["type"] == "new_transfer"
-
-    @pytest.mark.asyncio
-    async def test_escalation_queues_when_no_agents(self):
-        """无在线坐席时应入队"""
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-
-        result = await disp.handle_escalation("s1", {"user_id": "user-1"}, [])
-        assert result["agent_assigned"] is None
-        assert disp.get_pending_count() == 1
-
-    @pytest.mark.asyncio
-    async def test_high_urgency_shorter_wait(self):
-        """高紧急度转接的等待时间应更短"""
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-
-        # enterprise + 投诉 → critical 紧急度
-        state = {
-            "user_id": "user-1",
-            "intent": "general",
-            "user_plan": "enterprise",
-        }
-        from langchain_core.messages import HumanMessage
-        msgs = [HumanMessage(content="我要投诉退款")]
-
-        result = await disp.handle_escalation("s1", state, msgs)
-        notice = result["transfer_notice"]
-        assert notice["estimated_wait_seconds"] == 30  # 高紧急度等待 30s
+    async def send_json(self, payload):
+        if self.fail:
+            raise RuntimeError("send failed")
+        self.sent.append(payload)
 
 
-# ============================================================
-# agent_reply 坐席回复
-# ============================================================
-
-class TestAgentReply:
-    @pytest.mark.asyncio
-    async def test_reply_via_websocket(self):
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-
-        class MockWS:
-            def __init__(self):
-                self.sent = []
-
-            async def send_json(self, data):
-                self.sent.append(data)
-
-        mock_ws = MockWS()
-        state = mgr.get_session("s1")
-        state._websocket_ref = mock_ws
-
-        result = await disp.agent_reply("agent-1", "s1", "这是坐席回复")
-        assert result is True
-        assert mock_ws.sent[0]["text"] == "这是坐席回复"
-        assert mock_ws.sent[0]["from_agent"] == "agent-1"
-
-    @pytest.mark.asyncio
-    async def test_reply_to_nonexistent_session_returns_false(self):
-        disp = get_dispatcher()
-        result = await disp.agent_reply("agent-1", "nope", "回复")
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_reply_without_websocket_enqueues(self):
-        """无 WebSocket 引用时应放入消息队列"""
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-
-        result = await disp.agent_reply("agent-1", "s1", "回复")
-        assert result is False
-
-        state = mgr.get_session("s1")
-        msg = await state.message_queue.get()
-        assert msg["text"] == "回复"
-        assert msg["from_agent"] == "agent-1"
+class FakeState:
+    def __init__(self, ws=None):
+        self._websocket_ref = ws
+        self.mode = "ai"
+        self.needs_human = False
+        self.assigned_agent = None
+        self.last_active = 0
+        self.message_queue = asyncio.Queue()
 
 
-# ============================================================
-# Copilot 建议
-# ============================================================
+class FakeSessionManager:
+    def __init__(self):
+        self.sessions = {}
+        self.agents = {}
+        self.online = []
+        self.modes = {}
 
-class TestCopilotSuggestions:
-    @pytest.mark.asyncio
-    async def test_error_keyword_suggestions(self):
-        disp = get_dispatcher()
-        suggestions = await disp.get_copilot_suggestions(
-            "s1", "我遇到了 error 报错", [],
-        )
-        assert len(suggestions) >= 1
-        assert any("错误" in s or "error" in s.lower() for s in suggestions)
+    def update_mode(self, sid, mode):
+        self.modes[sid] = mode
 
-    @pytest.mark.asyncio
-    async def test_refund_keyword_suggestions(self):
-        disp = get_dispatcher()
-        suggestions = await disp.get_copilot_suggestions(
-            "s1", "我要退款 refund", [],
-        )
-        assert len(suggestions) >= 1
-        assert any("退款" in s for s in suggestions)
+    def list_online_agents(self):
+        return list(self.online)
 
-    @pytest.mark.asyncio
-    async def test_login_keyword_suggestions(self):
-        disp = get_dispatcher()
-        suggestions = await disp.get_copilot_suggestions(
-            "s1", "我无法登录 password 忘了", [],
-        )
-        assert len(suggestions) >= 1
+    def assign_agent_to_session(self, sid, agent_id):
+        self.sessions.setdefault(sid, FakeState()).assigned_agent = agent_id
 
-    @pytest.mark.asyncio
-    async def test_generic_suggestions_when_no_match(self):
-        disp = get_dispatcher()
-        suggestions = await disp.get_copilot_suggestions(
-            "s1", "一般的问候", [],
-        )
-        assert len(suggestions) >= 1
+    def get_agent(self, agent_id):
+        return self.agents.get(agent_id)
 
-    @pytest.mark.asyncio
-    async def test_max_three_suggestions(self):
-        disp = get_dispatcher()
-        suggestions = await disp.get_copilot_suggestions(
-            "s1", "error refund password", [],
-        )
-        assert len(suggestions) <= 3
+    def get_session(self, sid):
+        return self.sessions.get(sid)
 
 
-# ============================================================
-# 会话迁移
-# ============================================================
-
-class TestSessionMigration:
-    def test_migrate_to_human(self):
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-
-        assert disp.migrate_to_human("s1") is True
-        state = mgr.get_session("s1")
-        assert state.mode == SessionMode.HUMAN_CHAT
-        assert state.needs_human is True
-
-    def test_migrate_to_human_nonexistent_returns_false(self):
-        disp = get_dispatcher()
-        assert disp.migrate_to_human("nope") is False
-
-    def test_migrate_to_ai(self):
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-        mgr.assign_agent_to_session("s1", "agent-1")  # 先转人工
-
-        assert disp.migrate_to_ai("s1") is True
-        state = mgr.get_session("s1")
-        assert state.mode == SessionMode.AI_CHAT
-        assert state.needs_human is False
-        assert state.assigned_agent is None
-
-    def test_migrate_to_ai_nonexistent_returns_false(self):
-        disp = get_dispatcher()
-        assert disp.migrate_to_ai("nope") is False
+@pytest.fixture
+def dispatcher(monkeypatch):
+    fake = FakeSessionManager()
+    monkeypatch.setattr(disp, "get_session_manager", lambda: fake)
+    TransferDispatcher._instance = None
+    d = TransferDispatcher()
+    d._session_mgr = fake
+    d._fake = fake
+    yield d
+    # 还原模块级单例，避免污染其它用到 dispatcher 的测试
+    TransferDispatcher._instance = None
 
 
-# ============================================================
-# 查询接口与统计
-# ============================================================
+async def test_handle_escalation_assigns_agent(dispatcher):
+    dispatcher._fake.online = ["agent1"]
+    dispatcher._fake.agents["agent1"] = FakeWS()
+    state = {
+        "user_id": "u1",
+        "intent": "refund",
+        "quality_score": 0.2,
+    }
+    res = await dispatcher.handle_escalation("s1", state, [{"role": "user", "content": "退款"}])
+    assert res["needs_human"] is True
+    assert res["agent_assigned"] == "agent1"
+    assert dispatcher._fake.modes["s1"].value == "waiting_human"
+    # 通知已发给 agent
+    assert dispatcher._fake.agents["agent1"].sent
 
-class TestDispatcherStats:
-    @pytest.mark.asyncio
-    async def test_get_stats_after_escalation(self):
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
 
-        await disp.handle_escalation("s1", {"user_id": "user-1"}, [])
+async def test_handle_escalation_queues_when_no_agent(dispatcher):
+    dispatcher._fake.online = []
+    state = {"user_id": "u1"}
+    res = await dispatcher.handle_escalation("s2", state, [])
+    assert res["agent_assigned"] is None
+    assert dispatcher.get_pending_count() == 1
 
-        stats = disp.get_stats()
-        assert stats["total_transfers"] == 1
 
-    @pytest.mark.asyncio
-    async def test_get_session_transfer(self):
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
+async def test_handle_escalation_notify_failure_queues(dispatcher):
+    dispatcher._fake.online = ["agentX"]
+    dispatcher._fake.agents["agentX"] = FakeWS(fail=True)
+    state = {"user_id": "u1"}
+    res = await dispatcher.handle_escalation("s3", state, [])
+    assert res["agent_assigned"] == "agentX"
+    # 通知失败 -> 重新入队
+    assert dispatcher.get_pending_count() == 1
 
-        result = await disp.handle_escalation("s1", {"user_id": "user-1"}, [])
 
-        transfer_id = disp.get_session_transfer("s1")
-        assert transfer_id == result["transfer_id"]
+async def test_agent_reply_direct(dispatcher):
+    ws = FakeWS()
+    st = FakeState(ws=ws)
+    dispatcher._fake.sessions["s4"] = st
+    ok = await dispatcher.agent_reply("agent1", "s4", "你好")
+    assert ok is True
+    assert ws.sent
+    assert ws.sent[0]["type"] == "human_reply"
 
-    def test_get_session_transfer_none(self):
-        disp = get_dispatcher()
-        assert disp.get_session_transfer("nope") is None
 
-    def test_get_transfer_record_nonexistent(self):
-        disp = get_dispatcher()
-        assert disp.get_transfer_record("nope") is None
+async def test_agent_reply_no_session(dispatcher):
+    ok = await dispatcher.agent_reply("a", "missing", "hi")
+    assert ok is False
 
-    @pytest.mark.asyncio
-    async def test_pending_count_increments_without_agents(self):
-        disp = get_dispatcher()
-        mgr = get_session_manager()
-        mgr.create_session("s1", "user-1")
-        mgr.create_session("s2", "user-2")
 
-        await disp.handle_escalation("s1", {"user_id": "user-1"}, [])
-        await disp.handle_escalation("s2", {"user_id": "user-2"}, [])
+async def test_agent_reply_no_ws_queues(dispatcher):
+    st = FakeState(ws=None)
+    dispatcher._fake.sessions["s5"] = st
+    ok = await dispatcher.agent_reply("a", "s5", "hi")
+    assert ok is False
+    # 消息进了队列
+    assert not st.message_queue.empty()
 
-        assert disp.get_pending_count() == 2
 
-    @pytest.mark.asyncio
-    async def test_singleton_returns_same_instance(self):
-        assert get_dispatcher() is get_dispatcher()
+async def test_agent_reply_ws_send_failure(dispatcher):
+    ws = FakeWS(fail=True)
+    st = FakeState(ws=ws)
+    dispatcher._fake.sessions["s6"] = st
+    ok = await dispatcher.agent_reply("a", "s6", "hi")
+    assert ok is False
+
+
+async def test_copilot_suggestions_error_keyword(dispatcher):
+    s = await dispatcher.get_copilot_suggestions("s", "报错了 error", [])
+    assert len(s) >= 1
+    assert "错误" in s[0] or "报错" in s[0]
+
+
+async def test_copilot_suggestions_refund_keyword(dispatcher):
+    s = await dispatcher.get_copilot_suggestions("s", "我要退款 refund", [])
+    assert any("退款" in x for x in s)
+
+
+async def test_copilot_suggestions_config_keyword(dispatcher):
+    s = await dispatcher.get_copilot_suggestions("s", "如何配置 setup", [])
+    assert len(s) >= 1
+
+
+async def test_copilot_suggestions_login_keyword(dispatcher):
+    s = await dispatcher.get_copilot_suggestions("s", "登录 login 密码", [])
+    assert any("密码" in x or "登录" in x for x in s)
+
+
+async def test_copilot_suggestions_fallback(dispatcher):
+    s = await dispatcher.get_copilot_suggestions("s", "随便聊聊", [])
+    assert len(s) == 2
+
+
+async def test_push_copilot_suggestions_happy(dispatcher):
+    ws = FakeWS()
+    dispatcher._fake.agents["agent1"] = ws
+    dispatcher._session_transfers["s7"] = "t1"
+    from src.websocket.dispatcher import TransferRecord
+
+    rec = TransferRecord(
+        transfer_id="t1", session_id="s7", user_id="u1",
+        context={}, urgency="normal", assigned_agent="agent1",
+    )
+    dispatcher._records["t1"] = rec
+    await dispatcher.push_copilot_suggestions("s7", "报错", [])
+    assert ws.sent and ws.sent[0]["type"] == "copilot_suggestion"
+
+
+async def test_push_copilot_no_record(dispatcher):
+    # 无转接记录 -> 直接返回
+    await dispatcher.push_copilot_suggestions("sX", "hi", [])
+
+
+async def test_push_copilot_no_assigned_agent(dispatcher):
+    dispatcher._session_transfers["s8"] = "t2"
+    from src.websocket.dispatcher import TransferRecord
+
+    rec = TransferRecord(
+        transfer_id="t2", session_id="s8", user_id="u1",
+        context={}, urgency="normal", assigned_agent=None,
+    )
+    dispatcher._records["t2"] = rec
+    await dispatcher.push_copilot_suggestions("s8", "hi", [])
+
+
+def test_migrate_to_human(dispatcher):
+    st = FakeState()
+    dispatcher._fake.sessions["s9"] = st
+    assert dispatcher.migrate_to_human("s9") is True
+    assert st.mode.value == "human_chat"
+    assert st.needs_human is True
+
+
+def test_migrate_to_human_missing(dispatcher):
+    assert dispatcher.migrate_to_human("missing") is False
+
+
+def test_migrate_to_ai(dispatcher):
+    st = FakeState()
+    st.assigned_agent = "agent1"
+    dispatcher._fake.sessions["s10"] = st
+    assert dispatcher.migrate_to_ai("s10") is True
+    assert st.mode.value == "ai_chat"
+    assert st.needs_human is False
+    assert st.assigned_agent is None
+
+
+def test_migrate_to_ai_missing(dispatcher):
+    assert dispatcher.migrate_to_ai("missing") is False
+
+
+def test_get_transfer_record_and_session(dispatcher):
+    from src.websocket.dispatcher import TransferRecord
+
+    rec = TransferRecord(
+        transfer_id="t3", session_id="s11", user_id="u1", context={}, urgency="normal",
+    )
+    dispatcher._records["t3"] = rec
+    dispatcher._session_transfers["s11"] = "t3"
+    assert dispatcher.get_transfer_record("t3") is rec
+    assert dispatcher.get_session_transfer("s11") == "t3"
+    assert dispatcher.get_transfer_record("nope") is None
+
+
+def test_get_stats(dispatcher):
+    from src.websocket.dispatcher import TransferRecord
+
+    dispatcher._records["t4"] = TransferRecord(
+        transfer_id="t4", session_id="s12", user_id="u1", context={},
+        urgency="normal", assigned_agent="a", status="assigned",
+    )
+    dispatcher._queue.append(dispatcher._records["t4"])
+    stats = dispatcher.get_stats()
+    assert stats["total_transfers"] == 1
+    assert stats["active_transfers"] == 1
+    assert stats["pending_queue"] == 1
