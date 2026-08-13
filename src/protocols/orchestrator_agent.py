@@ -43,6 +43,26 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+def _keyword_match(keyword: str, text: str) -> bool:
+    """精确关键词匹配（避免子串误命中）
+
+    - 英文关键词：用词边界 \\b 匹配，避免 "sync" 命中 "CloudSync"
+    - 中文关键词：中文无词边界概念，直接子串匹配（中文不会出现
+      "CloudSync" 含 "sync" 这种跨语言子串误命中问题）
+    - 含空格的复合词（如 "api key"）：作为整体按词边界匹配
+    - 纯数字关键词（如错误码 "429"）：直接子串匹配
+    """
+    import re
+    # 纯数字（错误码）直接子串匹配
+    if keyword.isdigit():
+        return keyword in text
+    # 含中文字符 → 子串匹配（中文无词边界）
+    if re.search(r'[\u4e00-\u9fff]', keyword):
+        return keyword in text
+    # 纯英文/含空格复合词 → 词边界匹配（忽略大小写已由调用方保证）
+    return bool(re.search(r'\b' + re.escape(keyword) + r'\b', text))
+
+
 class Orchestrator:
     """Orchestrator 核心逻辑 — 智能路由和协调"""
 
@@ -98,11 +118,14 @@ class Orchestrator:
             "hack", "攻击", "phishing", "钓鱼", "malware", "恶意"
         ]
 
-        # 性能相关关键词（排除安全相关的 api）
-        perf_keywords = [
+        # 性能"症状词"：直接命中即判定为性能问题。
+        # 注意：sync/同步/transfer/传输/database 等领域词已移除，
+        # 因为它们单独出现时可能是客服咨询功能（如"配置同步设置"），
+        # 需配合症状词（慢/卡/超时/瓶颈）才构成性能问题。
+        perf_symptom_keywords = [
             "slow", "lag", "延迟", "卡顿", "stuck", "卡住", "timeout", "超时",
-            "performance", "性能", "sync", "同步", "响应慢", "429", "503",
-            "transfer", "传输", "database", "数据库", "lock", "锁", "deadlock", "死锁"
+            "performance", "性能", "响应慢", "429", "503", "瓶颈", "失败",
+            "lock", "锁", "deadlock", "死锁", "慢", "error", "错误", "crash", "崩溃"
         ]
 
         # 客服相关关键词（兜底）
@@ -115,14 +138,17 @@ class Orchestrator:
         matched_agents = []
 
         # 匹配安全专家（优先）
-        is_security_query = any(kw in query_lower for kw in security_keywords)
+        is_security_query = any(_keyword_match(kw, query_lower) for kw in security_keywords)
         if is_security_query:
             sec_entry = self.registry.get("security_expert")
             if sec_entry and self._is_available("security_expert"):
                 matched_agents.append(("security_expert", "high", sec_entry))
 
-        # 匹配性能专家（当安全查询中包含 api key 时，不重复匹配 api）
-        is_perf_query = any(kw in query_lower for kw in perf_keywords)
+        # 匹配性能专家：
+        # - 症状词直接命中 → 性能问题（如"慢/卡/超时/瓶颈"）
+        # - 仅领域词命中（如"同步/传输"）但无症状词 → 可能是客服咨询功能，不算性能问题
+        has_perf_symptom = any(_keyword_match(kw, query_lower) for kw in perf_symptom_keywords)
+        is_perf_query = has_perf_symptom
         if is_perf_query:
             perf_entry = self.registry.get("performance_expert")
             if perf_entry and self._is_available("performance_expert"):
@@ -131,7 +157,7 @@ class Orchestrator:
         # 匹配客服（兜底或客服特定查询）
         cs_entry = self.registry.get("customer_service")
         if cs_entry and self._is_available("customer_service"):
-            if not matched_agents or any(kw in query_lower for kw in cs_keywords):
+            if not matched_agents or any(_keyword_match(kw, query_lower) for kw in cs_keywords):
                 matched_agents.append(("customer_service", "medium", cs_entry))
 
         # 按优先级排序
