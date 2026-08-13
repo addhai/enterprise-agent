@@ -392,6 +392,7 @@ def _build_orchestrator_agent_card():
             for s in ORCHESTRATOR_AGENT_SKILLS
         ],
     )
+    return ORCHESTRATOR_AGENT_CARD
 
 
 # ---------------------------------------------------------------------------
@@ -435,18 +436,56 @@ class OrchestratorExecutor:
             )
 
 
-def build_orchestrator_server(port: int = 9000) -> Optional["a2a.Server"]:
-    """构建 Orchestrator A2A Server（延迟加载 a2a-sdk）"""
+def build_orchestrator_server(port: int = 9000):
+    """构建 Orchestrator A2A Server（FastAPI + a2a-sdk 1.1.x 路由模式）
+
+    注：旧版 a2a.Server(port=..., agent_card=...) 在 a2a-sdk 1.1.x 已移除，
+    改用 FastAPI + DefaultRequestHandler + add_a2a_routes_to_fastapi（与
+    perf_agent / security_agent / a2a_server 保持一致）。
+    """
     if not _A2A_AVAILABLE:
         logger.warning("a2a-sdk not available, skipping orchestrator server build")
         return None
 
-    _build_orchestrator_agent_card()
+    from fastapi import FastAPI
+    from a2a.server.request_handlers import DefaultRequestHandler
+    from a2a.server.tasks import InMemoryTaskStore
+    from a2a.server.routes import add_a2a_routes_to_fastapi
+    from a2a.server.routes.agent_card_routes import create_agent_card_routes
+    from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
+    from a2a.server.routes.rest_routes import create_rest_routes
 
-    server = a2a.Server(port=port, agent_card=ORCHESTRATOR_AGENT_CARD)
-    server.register_executor(OrchestratorExecutor())
+    card = _build_orchestrator_agent_card()
 
-    return server
+    app = FastAPI(
+        title="CloudSync Orchestrator A2A Agent",
+        description="A2A-compatible orchestrator agent — 多专家协调器",
+        version="1.0.0",
+    )
+
+    handler = DefaultRequestHandler(
+        agent_executor=OrchestratorExecutor(),
+        task_store=InMemoryTaskStore(),
+        agent_card=card,
+    )
+
+    add_a2a_routes_to_fastapi(
+        app,
+        agent_card_routes=create_agent_card_routes(
+            agent_card=card,
+            card_url="/.well-known/agent.json",
+        ),
+        jsonrpc_routes=create_jsonrpc_routes(
+            request_handler=handler,
+            rpc_url="/",
+        ),
+        rest_routes=create_rest_routes(
+            request_handler=handler,
+            path_prefix="/v1",
+        ),
+    )
+
+    return app
 
 
 # ---------------------------------------------------------------------------
@@ -454,9 +493,10 @@ def build_orchestrator_server(port: int = 9000) -> Optional["a2a.Server"]:
 # ---------------------------------------------------------------------------
 
 
-def main():
-    """启动 Orchestrator Agent"""
+async def main():
+    """启动 Orchestrator Agent: python -m src.protocols.orchestrator_agent"""
     import argparse
+    import uvicorn
 
     parser = argparse.ArgumentParser(description="Orchestrator Agent")
     parser.add_argument("--port", type=int, default=9000, help="Port to listen on")
@@ -480,13 +520,18 @@ def main():
             version="1.0.0",
         )
 
-    server = build_orchestrator_server(args.port)
-    if server:
-        logger.info("Orchestrator Agent starting on port %d", args.port)
-        server.run()
-    else:
-        logger.error("Failed to build orchestrator server")
+    app = build_orchestrator_server(args.port)
+    if app is None:
+        logger.error("Failed to build orchestrator server (a2a-sdk unavailable?)")
+        return
+
+    logger.info("Orchestrator Agent starting on http://localhost:%s", args.port)
+    logger.info("Agent Card: http://localhost:%s/.well-known/agent.json", args.port)
+
+    config = uvicorn.Config(app, host="0.0.0.0", port=args.port, log_level="info")
+    server_instance = uvicorn.Server(config)
+    await server_instance.serve()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
