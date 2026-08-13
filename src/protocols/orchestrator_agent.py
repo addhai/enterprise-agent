@@ -241,9 +241,12 @@ class Orchestrator:
                     resolver_http_kwargs={"timeout": float(timeout_seconds)},
                 )
                 context_id = str(uuid4())
-                task_id = str(uuid4())
-
-                message = _make_text_message(query, context_id, task_id)
+                # task_id 留空：a2a-sdk 服务端要求若指定 task_id 则该 task 必须已存在，
+                # 否则抛 TaskNotFoundError；让服务端自动创建新 task。
+                from a2a.types import Role
+                message = _make_text_message(
+                    query, context_id, "", role=Role.ROLE_USER
+                )
                 request = SendMessageRequest(message=message)
                 # send_message 返回流式 AsyncIterator[StreamResponse]，
                 # 取第一个响应；外层用 asyncio.wait_for 兜底超时
@@ -427,13 +430,13 @@ def _build_orchestrator_agent_card():
 # ---------------------------------------------------------------------------
 
 
-def _make_text_message(text: str, context_id: str, task_id: str):
+def _make_text_message(text: str, context_id: str, task_id: str, role=None):
     """Create a Message with a text Part (a2a-sdk 1.1.x compatible)"""
     from uuid import uuid4
     from a2a.types import Message, Part, Role
     return Message(
         message_id=str(uuid4()),
-        role=Role.ROLE_AGENT,
+        role=role if role is not None else Role.ROLE_AGENT,
         context_id=context_id,
         task_id=task_id,
         parts=[Part(text=text)],
