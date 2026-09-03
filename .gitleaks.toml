@@ -1,0 +1,21 @@
+# Enterprise Agent — Gitleaks 密钥扫描配置
+# 应对风险 A1：合并前拦截真实密钥误提交（LLM key / 阿里云 AK / JWT secret）
+# 使用方式：
+#   - CI：gitleaks-action@v2 自动读取本文件（python-security job）
+#   - 本地：pre-commit 的 gitleaks hook（与 CI 双保险）
+# 注意：.gitignore 中的 .env / .jwt_secret 不会被扫描（未入库）；
+#       本配置兜底「人为 git add . 把 .env 带进来」或把密钥直接写进代码的情况。
+
+title = "enterprise-agent secret scan"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known false positives: test fixtures and documentation samples (intentionally fake keys)"
+paths = [
+  '''tests/fixtures/.*''',
+  '''docs/.*''',
+  '''delivery/.*''',
+  '''data/.*''',
+]

@@ -1,0 +1,36 @@
+# =============================================================================
+# Enterprise Agent — 本地质量门禁（pre-commit）
+# 目标：把 80% 的低级错（格式 / 未用导入 / 明显逻辑）挡在 push 之前，
+#       让 CI 不再红在 lint 上，反馈回路从「分钟级 CI」缩短到「秒级本地」。
+# 安装：pip install pre-commit && pre-commit install
+# 跳过：git commit --no-verify   （仅在你确信时）
+# =============================================================================
+
+repos:
+  # ---- ruff：lint + 格式化（自动修复）----
+  # rev 对齐 requirements-dev.txt / pyproject 中 ruff>=0.9.0，避免本地与 CI 规则漂移
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # ---- gitleaks：密钥扫描（commit 前拦截，与 CI A1 门禁双保险）----
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        args: [--redact]
+
+  # ---- 本地快测：仅在 push 前跑，不拖慢每次 commit ----
+  # 跑「非集成 / 非 LLM」子集（与 CI 的 -m "not integration" 一致），
+  # 真实 LLM / 云 AK 用例默认跳过（密钥红线：不进公网 CI，只在本机/受保护环境跑）。
+  - repo: local
+    hooks:
+      - id: pytest-fast
+        name: fast unit tests (pre-push)
+        entry: pytest -q -m "not integration and not requires_llm"
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

@@ -26,12 +26,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
           # pytest-github-actions-annotate-failures：把失败用例输出为 GitHub
           # annotation（::error file=...,line=...）。annotation 通过公开的
           # checks API 即可匿名读取，而下载完整 job 日志需要仓库 admin 权限，
           # 因此这是让 CI 失败原因"对外可诊断"的关键一环。
-          pip install pytest pytest-cov pytest-asyncio pytest-github-actions-annotate-failures
+          # 测试 / SAST 依赖（pytest / pytest-cov / pytest-asyncio / annotate-failures /
+          # bandit / semgrep / pytest-xdist 等）已统一收口到 requirements-dev.txt，
+          # 上面一行 -r requirements-dev.txt 已安装，避免与本地环境漂移。
 
       - name: Run tests
         run: |
@@ -52,15 +54,14 @@ jobs:
             --cov-fail-under=0 \
             -W "ignore::DeprecationWarning"
 
-      - name: Coverage gate (>=40%)
+      - name: Coverage gate
         # always(): 即使上一步用例失败，也报告当前覆盖率，便于一次性看清全貌
         if: always()
         run: |
-          # 覆盖率门禁：实测裸环境（无 Key、无 .env、requires_llm 自动跳过）
-          # 覆盖率约 48%（828 passed / 17 skipped）。取 40 作为门槛，
-          # 预留约 8 个点的环境波动余量（Ubuntu vs 本地 Windows 的行数差异），
-          # 既不让覆盖率无声塌缩，又避免偶发波动把 CI 打红。
-          coverage report --fail-under=40
+          # 覆盖率门槛由 pyproject.toml [tool.coverage.report] fail_under 单一真相控制，
+          # 此处只跑 `coverage report` 读取该值，避免两处数字漂移。
+          # 实测移除核心层（src/protocols/*）豁免后的真实覆盖率见提交说明 / QA 设计文档。
+          coverage report
 
       - name: Upload coverage report
         if: always()
@@ -97,6 +98,14 @@ jobs:
           # 真正阻断在贵司 GitLab CI 的 python-security 阶段。
           semgrep scan --config auto --severity ERROR --error --json -o semgrep-report.json src/ || true
 
+      - name: Gitleaks secret scan (blocking)
+        # 应对风险 A1：合并前拦截真实密钥（LLM key / 阿里云 AK / JWT secret）误提交。
+        # 读取仓库根 .gitleaks.toml（extend 默认规则 + 允许测试 fixture / 文档样本）。
+        # 发现密钥即 fail 本 job，阻断 PR 合并。.gitignore 的 .env/.jwt_secret 不参与扫描。
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   frontend-build:
     name: Frontend Build & Lint
     runs-on: ubuntu-latest
@@ -124,6 +133,40 @@ jobs:
         # 类型检查（tsc -b）是核心闸门：曾因 BotIcon 类型错误在本地修好、
         # 但 CI 只跑 Python 完全没拦到。vite build 产物输出到 ../static（已 gitignore）。
         run: npm run build
+
+  frontend-e2e:
+    name: Frontend E2E (Playwright)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E (critical user journeys)
+        # 演示模式登录 + 后台导航均通过 page.route mock 隔离后端，
+        # 无需起全套 docker 即可稳定验证关键 UI 旅程（登录/主题/聊天窗/后台 Tab/登出）。
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
 
   infra-validate:
     name: Infra Validate (Compose + Images + Helm)
