@@ -100,11 +100,16 @@ jobs:
 
       - name: Gitleaks secret scan (blocking)
         # 应对风险 A1：合并前拦截真实密钥（LLM key / 阿里云 AK / JWT secret）误提交。
-        # 读取仓库根 .gitleaks.toml（extend 默认规则 + 允许测试 fixture / 文档样本）。
+        # 注意：gitleaks-action 只自动识别 gitleaks.toml（无点前缀），我们用带点的
+        # .gitleaks.toml，必须显式传 GITLEAKS_CONFIG 才能读到（否则裸用默认规则，
+        # 9 处已豁免的历史标记会再次打红）。GITLEAKS_VERSION 与本地 pre-commit
+        # hook (v8.18.4) 对齐，避免两端规则版本漂移。
         # 发现密钥即 fail 本 job，阻断 PR 合并。.gitignore 的 .env/.jwt_secret 不参与扫描。
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.18.4
 
   frontend-build:
     name: Frontend Build & Lint
