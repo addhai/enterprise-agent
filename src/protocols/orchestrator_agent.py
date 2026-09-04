@@ -25,7 +25,6 @@ Orchestrator Agent — 多专家协调器
 
 import asyncio
 import logging
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +32,7 @@ logger = logging.getLogger(__name__)
 _A2A_AVAILABLE = False
 try:
     import a2a  # noqa: F401
+
     _A2A_AVAILABLE = True
 except ImportError:
     pass
@@ -53,14 +53,15 @@ def _keyword_match(keyword: str, text: str) -> bool:
     - 纯数字关键词（如错误码 "429"）：直接子串匹配
     """
     import re
+
     # 纯数字（错误码）直接子串匹配
     if keyword.isdigit():
         return keyword in text
     # 含中文字符 → 子串匹配（中文无词边界）
-    if re.search(r'[\u4e00-\u9fff]', keyword):
+    if re.search(r"[\u4e00-\u9fff]", keyword):
         return keyword in text
     # 纯英文/含空格复合词 → 词边界匹配（忽略大小写已由调用方保证）
-    return bool(re.search(r'\b' + re.escape(keyword) + r'\b', text))
+    return bool(re.search(r"\b" + re.escape(keyword) + r"\b", text))
 
 
 class Orchestrator:
@@ -68,6 +69,7 @@ class Orchestrator:
 
     def __init__(self):
         from src.protocols.agent_registry import registry
+
         self.registry = registry
         # 延迟获取 HealthChecker 单例（含 CircuitBreaker）
         # 首次调用 route_request / delegate_to_agent 时才解析，避免循环导入
@@ -79,9 +81,12 @@ class Orchestrator:
         if self._health_checker is None:
             try:
                 from src.protocols.health_checker import get_health_checker
+
                 self._health_checker = get_health_checker()
             except Exception as e:
-                logger.warning("HealthChecker unavailable, fallback to no-circuit mode: %s", e)
+                logger.warning(
+                    "HealthChecker unavailable, fallback to no-circuit mode: %s", e
+                )
                 self._health_checker = None
         return self._health_checker
 
@@ -94,7 +99,8 @@ class Orchestrator:
         if cb and not cb.can_call(agent_id):
             logger.info(
                 "Agent %s skipped (circuit %s)",
-                agent_id, cb.state(agent_id),
+                agent_id,
+                cb.state(agent_id),
             )
             return False
         return True
@@ -112,10 +118,34 @@ class Orchestrator:
 
         # 安全相关关键词（优先检查，因为包含更具体的复合词）
         security_keywords = [
-            "security", "安全", "auth", "认证", "login", "登录", "password", "密码",
-            "token", "令牌", "api key", "apikey", "泄露", "exploit", "漏洞",
-            "permission", "权限", "audit", "审计", "compliance", "合规", "越权",
-            "hack", "攻击", "phishing", "钓鱼", "malware", "恶意"
+            "security",
+            "安全",
+            "auth",
+            "认证",
+            "login",
+            "登录",
+            "password",
+            "密码",
+            "token",
+            "令牌",
+            "api key",
+            "apikey",
+            "泄露",
+            "exploit",
+            "漏洞",
+            "permission",
+            "权限",
+            "audit",
+            "审计",
+            "compliance",
+            "合规",
+            "越权",
+            "hack",
+            "攻击",
+            "phishing",
+            "钓鱼",
+            "malware",
+            "恶意",
         ]
 
         # 性能"症状词"：直接命中即判定为性能问题。
@@ -123,22 +153,66 @@ class Orchestrator:
         # 因为它们单独出现时可能是客服咨询功能（如"配置同步设置"），
         # 需配合症状词（慢/卡/超时/瓶颈）才构成性能问题。
         perf_symptom_keywords = [
-            "slow", "lag", "延迟", "卡顿", "stuck", "卡住", "timeout", "超时",
-            "performance", "性能", "响应慢", "429", "503", "瓶颈", "失败",
-            "lock", "锁", "deadlock", "死锁", "慢", "error", "错误", "crash", "崩溃"
+            "slow",
+            "lag",
+            "延迟",
+            "卡顿",
+            "stuck",
+            "卡住",
+            "timeout",
+            "超时",
+            "performance",
+            "性能",
+            "响应慢",
+            "429",
+            "503",
+            "瓶颈",
+            "失败",
+            "lock",
+            "锁",
+            "deadlock",
+            "死锁",
+            "慢",
+            "error",
+            "错误",
+            "crash",
+            "崩溃",
         ]
 
         # 客服相关关键词（兜底）
         cs_keywords = [
-            "help", "帮助", "faq", "问题", "issue", "bug", "错误", "error",
-            "how", "如何", "what", "什么", "why", "为什么", "support", "支持",
-            "guide", "指南", "文档", "document", "setup", "配置", "install", "安装"
+            "help",
+            "帮助",
+            "faq",
+            "问题",
+            "issue",
+            "bug",
+            "错误",
+            "error",
+            "how",
+            "如何",
+            "what",
+            "什么",
+            "why",
+            "为什么",
+            "support",
+            "支持",
+            "guide",
+            "指南",
+            "文档",
+            "document",
+            "setup",
+            "配置",
+            "install",
+            "安装",
         ]
 
         matched_agents = []
 
         # 匹配安全专家（优先）
-        is_security_query = any(_keyword_match(kw, query_lower) for kw in security_keywords)
+        is_security_query = any(
+            _keyword_match(kw, query_lower) for kw in security_keywords
+        )
         if is_security_query:
             sec_entry = self.registry.get("security_expert")
             if sec_entry and self._is_available("security_expert"):
@@ -147,7 +221,9 @@ class Orchestrator:
         # 匹配性能专家：
         # - 症状词直接命中 → 性能问题（如"慢/卡/超时/瓶颈"）
         # - 仅领域词命中（如"同步/传输"）但无症状词 → 可能是客服咨询功能，不算性能问题
-        has_perf_symptom = any(_keyword_match(kw, query_lower) for kw in perf_symptom_keywords)
+        has_perf_symptom = any(
+            _keyword_match(kw, query_lower) for kw in perf_symptom_keywords
+        )
         is_perf_query = has_perf_symptom
         if is_perf_query:
             perf_entry = self.registry.get("performance_expert")
@@ -156,9 +232,15 @@ class Orchestrator:
 
         # 匹配客服（兜底或客服特定查询）
         cs_entry = self.registry.get("customer_service")
-        if cs_entry and self._is_available("customer_service"):
-            if not matched_agents or any(_keyword_match(kw, query_lower) for kw in cs_keywords):
-                matched_agents.append(("customer_service", "medium", cs_entry))
+        if (
+            cs_entry
+            and self._is_available("customer_service")
+            and (
+                not matched_agents
+                or any(_keyword_match(kw, query_lower) for kw in cs_keywords)
+            )
+        ):
+            matched_agents.append(("customer_service", "medium", cs_entry))
 
         # 按优先级排序
         priority_order = {"high": 0, "medium": 1, "low": 2}
@@ -179,7 +261,7 @@ class Orchestrator:
             "best_match": matched_agents[0][0] if matched_agents else None,
         }
 
-    async def delegate_to_agent(self, agent_id: str, query: str) -> Optional[str]:
+    async def delegate_to_agent(self, agent_id: str, query: str) -> str | None:
         """委托请求到指定 Agent
 
         在调用前后更新熔断器：
@@ -230,19 +312,20 @@ class Orchestrator:
             logger.error("Failed to delegate to %s: %s", agent_id, e)
             return None
 
-    async def _delegate_via_a2a(self, url: str, query: str) -> Optional[str]:
+    async def _delegate_via_a2a(self, url: str, query: str) -> str | None:
         """通过 A2A 协议委托
 
         带显式超时 + 指数退避重试：
-        - 超时：a2a_expert_timeout（默认 30s）
+        - 超时：a2a_expert_timeout（默认 120s，cs 委托 LLM 较慢）
         - 重试：最多 3 次，间隔 0.5s → 1s → 2s
         - 重试条件：网络异常 / 超时（业务错误不重试）
         """
-        from a2a.client import create_client
-        from a2a.types.a2a_pb2 import SendMessageRequest
-        from uuid import uuid4
         import asyncio as _asyncio
         import os
+        from uuid import uuid4
+
+        from a2a.client import create_client
+        from a2a.types.a2a_pb2 import SendMessageRequest
 
         # 确保 localhost 直连不走代理
         os.environ.setdefault("NO_PROXY", "*")
@@ -251,6 +334,7 @@ class Orchestrator:
         # 读取超时配置（a2a_server 中已有 a2a_expert_timeout，这里复用）
         try:
             from src.config import settings
+
             timeout_seconds = getattr(settings, "a2a_expert_timeout", 30)
         except Exception:
             timeout_seconds = 30
@@ -266,6 +350,7 @@ class Orchestrator:
                 # 用 async with 确保重试时旧 client 自动关闭，避免连接泄漏
                 import httpx as _httpx
                 from a2a.client.client import ClientConfig as _ClientConfig
+
                 async with _httpx.AsyncClient(
                     trust_env=False,
                     timeout=_httpx.Timeout(float(timeout_seconds), connect=30.0),
@@ -278,16 +363,19 @@ class Orchestrator:
                         resolver_http_kwargs={"timeout": float(timeout_seconds)},
                     )
                     context_id = str(uuid4())
-                    # task_id 留空：a2a-sdk 服务端要求若指定 task_id 则该 task 必须已存在，
-                    # 否则抛 TaskNotFoundError；让服务端自动创建新 task。
+                    # task_id 留空：a2a-sdk 服务端要求若指定 task_id
+                    # 则该 task 必须已存在，否则抛 TaskNotFoundError；
+                    # 让服务端自动创建新 task。
                     from a2a.types import Role
+
                     message = _make_text_message(
                         query, context_id, "", role=Role.ROLE_USER
                     )
                     request = SendMessageRequest(message=message)
+
                     # send_message 返回流式 AsyncIterator[StreamResponse]，
                     # 取第一个响应；外层用 asyncio.wait_for 兜底超时
-                    async def _consume_response():
+                    async def _consume_response(client=client, request=request):
                         async for resp in client.send_message(request):
                             return resp
                         return None
@@ -297,29 +385,37 @@ class Orchestrator:
                         timeout=timeout_seconds,
                     )
 
-                    # StreamResponse.payload oneof: message | task | status_update | artifact_update
+                    # StreamResponse.payload oneof:
+                    # message | task | status_update | artifact_update
                     if response and response.message and response.message.parts:
                         return "\n".join(
                             p.text for p in response.message.parts if p.text
                         )
                     return None
 
-            except _asyncio.TimeoutError:
+            except TimeoutError:
                 last_error = f"timeout after {timeout_seconds}s"
                 logger.warning(
                     "A2A delegate timeout (attempt %d/%d) url=%s",
-                    attempt, max_retries, url,
+                    attempt,
+                    max_retries,
+                    url,
                 )
             except Exception as e:
                 last_error = str(e)[:100]
                 # 业务错误（如 4xx）不重试，仅网络/超时重试
                 err_str = str(e).lower()
-                if any(x in err_str for x in ["400", "401", "403", "404", "validation"]):
+                if any(
+                    x in err_str for x in ["400", "401", "403", "404", "validation"]
+                ):
                     logger.error("A2A delegate business error (no retry): %s", e)
                     return None
                 logger.warning(
                     "A2A delegate error (attempt %d/%d) url=%s: %s",
-                    attempt, max_retries, url, e,
+                    attempt,
+                    max_retries,
+                    url,
+                    e,
                 )
 
             # 还有重试机会则等待
@@ -329,47 +425,97 @@ class Orchestrator:
 
         logger.error(
             "A2A delegate failed after %d retries (url=%s): %s",
-            max_retries, url, last_error,
+            max_retries,
+            url,
+            last_error,
         )
         return None
 
-    async def _delegate_local(self, agent_id: str, query: str) -> Optional[str]:
+    async def _delegate_local(self, agent_id: str, query: str) -> str | None:
         """本地委托（fallback）"""
         if agent_id == "performance_expert":
             from src.protocols.perf_agent import diagnose_performance_issue
+
             return diagnose_performance_issue(query)
         elif agent_id == "security_expert":
             from src.protocols.security_agent import perform_security_audit
+
             return perform_security_audit(query)
         elif agent_id == "customer_service":
             from src.agent.tools import search_knowledge_base
+
             return search_knowledge_base(query)
         return None
 
     async def orchestrate(self, query: str) -> dict:
-        """完整编排流程：路由 + 委托 + 聚合
+        """完整编排流程：路由 + 并行委托 + 聚合
+
+        协调效率优化点：
+        - 对 route_request 命中的全部专家 Agent 用 asyncio.gather 并行委托，
+          而非只取 best_match 串行处理，把「多专家协同」真正落地。
+        - 每个 agent 委托互相独立、可并发；单个 agent 失败/超时不影响其他（异常隔离）。
+        - 仅 1 个 agent 命中时，final_response 取该 agent 回复，
+          行为与旧版一致（向后兼容）。
 
         Args:
             query: 用户查询
 
         Returns:
-            包含路由结果和各 Agent 响应的字典
+            包含路由结果、各 Agent 响应、聚合最终回复的字典
         """
         routing = await self.route_request(query)
-        responses = {}
+        responses: dict = {}
 
-        if routing["matched_agents"]:
-            best_match = routing["best_match"]
-            logger.info("Routing query to %s", best_match)
-            response = await self.delegate_to_agent(best_match, query)
-            responses[best_match] = response or "No response"
+        matched = routing.get("matched_agents", [])
+        if matched:
+            # 并行委托所有命中 agent（各自独立、可并发）
+            tasks = [self.delegate_to_agent(a["agent_id"], query) for a in matched]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for agent_meta, res in zip(matched, results, strict=False):
+                aid = agent_meta["agent_id"]
+                if isinstance(res, Exception):
+                    logger.error("Delegate %s raised: %s", aid, res)
+                    responses[aid] = "No response"
+                else:
+                    responses[aid] = res or "No response"
+
+        final_response = self._aggregate_responses(routing, responses)
 
         return {
             "query": query,
             "routing": routing,
             "responses": responses,
-            "final_response": list(responses.values())[0] if responses else None,
+            "final_response": final_response,
+            # 参与本次协调的 agent 列表（可观测 / 排查用）
+            "coordinated_agents": list(responses.keys()),
         }
+
+    @staticmethod
+    def _aggregate_responses(routing: dict, responses: dict) -> str | None:
+        """将多专家响应聚合为最终回复。
+
+        - 仅 1 个 agent 命中：直接返回该 agent 的回复（向后兼容旧版语义）
+        - 多个 agent 命中：按路由优先级顺序拼接各 agent 结论并标注来源
+        """
+        if not responses:
+            return None
+
+        best = routing.get("best_match")
+        if best and best in responses and len(responses) == 1:
+            return responses[best]
+
+        ordered = routing.get("matched_agents", [])
+        parts = []
+        for a in ordered:
+            aid = a["agent_id"]
+            if aid in responses:
+                name = a.get("name", aid)
+                parts.append(f"【{name}】\n{responses[aid]}")
+        return (
+            "\n\n".join(parts)
+            if parts
+            else (list(responses.values())[0] if responses else None)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +574,7 @@ def _build_orchestrator_agent_card():
     if ORCHESTRATOR_AGENT_CARD is not None:
         return ORCHESTRATOR_AGENT_CARD
 
-    from a2a.types import AgentCard, AgentCapabilities, AgentSkill, AgentInterface
+    from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
 
     ORCHESTRATOR_AGENT_CARD = AgentCard(
         name="Orchestrator Agent",
@@ -470,7 +616,9 @@ def _build_orchestrator_agent_card():
 def _make_text_message(text: str, context_id: str, task_id: str, role=None):
     """Create a Message with a text Part (a2a-sdk 1.1.x compatible)"""
     from uuid import uuid4
+
     from a2a.types import Message, Part, Role
+
     return Message(
         message_id=str(uuid4()),
         role=role if role is not None else Role.ROLE_AGENT,
@@ -514,9 +662,7 @@ class OrchestratorExecutor:
             final_response = f"Orchestrator error: {str(e)}"
 
         await event_queue.enqueue_event(
-            _make_text_message(
-                final_response, context.context_id, context.task_id
-            )
+            _make_text_message(final_response, context.context_id, context.task_id)
         )
 
     async def cancel(self, context, event_queue) -> None:
@@ -535,18 +681,19 @@ def build_orchestrator_server(port: int = 9000):
         logger.warning("a2a-sdk not available, skipping orchestrator server build")
         return None
 
-    from fastapi import FastAPI
     from a2a.server.request_handlers import DefaultRequestHandler
-    from a2a.server.tasks import InMemoryTaskStore
     from a2a.server.routes import add_a2a_routes_to_fastapi
     from a2a.server.routes.agent_card_routes import create_agent_card_routes
     from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
     from a2a.server.routes.rest_routes import create_rest_routes
+    from a2a.server.tasks import InMemoryTaskStore
+    from fastapi import FastAPI
 
     card = _build_orchestrator_agent_card()
 
     # a2a-sdk 1.1.x 客户端直接用 AgentInterface.url 作为请求 URL（不拼接 base url），
-    # 故需把相对路径 "/" 补全为绝对 URL，否则客户端报 "Request URL is missing an 'http://' protocol"。
+    # 故需把相对路径 "/" 补全为绝对 URL，否则客户端报
+    # "Request URL is missing an 'http://' protocol"。
     for _iface in card.supported_interfaces:
         if _iface.url.startswith("/"):
             _iface.url = f"http://127.0.0.1:{port}{_iface.url}"
@@ -556,6 +703,10 @@ def build_orchestrator_server(port: int = 9000):
         description="A2A-compatible orchestrator agent — 多专家协调器",
         version="1.0.0",
     )
+
+    @app.get("/health")
+    async def health_check():
+        return {"status": "ok", "agent": "orchestrator"}
 
     handler = DefaultRequestHandler(
         agent_executor=OrchestratorExecutor(),
@@ -590,6 +741,7 @@ def build_orchestrator_server(port: int = 9000):
 async def main():
     """启动 Orchestrator Agent: python -m src.protocols.orchestrator_agent"""
     import argparse
+
     import uvicorn
 
     parser = argparse.ArgumentParser(description="Orchestrator Agent")
@@ -597,7 +749,10 @@ async def main():
     parser.add_argument("--register", action="store_true", help="Register to registry")
     args = parser.parse_args()
 
-    from src.protocols.agent_registry import register_default_agents, register_agent_card
+    from src.protocols.agent_registry import (
+        register_agent_card,
+        register_default_agents,
+    )
 
     if args.register:
         register_default_agents()
@@ -622,7 +777,9 @@ async def main():
     logger.info("Orchestrator Agent starting on http://localhost:%s", args.port)
     logger.info("Agent Card: http://localhost:%s/.well-known/agent.json", args.port)
 
-    config = uvicorn.Config(app, host="0.0.0.0", port=args.port, log_level="info")
+    # 本地 A2A server 需绑定全网卡供 docker 网络内其他容器访问
+    _host = "0.0.0.0"  # noqa: S104
+    config = uvicorn.Config(app, host=_host, port=args.port, log_level="info")
     server_instance = uvicorn.Server(config)
     await server_instance.serve()
 
