@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchApi, fetchJson, putJson, formatDate, formatDateShort } from './api'
 import type { CustomerItem, CustomerDetail, CustomerTimelineEvent } from './types'
-import { CUSTOMER_STATUSES } from './constants'
+import { CUSTOMER_STATUSES, customerStatusLabel, customerPlanLabel, sessionModeLabel, statusLabel } from './constants'
+import { EmptyState, IconUsers } from './ui'
 
 export function CustomersTab({ token, hasPermission }: { token: string; hasPermission: (p: string) => boolean }) {
   const [customers, setCustomers] = useState<CustomerItem[]>([])
@@ -120,9 +121,9 @@ export function CustomersTab({ token, hasPermission }: { token: string; hasPermi
           <div className="customer-profile">
             <div className="profile-avatar-large">{detail.customer.username.charAt(0).toUpperCase()}</div>
             <div className="customer-profile-info">
-              <h3>{detail.customer.username} <span className={`badge status-${detail.customer.status}`}>{detail.customer.status}</span></h3>
+              <h3>{detail.customer.username} <span className={`badge status-${detail.customer.status}`}>{customerStatusLabel(detail.customer.status)}</span></h3>
               <p className="profile-email">{detail.customer.user_id} {detail.customer.email ? `· ${detail.customer.email}` : ''}</p>
-              <p className="profile-meta">计划：{detail.customer.plan} · 会话：{detail.customer.session_count} · 工单：{detail.customer.ticket_count} · 满意度：{detail.customer.satisfaction_score ?? '-'}</p>
+              <p className="profile-meta">计划：{customerPlanLabel(detail.customer.plan)} · 会话：{detail.customer.session_count} · 工单：{detail.customer.ticket_count} · 满意度：{detail.customer.satisfaction_score ?? '-'}</p>
             </div>
           </div>
 
@@ -159,7 +160,7 @@ export function CustomersTab({ token, hasPermission }: { token: string; hasPermi
                   {detail.sessions.map(s => (
                     <li key={s.session_id} className="recent-item">
                       <span className="recent-item-title">{s.session_id.slice(0, 12)}</span>
-                      <span className="recent-item-meta">{s.mode} · {s.turn_count} 轮 · {formatDate(s.last_active)}</span>
+                      <span className="recent-item-meta">{sessionModeLabel(s.mode)} · {s.turn_count || 0} 轮 · {formatDate(s.last_active)}</span>
                     </li>
                   ))}
                 </ul>
@@ -172,7 +173,7 @@ export function CustomersTab({ token, hasPermission }: { token: string; hasPermi
                   {detail.tickets.map(t => (
                     <li key={t.id} className="recent-item">
                       <span className="recent-item-title">{t.title}</span>
-                      <span className="recent-item-meta"><span className={`badge status-${t.status}`}>{t.status}</span> · {formatDateShort(t.created_at)}</span>
+                      <span className="recent-item-meta"><span className={`badge status-${t.status}`}>{statusLabel(t.status)}</span> · {formatDateShort(t.created_at)}</span>
                     </li>
                   ))}
                 </ul>
@@ -235,7 +236,7 @@ export function CustomersTab({ token, hasPermission }: { token: string; hasPermi
         </div>
         {loading && <div className="admin-loading">加载客户...</div>}
         {error && <div className="admin-error">{error}</div>}
-        {!loading && !error && customers.length === 0 && <div className="sessions-placeholder"><p>暂无客户</p></div>}
+        {!loading && !error && customers.length === 0 && <EmptyState icon={<IconUsers />} title="暂无客户" desc="客户注册后将显示在此处" />}
         {!loading && !error && customers.length > 0 && (
           <div className="sessions-table-wrap">
             <table className="sessions-table">
@@ -254,8 +255,8 @@ export function CustomersTab({ token, hasPermission }: { token: string; hasPermi
                         </div>
                       </div>
                     </td>
-                    <td>{c.plan}</td>
-                    <td><span className={`badge status-${c.status}`}>{c.status}</span></td>
+                    <td>{customerPlanLabel(c.plan)}</td>
+                    <td><span className={`badge status-${c.status}`}>{customerStatusLabel(c.status)}</span></td>
                     <td>{c.tags.join(', ') || '-'}</td>
                     <td>{formatDateShort(c.last_seen_at)}</td>
                     <td>{c.session_count} / {c.ticket_count}</td>

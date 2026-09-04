@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { fetchJson, postJson } from './api'
 import { StatCard } from './StatCard'
 import type { HealthStatus } from './types'
+import { IconRefresh, IconHeart, IconWrench, DisabledButton, EmptyState, IconServer } from './ui'
 
 export function HealthTab({ token }: { token: string }) {
   const [status, setStatus] = useState<HealthStatus | null>(null)
@@ -86,7 +87,7 @@ export function HealthTab({ token }: { token: string }) {
           <span>每 10 秒自动刷新</span>
         </label>
         <button className="btn-secondary-small" onClick={load} disabled={refreshing}>
-          {refreshing ? '刷新中...' : '🔄 手动刷新'}
+          {refreshing ? '刷新中...' : <><IconRefresh /> 手动刷新</>}
         </button>
       </div>
 
@@ -94,7 +95,7 @@ export function HealthTab({ token }: { token: string }) {
       <div className="sessions-container" style={{ marginTop: 16 }}>
         <h3 className="detail-title">Agent 列表</h3>
         {status.agents.length === 0 ? (
-          <p className="hint">暂无注册 Agent</p>
+          <EmptyState icon={<IconServer />} title="暂无注册 Agent" desc="Agent 服务启动后将自动出现在此处" />
         ) : (
           <div className="health-agent-grid">
             {status.agents.map(a => (
@@ -134,16 +135,16 @@ export function HealthTab({ token }: { token: string }) {
                     onClick={() => handleHeartbeat(a.agent_id)}
                     disabled={actingAgent === a.agent_id}
                   >
-                    ❤️ 上报心跳
+                    <><IconHeart /> 上报心跳</>
                   </button>
-                  <button
+                  <DisabledButton
                     className="btn-secondary-small"
                     onClick={() => handleResetCircuit(a.agent_id)}
                     disabled={actingAgent === a.agent_id || a.circuit_state === 'closed'}
-                    title={a.circuit_state === 'closed' ? '熔断器正常，无需重置' : '重置熔断器'}
+                    disabledReason={a.circuit_state === 'closed' ? '熔断器正常，无需重置' : undefined}
                   >
-                    🔧 重置熔断
-                  </button>
+                    <IconWrench /> 重置熔断
+                  </DisabledButton>
                 </div>
               </div>
             ))}

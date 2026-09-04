@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchJson, postJson, putJson } from './api'
 import { StatCard } from './StatCard'
+import { IconRefresh } from './ui'
 import type { ConfigField, ConfigCategory, FeatureFlag } from './types'
 
 export function ConfigTab({ token, hasPermission }: { token: string; hasPermission: (p: string) => boolean }) {
@@ -134,7 +135,7 @@ export function ConfigTab({ token, hasPermission }: { token: string; hasPermissi
             </button>
           </>
         )}
-        <button className="btn-secondary-small" onClick={load}>🔄 刷新</button>
+        <button className="btn-secondary-small" onClick={load}><><IconRefresh /> 刷新</></button>
       </div>
 
       {tabMode === 'categories' && (

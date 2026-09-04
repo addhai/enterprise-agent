@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchJson, formatDate, formatDuration } from './api'
 import { StatCard } from './StatCard'
+import { EmptyState, IconActivity, IconClock, IconInbox } from './ui'
 import type { DashboardKpi, RealtimeActivity } from './types'
 
 export function DashboardTab({ token }: { token: string }) {
@@ -41,11 +42,11 @@ export function DashboardTab({ token }: { token: string }) {
         <StatCard label="今日新建" value={String(kpi.sessions.today_new)} />
         <StatCard label="待人工接入" value={String(kpi.sessions.waiting_human)} color="#f59e0b" />
         <StatCard label="人工服务中" value={String(kpi.sessions.human_chat)} color="#667eea" />
-        <StatCard label="AI 解决率" value={`${kpi.sessions.ai_resolution_rate}%`} color="#22c55e" />
-        <StatCard label="平均轮数" value={String(kpi.sessions.avg_turns)} color="#a855f7" />
+        <StatCard label="AI 解决率" value={kpi.sessions.ai_resolution_rate > 0 ? `${kpi.sessions.ai_resolution_rate}%` : '--'} color="#22c55e" />
+        <StatCard label="平均轮数" value={kpi.sessions.avg_turns > 0 ? String(kpi.sessions.avg_turns) : '--'} color="#a855f7" />
         <StatCard label="待处理工单" value={String(kpi.tickets.open)} color="#ef4444" />
         <StatCard label="未分配工单" value={String(kpi.tickets.unassigned)} color="#f97316" />
-        <StatCard label="满意度均分" value={String(kpi.satisfaction.avg_score)} color="#14b8a6" />
+        <StatCard label="满意度均分" value={kpi.satisfaction.avg_score > 0 ? String(kpi.satisfaction.avg_score) : '--'} color="#14b8a6" />
         <StatCard label="客户总数" value={String(kpi.customers.total)} />
         <StatCard label="今日活跃客户" value={String(kpi.customers.active_today)} />
       </div>
@@ -53,7 +54,7 @@ export function DashboardTab({ token }: { token: string }) {
       <div className="dashboard-section">
         <h3 className="dashboard-section-title">近 7 天会话趋势</h3>
         {kpi.sessions_week.length === 0 ? (
-          <p className="hint">暂无数据</p>
+          <EmptyState icon={<IconActivity />} title="暂无趋势数据" desc="会话产生后将显示近 7 天趋势" />
         ) : (
           <div className="trend-bars">
             {kpi.sessions_week.map(d => (
@@ -76,7 +77,7 @@ export function DashboardTab({ token }: { token: string }) {
         <div className="dashboard-panel">
           <h3 className="dashboard-section-title">最近活动</h3>
           {realtime.recent_sessions.length === 0 ? (
-            <p className="hint">暂无活动</p>
+            <EmptyState icon={<IconClock />} title="暂无最近活动" desc="会话产生后将出现在此处" />
           ) : (
             <ul className="recent-list">
               {realtime.recent_sessions.map(s => (
@@ -96,7 +97,7 @@ export function DashboardTab({ token }: { token: string }) {
             <span className="badge badge-warning">{realtime.waiting_count}</span>
           </h3>
           {realtime.waiting_queue.length === 0 ? (
-            <p className="hint">暂无等待</p>
+            <EmptyState icon={<IconInbox />} title="暂无等待接入" desc="当有用户请求人工客服时将显示在此处" />
           ) : (
             <ul className="recent-list">
               {realtime.waiting_queue.map(w => (

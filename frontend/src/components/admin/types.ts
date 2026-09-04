@@ -72,6 +72,7 @@ export interface TicketItem {
   id: string
   tenant_id: string
   user_id: string
+  user_name?: string
   title: string
   description: string
   category: string

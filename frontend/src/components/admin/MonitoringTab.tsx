@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { fetchJson } from './api'
 import { StatCard } from './StatCard'
 import type { MetricsAll, MetricsRisk, MetricsSystem } from './types'
+import { IconRefresh } from './ui'
 
 export function MonitoringTab({ token }: { token: string }) {
   const [all, setAll] = useState<MetricsAll | null>(null)
@@ -71,7 +72,7 @@ export function MonitoringTab({ token }: { token: string }) {
             <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
             <span>每 5 秒自动刷新</span>
           </label>
-          <button className="btn-secondary-small" onClick={load}>🔄 刷新</button>
+          <button className="btn-secondary-small" onClick={load}><><IconRefresh /> 刷新</></button>
         </div>
       </div>
 

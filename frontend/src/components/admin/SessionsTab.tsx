@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchApi, fetchJson, formatDate } from './api'
 import type { SessionItemData } from './types'
+import { sessionModeLabel } from './constants'
+import { EmptyState, IconMessage } from './ui'
 
 export function SessionsTab({ token }: { token: string }) {
   const [sessions, setSessions] = useState<SessionItemData[]>([])
@@ -53,10 +55,10 @@ export function SessionsTab({ token }: { token: string }) {
             <div className="session-detail-info">
               <p><strong>会话ID：</strong>{selectedSession.session_id}</p>
               <p><strong>用户ID：</strong>{selectedSession.user_id}</p>
-              <p><strong>模式：</strong>{selectedSession.mode}</p>
+              <p><strong>模式：</strong>{sessionModeLabel(selectedSession.mode)}</p>
               <p><strong>创建时间：</strong>{formatDate(selectedSession.created_at)}</p>
               <p><strong>最后活跃：</strong>{formatDate(selectedSession.last_active)}</p>
-              <p><strong>轮数：</strong>{selectedSession.turn_count}</p>
+              <p><strong>轮数：</strong>{selectedSession.turn_count ?? 0}</p>
             </div>
             {selectedSession.conversation_history && selectedSession.conversation_history.length > 0 && (
               <div className="session-messages">
@@ -85,7 +87,7 @@ export function SessionsTab({ token }: { token: string }) {
         <button className="refresh-btn" onClick={fetchSessions} disabled={loading}>刷新</button>
       </div>
       {loading && <div className="admin-loading">加载会话列表中...</div>}
-      {!loading && sessions.length === 0 && <div className="sessions-placeholder"><p>暂无会话数据</p></div>}
+      {!loading && sessions.length === 0 && <EmptyState icon={<IconMessage />} title="暂无会话" desc="会话产生后将显示在此处" />}
       {!loading && sessions.length > 0 && (
         <div className="sessions-table-wrap">
           <table className="sessions-table">
@@ -95,12 +97,12 @@ export function SessionsTab({ token }: { token: string }) {
             <tbody>
               {sessions.map(session => (
                 <tr key={session.session_id} className="session-row" onClick={() => fetchSessionDetail(session.session_id)}>
-                  <td className="session-id">{session.session_id}</td>
+                  <td className="session-id" title={session.session_id}>{session.session_id.slice(0, 8)}</td>
                   <td>{session.user_id}</td>
-                  <td><span className={`session-status ${session.mode}`}>{session.mode}</span></td>
+                  <td><span className={`session-status ${session.mode}`}>{sessionModeLabel(session.mode)}</span></td>
                   <td>{session.last_message_preview || '-'}</td>
                   <td>{formatDate(session.last_active)}</td>
-                  <td>{session.turn_count}</td>
+                  <td>{session.turn_count ?? 0}</td>
                   <td>
                     <button className="delete-row-btn" onClick={(e) => deleteSession(session.session_id, e)}>删除</button>
                   </td>

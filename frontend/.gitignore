@@ -13,6 +13,12 @@ dist-ssr
 dist-test
 *.local
 
+# Playwright E2E 产物（不入库）
+playwright-report/
+test-results/
+.playwright/
+node_modules/.cache
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

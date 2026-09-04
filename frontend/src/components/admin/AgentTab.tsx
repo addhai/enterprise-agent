@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { checkResponse, postJson, formatDuration } from './api'
 import type { Props, HandoffItem } from './types'
+import { IconRefresh, IconCheck, EmptyState, IconInbox } from './ui'
 
 export function AgentTab({ token, user }: { token: string; user: Props['user'] }) {
   const [handoffQueue, setHandoffQueue] = useState<HandoffItem[]>([])
@@ -66,7 +67,7 @@ export function AgentTab({ token, user }: { token: string; user: Props['user'] }
           <button className="back-btn" onClick={() => setSelectedHandoff(null)}>← 返回队列</button>
           <div className="handoff-detail-actions">
             {selectedHandoff.mode === 'waiting_human' && (
-              <button className="btn-primary-small" onClick={handleAccept} disabled={replying}>✅ 接入会话</button>
+              <button className="btn-primary-small" onClick={handleAccept} disabled={replying}><><IconCheck /> 接入会话</></button>
             )}
             {selectedHandoff.mode === 'human_chat' && (
               <button className="btn-secondary-small" onClick={handleClose} disabled={replying}>🔚 结束服务</button>
@@ -174,14 +175,11 @@ export function AgentTab({ token, user }: { token: string; user: Props['user'] }
           <h3>转接队列</h3>
           <p className="agent-subtitle">等待人工客服接入的会话</p>
         </div>
-        <button className="refresh-btn" onClick={fetchHandoffQueue} disabled={loading}>🔄 刷新</button>
+        <button className="refresh-btn" onClick={fetchHandoffQueue} disabled={loading}><><IconRefresh /> 刷新</></button>
       </div>
       {loading && <div className="admin-loading">加载转接队列中...</div>}
       {!loading && handoffQueue.length === 0 && (
-        <div className="sessions-placeholder">
-          <p>🎉 暂无转接请求</p>
-          <p className="hint">所有用户问题都已被 AI 成功解决</p>
-        </div>
+        <EmptyState icon={<IconInbox />} title="暂无转接请求" desc="当用户请求人工客服时，将出现在此队列中" />
       )}
       {!loading && handoffQueue.length > 0 && (
         <div className="handoff-list">

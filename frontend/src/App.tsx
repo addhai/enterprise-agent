@@ -58,7 +58,7 @@ function Navigation({
 
   return (
     <nav className="nav">
-      <a href="#hero" className="nav-brand">
+      <a href="#hero" className="nav-brand" data-testid="nav-brand">
         <div className="nav-logo">E</div>
         <span className="nav-title">Enterprise<span className="brand-highlight">AI</span></span>
       </a>
@@ -78,7 +78,7 @@ function Navigation({
 
         {user ? (
           <li className="nav-user-menu" ref={userMenuRef}>
-            <button className="nav-user" onClick={() => setUserMenuOpen(!userMenuOpen)}>
+            <button className="nav-user" onClick={() => setUserMenuOpen(!userMenuOpen)} data-testid="nav-user">
               <div className="nav-user-avatar">{getInitials(user.username)}</div>
               <span className="nav-user-name">{user.username}</span>
             </button>
@@ -104,14 +104,14 @@ function Navigation({
                 <button style={{ display: 'flex', width: '100%', gap: 8, padding: '8px 12px', border: 'none', background: 'none', fontSize: 13, color: '#ef4444', cursor: 'pointer', borderRadius: 'var(--radius-sm)' }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,0.06)')}
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
-                  onClick={() => { setUserMenuOpen(false); onLogout() }}>
+                  data-testid="nav-logout" onClick={() => { setUserMenuOpen(false); onLogout() }}>
                   退出登录
                 </button>
               </div>
             )}
           </li>
         ) : (
-          <li><button className="btn btn-ghost" onClick={(e) => { e.preventDefault(); onLoginClick() }}>登录</button></li>
+          <li><button className="btn btn-ghost" onClick={(e) => { e.preventDefault(); onLoginClick() }} data-testid="nav-login">登录</button></li>
         )}
         <li><a href="#chat" className="btn btn-primary nav-cta">开始使用</a></li>
       </ul>
@@ -631,7 +631,7 @@ function AuthModal({
           <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 8px' }}>快速入口：</p>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
             <button className="admin-quick-login-btn" onClick={handleAdminLogin} disabled={loading}>管理员登录</button>
-            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 16px' }} onClick={handleDemoLogin}>演示模式</button>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 16px' }} onClick={handleDemoLogin} data-testid="demo-login">演示模式</button>
           </div>
         </div>
       </div>
@@ -1090,7 +1090,7 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
           pointerEvents: 'none',
         }}
       >
-        <button
+        <button data-testid="chat-toggle"
           className="chat-toggle"
           style={{ pointerEvents: 'auto', cursor: 'grab' }}
           onMouseDown={(e) => handleDragStart(e, true)}
@@ -1105,6 +1105,7 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
 
         {isOpen && (
           <div
+            data-testid="chat-panel"
             className="chat-widget"
             style={{
               position: 'absolute',
@@ -1222,8 +1223,8 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
 
             <div className="chat-input-area">
               <div className="chat-input-row">
-                <input ref={inputRef} className="chat-input" type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="输入消息..." disabled={!connected} />
-                <button className="chat-send-btn" onClick={sendMessage} disabled={!input.trim() && !imagePreview && !audioPreview || !connected}>
+                <input ref={inputRef} className="chat-input" data-testid="chat-input" type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="输入消息..." disabled={!connected} />
+                <button className="chat-send-btn" data-testid="chat-send-btn" onClick={sendMessage} disabled={!input.trim() && !imagePreview && !audioPreview || !connected}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 2L11 13" /><path d="M22 2L15 22L11 13L2 9L22 2Z" /></svg>
                 </button>
               </div>
@@ -1308,8 +1309,8 @@ function App() {
     return () => observer.disconnect()
   }, [route])
 
-  // 管理后台路由：独立全屏页面
-  if (route === '/admin') {
+  // 管理后台路由：独立全屏页面（支持 #/admin 和 #/admin/<tab> 子路由）
+  if (route === '/admin' || route.startsWith('/admin/')) {
     return (
       <ThemeContext.Provider value={{ theme, toggleTheme }}>
         <AdminDashboard

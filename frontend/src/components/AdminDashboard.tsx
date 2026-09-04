@@ -3,30 +3,41 @@ import { ApiError } from './admin/api'
 import type { Props, RbacInfo, TabKey } from './admin/types'
 import { DashboardTab, TicketsTab, CustomersTab, SatisfactionTab, NotificationsTab, RbacTab, ChannelsTab, SessionsTab, AgentTab, HealthTab, MonitoringTab, ConfigTab, EvaluationTab, WorkflowTab, KnowledgeTab } from './admin'
 
-const TABS: { key: TabKey; label: string; permission: string }[] = [
-  { key: 'dashboard', label: '仪表盘', permission: 'dashboard:view' },
-  { key: 'tickets', label: '工单看板', permission: 'ticket:view' },
-  { key: 'customers', label: '客户管理', permission: 'customer:view' },
-  { key: 'satisfaction', label: '满意度', permission: 'satisfaction:view' },
-  { key: 'notifications', label: '通知中心', permission: 'notification:view' },
-  { key: 'rbac', label: '权限管理', permission: 'user:view' },
-  { key: 'channels', label: '渠道管理', permission: 'channel:view' },
-  { key: 'sessions', label: '会话管理', permission: 'agent:workspace' },
-  { key: 'agent', label: '人工坐席', permission: 'agent:workspace' },
-  { key: 'health', label: 'Agent 监控', permission: 'agent:workspace' },
-  { key: 'monitoring', label: '监控大屏', permission: 'monitor:view' },
-  { key: 'config', label: '配置中心', permission: 'config:view' },
-  { key: 'evaluation', label: '评估管理', permission: 'evaluation:view' },
-  { key: 'workflow', label: '工作流', permission: 'workflow:view' },
-  { key: 'knowledge', label: '知识库', permission: 'agent:workspace' },
+const TABS: { key: TabKey; label: string; permission: string; group: string }[] = [
+  { key: 'dashboard', label: '仪表盘', permission: 'dashboard:view', group: '概览' },
+  { key: 'tickets', label: '工单看板', permission: 'ticket:view', group: '业务运营' },
+  { key: 'customers', label: '客户管理', permission: 'customer:view', group: '业务运营' },
+  { key: 'satisfaction', label: '满意度', permission: 'satisfaction:view', group: '业务运营' },
+  { key: 'notifications', label: '通知中心', permission: 'notification:view', group: '业务运营' },
+  { key: 'sessions', label: '会话管理', permission: 'agent:workspace', group: 'AI 与 Agent' },
+  { key: 'agent', label: '人工坐席', permission: 'agent:workspace', group: 'AI 与 Agent' },
+  { key: 'knowledge', label: '知识库', permission: 'agent:workspace', group: 'AI 与 Agent' },
+  { key: 'health', label: 'Agent 监控', permission: 'agent:workspace', group: 'AI 与 Agent' },
+  { key: 'workflow', label: '工作流', permission: 'workflow:view', group: 'AI 与 Agent' },
+  { key: 'evaluation', label: '评估管理', permission: 'evaluation:view', group: 'AI 与 Agent' },
+  { key: 'monitoring', label: '监控大屏', permission: 'monitor:view', group: '系统管理' },
+  { key: 'rbac', label: '权限管理', permission: 'user:view', group: '系统管理' },
+  { key: 'channels', label: '渠道管理', permission: 'channel:view', group: '系统管理' },
+  { key: 'config', label: '配置中心', permission: 'config:view', group: '系统管理' },
 ]
+
+const TAB_GROUP_ORDER = ['概览', '业务运营', 'AI 与 Agent', '系统管理']
 
 export default function AdminDashboard({ user, token, onLoginClick, onBack }: Props) {
   const [rbac, setRbac] = useState<RbacInfo | null>(null)
   const [rbacLoading, setRbacLoading] = useState(false)
   const [rbacError, setRbacError] = useState('')
   const [loginRequired, setLoginRequired] = useState(false)
-  const [activeTab, setActiveTab] = useState<TabKey>('dashboard')
+  const [activeTab, setActiveTab] = useState<TabKey>(() => {
+    // 从 URL hash 读取初始 tab（支持 #/admin/tickets 深链）
+    const hash = window.location.hash
+    const match = hash.match(/^#\/admin\/(\w+)$/)
+    if (match) {
+      const key = match[1] as TabKey
+      if (TABS.find(t => t.key === key)) return key
+    }
+    return 'dashboard'
+  })
 
   useEffect(() => {
     setRbac(null)
@@ -62,11 +73,44 @@ export default function AdminDashboard({ user, token, onLoginClick, onBack }: Pr
 
   const visibleTabs = useMemo(() => TABS.filter(t => hasPermission(t.permission)), [hasPermission])
 
+  const groupedTabs = useMemo(() => {
+    const groups: { group: string; items: typeof TABS }[] = []
+    for (const g of TAB_GROUP_ORDER) {
+      const items = visibleTabs.filter(t => t.group === g)
+      if (items.length > 0) groups.push({ group: g, items })
+    }
+    return groups
+  }, [visibleTabs])
+
+  // 子页面路由：tab 切换时更新 URL hash，支持浏览器前进/后退导航
+  const handleTabChange = useCallback((key: TabKey) => {
+    setActiveTab(key)
+    const newHash = `#/admin/${key}`
+    if (window.location.hash !== newHash) {
+      window.location.hash = newHash
+    }
+  }, [])
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash
+      const match = hash.match(/^#\/admin\/(\w+)$/)
+      if (match) {
+        const key = match[1] as TabKey
+        if (TABS.find(t => t.key === key)) setActiveTab(key)
+      } else if (hash === '#/admin' || hash === '') {
+        setActiveTab('dashboard')
+      }
+    }
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
   useEffect(() => {
     if (visibleTabs.length > 0 && !visibleTabs.find(t => t.key === activeTab)) {
-      setActiveTab(visibleTabs[0].key)
+      handleTabChange(visibleTabs[0].key)
     }
-  }, [visibleTabs, activeTab])
+  }, [visibleTabs, activeTab, handleTabChange])
 
   const renderTabContent = () => {
     if (!token) return null
@@ -91,7 +135,7 @@ export default function AdminDashboard({ user, token, onLoginClick, onBack }: Pr
   }
 
   return (
-    <div className="admin-layout">
+    <div className="admin-layout" data-testid="admin-dashboard">
       <header className="admin-topbar">
         <div className="admin-topbar-left">
           <button className="admin-back-btn" onClick={onBack}>← 返回首页</button>
@@ -115,14 +159,20 @@ export default function AdminDashboard({ user, token, onLoginClick, onBack }: Pr
           <p className="section-label">Admin Dashboard</p>
           <h2 className="admin-title">管理后台</h2>
           <nav className="admin-tabs">
-            {visibleTabs.map(t => (
-              <button
-                key={t.key}
-                className={`tab-btn ${activeTab === t.key ? 'active' : ''}`}
-                onClick={() => setActiveTab(t.key)}
-              >
-                {t.label}
-              </button>
+            {groupedTabs.map(({ group, items }) => (
+              <div key={group} className="tab-group">
+                <div className="tab-group-label">{group}</div>
+                {items.map(t => (
+                  <button
+                    key={t.key}
+                    data-testid={`admin-tab-${t.key}`}
+                    className={`tab-btn ${activeTab === t.key ? 'active' : ''}`}
+                    onClick={() => handleTabChange(t.key)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
             ))}
           </nav>
         </aside>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { fetchApi, fetchJson, postJson, formatDate } from './api'
 import { StatCard } from './StatCard'
 import type { EvalDataset, EvalRun } from './types'
+import { IconRefresh, EmptyState, IconActivity } from './ui'
 
 export function EvaluationTab({ token, hasPermission }: { token: string; hasPermission: (p: string) => boolean }) {
   const [datasets, setDatasets] = useState<EvalDataset[]>([])
@@ -68,7 +69,7 @@ export function EvaluationTab({ token, hasPermission }: { token: string; hasPerm
           <button className={`tab-btn ${activeView === 'datasets' ? 'active' : ''}`} onClick={() => { setActiveView('datasets'); setSelectedDataset(null); setSelectedRun(null) }}>数据集</button>
           <button className={`tab-btn ${activeView === 'runs' ? 'active' : ''}`} onClick={() => { setActiveView('runs'); setSelectedDataset(null); setSelectedRun(null) }}>运行历史</button>
         </div>
-        <button className="btn-secondary-small" onClick={load}>🔄 刷新</button>
+        <button className="btn-secondary-small" onClick={load}><><IconRefresh /> 刷新</></button>
       </div>
 
       {activeView === 'datasets' && !selectedDataset && (
@@ -76,7 +77,7 @@ export function EvaluationTab({ token, hasPermission }: { token: string; hasPerm
           <h3 className="detail-title">评估数据集</h3>
           <div className="sessions-list">
             {datasets.length === 0 ? (
-              <div className="sessions-placeholder"><p>暂无数据集</p></div>
+              <EmptyState icon={<IconActivity />} title="暂无数据集" desc="创建评估数据集后将显示在此处" />
             ) : datasets.map(ds => (
               <div key={ds.id} className="session-item" style={{ display: 'block', padding: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -124,7 +125,7 @@ export function EvaluationTab({ token, hasPermission }: { token: string; hasPerm
           <h3 className="detail-title">评估运行历史</h3>
           <div className="sessions-list">
             {runs.length === 0 ? (
-              <div className="sessions-placeholder"><p>暂无运行记录</p></div>
+              <EmptyState icon={<IconActivity />} title="暂无运行记录" desc="运行评估后将显示记录" />
             ) : runs.map(run => (
               <div key={run.id} className="session-item" style={{ display: 'block', padding: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>

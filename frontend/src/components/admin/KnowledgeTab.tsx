@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchApi, fetchJson, postJson, formatDate } from './api'
 import type { Props, KBSetItem, KBDocItem, KBHitResult } from './types'
+import { EmptyState, IconBook, IconInbox } from './ui'
 
 export function KnowledgeTab({ token, user, hasPermission }: { token: string; user: Props['user']; hasPermission: (p: string) => boolean }) {
   const [kbs, setKbs] = useState<KBSetItem[]>([])
@@ -92,6 +93,7 @@ export function KnowledgeTab({ token, user, hasPermission }: { token: string; us
     try {
       await postJson(`/admin/knowledge/${kb.id}/reindex`, token, {})
       alert('已触发重建索引')
+      fetchList()
       if (selectedId === kb.id) fetchDocs(kb.id)
     } catch (err) {
       alert(err instanceof Error ? err.message : '操作失败')
@@ -105,6 +107,7 @@ export function KnowledgeTab({ token, user, hasPermission }: { token: string; us
       const fd = new FormData()
       fd.append('file', file)
       await fetchApi(`/admin/knowledge/${selectedId}/documents/upload`, token, { method: 'POST', body: fd })
+      fetchList()
       fetchDocs(selectedId)
     } catch (err) {
       alert(err instanceof Error ? err.message : '上传失败')
@@ -127,6 +130,7 @@ export function KnowledgeTab({ token, user, hasPermission }: { token: string; us
       if (docSourceType === 'text') payload.content = docText.trim()
       await postJson(`/admin/knowledge/${selectedId}/documents`, token, payload)
       setDocUrl(''); setDocText(''); setDocTitle('')
+      fetchList()
       fetchDocs(selectedId)
     } catch (err) {
       alert(err instanceof Error ? err.message : '添加失败')
@@ -140,6 +144,7 @@ export function KnowledgeTab({ token, user, hasPermission }: { token: string; us
     if (!confirm(`确认删除文档「${doc.title}」？`)) return
     try {
       await fetchApi(`/admin/knowledge/${selectedId}/documents/${doc.id}`, token, { method: 'DELETE' })
+      fetchList()
       fetchDocs(selectedId)
     } catch (err) {
       alert(err instanceof Error ? err.message : '删除失败')
@@ -213,7 +218,7 @@ export function KnowledgeTab({ token, user, hasPermission }: { token: string; us
 
       {loading && <div className="admin-loading">加载知识库...</div>}
       {error && <div className="admin-error">{error}</div>}
-      {!loading && !error && kbs.length === 0 && <div className="sessions-placeholder"><p>暂无知识库，点击「新建知识库」开始</p></div>}
+      {!loading && !error && kbs.length === 0 && <EmptyState icon={<IconBook />} title="暂无知识库" desc="点击「新建知识库」开始创建" />}
 
       {!loading && !error && kbs.length > 0 && (
         <div className="kb-grid">
@@ -282,7 +287,7 @@ export function KnowledgeTab({ token, user, hasPermission }: { token: string; us
 
           {docsLoading && <div className="admin-loading">加载文档...</div>}
           {docsError && <div className="admin-error">{docsError}</div>}
-          {!docsLoading && !docsError && docs.length === 0 && <div className="sessions-placeholder"><p>该知识库暂无文档，点「上传文档」添加</p></div>}
+          {!docsLoading && !docsError && docs.length === 0 && <EmptyState icon={<IconInbox />} title="暂无文档" desc="点击「上传文档」添加内容" />}
           {!docsLoading && !docsError && docs.length > 0 && (
             <div className="sessions-table-wrap">
               <table className="sessions-table">

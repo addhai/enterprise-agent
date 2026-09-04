@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { fetchApi, fetchJson, postJson, formatDate } from './api'
 import { StatCard } from './StatCard'
 import type { WorkflowInfo } from './types'
+import { IconRefresh } from './ui'
 
 export function WorkflowTab({ token, hasPermission }: { token: string; hasPermission: (p: string) => boolean }) {
   const [workflows, setWorkflows] = useState<WorkflowInfo[]>([])
@@ -95,7 +96,7 @@ export function WorkflowTab({ token, hasPermission }: { token: string; hasPermis
       </div>
 
       <div className="health-controls">
-        <button className="btn-secondary-small" onClick={load}>🔄 刷新</button>
+        <button className="btn-secondary-small" onClick={load}><><IconRefresh /> 刷新</></button>
       </div>
 
       {!selectedWf ? (

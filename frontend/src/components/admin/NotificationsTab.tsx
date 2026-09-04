@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchJson, postJson, formatDate } from './api'
 import type { NotificationItem } from './types'
+import { EmptyState, IconBell } from './ui'
 
 export function NotificationsTab({ token }: { token: string }) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
@@ -52,7 +53,7 @@ export function NotificationsTab({ token }: { token: string }) {
       </div>
       {loading && <div className="admin-loading">加载通知...</div>}
       {error && <div className="admin-error">{error}</div>}
-      {!loading && !error && notifications.length === 0 && <div className="sessions-placeholder"><p>暂无通知</p></div>}
+      {!loading && !error && notifications.length === 0 && <EmptyState icon={<IconBell />} title="暂无通知" desc="新通知将显示在此处" />}
       {!loading && !error && notifications.length > 0 && (
         <div className="notification-list">
           {notifications.map(n => (

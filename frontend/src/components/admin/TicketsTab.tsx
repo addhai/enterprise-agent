@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchJson, postJson, putJson, formatDate, formatDateShort } from './api'
 import type { Props, TicketItem } from './types'
-import { TICKET_STATUSES, TICKET_PRIORITIES } from './constants'
+import { TICKET_STATUSES, TICKET_PRIORITIES, statusLabel, priorityLabel } from './constants'
+import { EmptyState, IconTicket } from './ui'
 
 export function TicketsTab({ token, user, hasPermission }: { token: string; user: Props['user']; hasPermission: (p: string) => boolean }) {
   const [tickets, setTickets] = useState<TicketItem[]>([])
@@ -137,10 +138,10 @@ export function TicketsTab({ token, user, hasPermission }: { token: string; user
         <>
           <div className="detail-grid">
             <div><span className="detail-label">工单ID</span><span className="detail-value">{selected.id}</span></div>
-            <div><span className="detail-label">客户</span><span className="detail-value">{selected.user_id}</span></div>
+            <div><span className="detail-label">客户</span><span className="detail-value">{selected.user_name || selected.user_id}</span></div>
             <div><span className="detail-label">分类</span><span className="detail-value">{selected.category}</span></div>
-            <div><span className="detail-label">优先级</span><span className={`badge priority-${selected.priority}`}>{selected.priority}</span></div>
-            <div><span className="detail-label">状态</span><span className={`badge status-${selected.status}`}>{selected.status}</span></div>
+            <div><span className="detail-label">优先级</span><span className={`badge priority-${selected.priority}`}>{priorityLabel(selected.priority)}</span></div>
+            <div><span className="detail-label">状态</span><span className={`badge status-${selected.status}`}>{statusLabel(selected.status)}</span></div>
             <div><span className="detail-label">负责人</span><span className="detail-value">{selected.assignee || '-'}</span></div>
             <div><span className="detail-label">创建时间</span><span className="detail-value">{formatDate(selected.created_at)}</span></div>
             <div><span className="detail-label">标签</span><span className="detail-value">{selected.tags.join(', ') || '-'}</span></div>
@@ -228,7 +229,7 @@ export function TicketsTab({ token, user, hasPermission }: { token: string; user
         {loading && <div className="admin-loading">加载工单...</div>}
         {error && <div className="admin-error">{error}</div>}
         {!loading && !error && tickets.length === 0 && (
-          <div className="sessions-placeholder"><p>暂无工单</p></div>
+          <EmptyState icon={<IconTicket />} title="暂无工单" desc="工单创建后将显示在此处" />
         )}
         {!loading && !error && tickets.length > 0 && (
           <div className="sessions-table-wrap">
@@ -247,9 +248,9 @@ export function TicketsTab({ token, user, hasPermission }: { token: string; user
                 {tickets.map(t => (
                   <tr key={t.id} className={`session-row ${selected?.id === t.id ? 'selected' : ''}`} onClick={() => openDetail(t)}>
                     <td className="ticket-title">{t.title}</td>
-                    <td>{t.user_id}</td>
-                    <td><span className={`badge priority-${t.priority}`}>{t.priority}</span></td>
-                    <td><span className={`badge status-${t.status}`}>{t.status}</span></td>
+                    <td>{t.user_name || t.user_id.slice(0, 8)}</td>
+                    <td><span className={`badge priority-${t.priority}`}>{priorityLabel(t.priority)}</span></td>
+                    <td><span className={`badge status-${t.status}`}>{statusLabel(t.status)}</span></td>
                     <td>{t.assignee || '-'}</td>
                     <td>{formatDateShort(t.created_at)}</td>
                   </tr>

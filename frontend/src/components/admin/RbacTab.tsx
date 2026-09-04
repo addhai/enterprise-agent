@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { fetchJson, putJson, formatDate } from './api'
 import type { Props, RbacUser, RoleInfo } from './types'
 import { USER_STATUSES } from './constants'
+import { EmptyState, IconUsers } from './ui'
 
 export function RbacTab({ token, user, hasPermission }: { token: string; user: Props['user']; hasPermission: (p: string) => boolean }) {
   const [users, setUsers] = useState<RbacUser[]>([])
@@ -113,7 +114,7 @@ export function RbacTab({ token, user, hasPermission }: { token: string; user: P
       <h3 className="detail-title" style={{ marginTop: 20 }}>用户列表</h3>
       {loading && <div className="admin-loading">加载用户...</div>}
       {error && <div className="admin-error">{error}</div>}
-      {!loading && !error && users.length === 0 && <div className="sessions-placeholder"><p>暂无用户</p></div>}
+      {!loading && !error && users.length === 0 && <EmptyState icon={<IconUsers />} title="暂无用户" desc="添加用户后将显示在此处" />}
       {!loading && !error && users.length > 0 && (
         <div className="sessions-table-wrap">
           <table className="sessions-table">
