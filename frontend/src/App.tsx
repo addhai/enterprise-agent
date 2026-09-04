@@ -68,13 +68,13 @@ function Navigation({
         <li><a href="#architecture" className={activeSection === 'architecture' ? 'active' : ''} onClick={() => setActiveSection('architecture')}>架构</a></li>
         <li><a href="#details" className={activeSection === 'details' ? 'active' : ''} onClick={() => setActiveSection('details')}>技术细节</a></li>
         <li>
-          <button className="theme-toggle-btn" onClick={toggleTheme}
+          <button className="theme-toggle-btn" onClick={toggleTheme} data-testid="theme-toggle"
             title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
             aria-label="Toggle theme">
             {theme === 'light' ? '\u263E' : '\u2600'}
           </button>
         </li>
-        <li><button className="btn btn-ghost nav-admin-btn" onClick={(e) => { e.preventDefault(); onAdminClick() }}>管理后台</button></li>
+        <li><button className="btn btn-ghost nav-admin-btn" onClick={(e) => { e.preventDefault(); onAdminClick() }} data-testid="nav-admin">管理后台</button></li>
 
         {user ? (
           <li className="nav-user-menu" ref={userMenuRef}>
@@ -584,7 +584,7 @@ function AuthModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ position: 'relative' }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ position: 'relative' }} data-testid="auth-modal">
         <button className="modal-close" onClick={onClose}>&times;</button>
 
         <h2 className="modal-title">{activeTab === 'login' ? '欢迎回来' : '创建账号'}</h2>
