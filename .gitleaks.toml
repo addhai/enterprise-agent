@@ -11,11 +11,28 @@ title = "enterprise-agent secret scan"
 [extend]
 useDefault = true
 
+# ---- 单一 [allowlist] 块 ----
+# 重要：gitleaks 8.18 不支持 [[allowlist]] 多块写法（双中括号数组表会导致 allowlist
+# 整体不生效，扫描仍报 findings）。paths / regexes / commits 三个字段必须共置这一块，
+# 后续新增豁免条目一律往本块里加，勿拆分。
+
 [allowlist]
-description = "Known false positives: test fixtures and documentation samples (intentionally fake keys)"
+description = "enterprise-agent A1 audit allowlist (2026-09-03)"
 paths = [
   '''tests/fixtures/.*''',
   '''docs/.*''',
   '''delivery/.*''',
   '''data/.*''',
+]
+# APISIX admin key 为官方文档公开默认值（假密钥；本地/演示部署用，
+# 配置注释已标「生产环境务必修改」）
+regexes = [
+  '''edd1c9f034335f136f87ad84b625c8f1''',
+  '''edd1c9f034335f136f8f87ad84b625c8f1''',
+]
+# 历史 commit 中的 DashScope key：现行文件已清理，仅存在于以下 2 个历史 commit。
+# 处置 = 按应急手册吊销轮转（百炼控制台操作，见 docs/项目风险识别和应对方案.md 第 7 节）
+commits = [
+  "489edc5ee83014ed3bba14ae42882be6de0c6919",
+  "2256851531642debc29c2e730cd2cc83938aa34d",
 ]
