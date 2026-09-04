@@ -14,6 +14,9 @@ jobs:
   python-test:
     name: Tests + Coverage
     runs-on: ubuntu-latest
+    # 防挂死兜底：曾因 websocket 类测试挂死导致 Run tests 卡 4.5h
+    #（GitHub 默认 job 超时 6h，干等到超时太浪费时间），20 分钟足够跑完全量。
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -52,7 +55,10 @@ jobs:
             --cov=src --cov-report=term --cov-report=xml \
             -m "not integration" \
             --cov-fail-under=0 \
-            -W "ignore::DeprecationWarning"
+            -W "ignore::DeprecationWarning" \
+            --timeout=120 --timeout-method=thread
+          # --timeout=120（pytest-timeout）：单用例超 2 分钟即判失败并打印堆栈，
+          # 把「整个 job 挂死 4.5h」降级成「单个用例红 + 罪魁现身」，挂死可诊断。
 
       - name: Coverage gate
         # always(): 即使上一步用例失败，也报告当前覆盖率，便于一次性看清全貌
