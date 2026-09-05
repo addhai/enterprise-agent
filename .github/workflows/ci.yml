@@ -51,14 +51,24 @@ jobs:
           # --cov-fail-under=0 用于覆盖 pyproject.toml addopts 中的 40，
           # 避免覆盖率在此步提前触发失败、掩盖真正的用例失败。
           pytest tests/ \
+            -n 0 \
             -ra --tb=short \
             --cov=src --cov-report=term --cov-report=xml \
             -m "not integration" \
             --cov-fail-under=0 \
             -W "ignore::DeprecationWarning" \
-            --timeout=120 --timeout-method=thread
-          # --timeout=120（pytest-timeout）：单用例超 2 分钟即判失败并打印堆栈，
-          # 把「整个 job 挂死 4.5h」降级成「单个用例红 + 罪魁现身」，挂死可诊断。
+            --timeout=120 --timeout-method=signal
+          # -n 0：单进程跑，覆盖 pyproject.toml addopts 里的 -n auto（xdist 并行）。
+          #   根因：Starlette TestClient 内部靠 anyio portal + 后台线程驱动事件循环，
+          #   pytest-xdist 在 Linux 默认 fork，fork 后子进程丢失后台线程 → TestClient
+          #   的 websocket_connect / receive 永久阻塞（#77 pin pytest-asyncio<1.0 后稳定复现）。
+          #   单进程无 fork，从源头消除死锁；950 用例单进程仍远在 20min job 超时内。
+          # --timeout=120 --timeout-method=signal（pytest-timeout）：
+          #   signal 方法在 Linux 下用 SIGALRM 中断仍可能残留的挂死用例 → 标记 FAILED、
+          #   测试继续跑完，coverage.xml 正常生成，失败用例经 annotate 插件输出成
+          #   公开可读的 GitHub 注解，真正做到「罪魁现身」。
+          #   之前误用 thread 方法：超时会 os._exit(1) 直接杀 worker 进程，导致
+          #   coverage.xml 丢失、注解丢失，失败原因反而看不到（#79 即此症状）。
 
       - name: Coverage gate
         # always(): 即使上一步用例失败，也报告当前覆盖率，便于一次性看清全貌
