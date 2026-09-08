@@ -13,10 +13,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
-
-from src.api.server import app
 import src.websocket.routes as rt
+from fastapi.testclient import TestClient
+from src.api.server import app
 from src.websocket.session_manager import SessionMode
 
 
@@ -47,7 +46,11 @@ class FakeSM:
         self.preset_mode = preset_mode
 
     def create_session(self, session_id, user_id, tenant_id, mode=None):
-        m = self.preset_mode if self.preset_mode is not None else (mode or SessionMode.AI_CHAT)
+        m = (
+            self.preset_mode
+            if self.preset_mode is not None
+            else (mode or SessionMode.AI_CHAT)
+        )
         s = FakeSession(session_id, m, user_id, tenant_id)
         self.sessions[session_id] = s
         return s
@@ -102,7 +105,7 @@ def test_human_escalation_idempotent(monkeypatch, patch_globals):
         ready = ws.receive_json()
         sid = ready["session_id"]
         ws.send_text(
-            '{"type": "human_escalation", "session_id": "%s", "reason": "x"}' % sid
+            f'{{"type": "human_escalation", "session_id": "{sid}", "reason": "x"}}'
         )
         info = ws.receive_json()
         assert info["type"] == "info"
@@ -118,7 +121,7 @@ def test_chat_while_waiting_human(monkeypatch, patch_globals):
     client = _client()
     with client.websocket_connect("/ws/chat") as ws:
         ws.receive_json()  # session_ready
-        ws.send_text('{"type": "chat", "message": "还在吗"}')
+        ws.send_text('{"type": "chat_message", "message": "还在吗"}')
         info = ws.receive_json()
         assert info["type"] == "info"
         assert "转接" in (info.get("text") or "")
@@ -134,9 +137,8 @@ def test_chat_while_human_chat_forward(monkeypatch, patch_globals):
     monkeypatch.setattr(rt, "get_dispatcher", lambda: disp)
     client = _client()
     with client.websocket_connect("/ws/chat") as ws:
-        ready = ws.receive_json()
-        sid = ready["session_id"]
-        ws.send_text('{"type": "chat", "message": "我的问题还没解决"}')
+        ws.receive_json()  # session_ready
+        ws.send_text('{"type": "chat_message", "message": "我的问题还没解决"}')
         resp = ws.receive_json()
         assert resp["type"] == "message_received"
         assert resp.get("status") == "forwarded_to_agent"

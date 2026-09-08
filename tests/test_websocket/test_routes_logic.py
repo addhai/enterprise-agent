@@ -14,25 +14,15 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Optional
 
-import pytest
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage
-
 from src.api.server import app
-from src.websocket.protocol import (
-    TYPE_AGENT_SEND_REPLY,
-    TYPE_CLIENT_CHAT,
-    TYPE_CLIENT_HEARTBEAT,
-)
 from src.websocket.routes import (
     _build_citations,
     _handle_ai_chat,
     _resolve_ws_identity,
-    websocket_agent,
-    websocket_chat,
 )
 from src.websocket.session_manager import SessionMode, get_session_manager
 
@@ -48,9 +38,12 @@ except Exception:  # pragma: no cover
 
 
 class FakeWebSocket:
-    """记录 send_json 调用、可注入 query_params 的假 WebSocket（用于直接调用 handler）"""
+    """记录 send_json 调用、可注入 query_params 的假 WebSocket。
 
-    def __init__(self, token: Optional[str] = None):
+    用于直接调用 handler。
+    """
+
+    def __init__(self, token: str | None = None):
         self.sent: list = []
         self._token = token
 
@@ -104,7 +97,7 @@ class FakeDispatcher:
     def __init__(self):
         self.escalations = []
         self.replies = []
-        self.session_transfer: Optional[str] = None
+        self.session_transfer: str | None = None
         self.transfer_record = None
 
     async def handle_escalation(self, session_id, result, messages):
@@ -398,8 +391,8 @@ def test_chat_human_escalation(monkeypatch):
         ready = ws.receive_json()
         sid = ready["session_id"]
         ws.send_text(
-            '{"type": "human_escalation", "session_id": "%s", "reason": "user_requested"}'
-            % sid
+            f'{{"type": "human_escalation", "session_id": "{sid}", '
+            '"reason": "user_requested"}'
         )
         # 顺序：transfer_notice + handoff_context
         f1 = ws.receive_json()
@@ -426,7 +419,8 @@ def test_agent_connect_heartbeat_reply_logout(monkeypatch):
         assert ack["type"] == "heartbeat_ack"
         # 坐席回复用户
         ws.send_text(
-            '{"type": "agent_send_reply", "session_id": "s1", "text": "您好，马上为您处理"}'
+            '{"type": "agent_send_reply", "session_id": "s1", '
+            '"text": "您好，马上为您处理"}'
         )
         resp = ws.receive_json()
         assert resp["type"] == "agent_reply_ack"
@@ -541,7 +535,9 @@ async def test_handle_ai_chat_hitl_interrupt(monkeypatch):
 
     interrupt = SimpleNamespace(value={"tool": "mcp_xxx", "args": {}})
     task = SimpleNamespace(interrupts=[interrupt])
-    fake_app = FakeApp(_dispatch_result(), state_next=("__interrupt__",), state_tasks=[task])
+    fake_app = FakeApp(
+        _dispatch_result(), state_next=("__interrupt__",), state_tasks=[task]
+    )
     fake_tracker = FakeTracker()
     fake_disp = FakeDispatcher()
     fake_hitl = FakeHITL()
@@ -600,7 +596,8 @@ async def test_handle_ai_chat_multimodal_display(monkeypatch):
     )
     ws = FakeWebSocket()
     await _handle_ai_chat(
-        ws, sid, "看这张图", "u1", "t1", "free", mgr, image_base64="data:image/png;base64,AAAA"
+        ws, sid, "看这张图", "u1", "t1", "free", mgr,
+        image_base64="data:image/png;base64,AAAA",
     )
     # 先推送多模态识别结果展示块
     assert any("图片识别结果" in (f.get("text") or "") for f in ws.sent)
@@ -637,7 +634,7 @@ def test_chat_message_too_long(monkeypatch):
     client = _client()
     with client.websocket_connect("/ws/chat") as ws:
         ws.receive_json()  # session_ready
-        ws.send_text('{"type": "chat", "message": "%s"}' % ("x" * 2001))
+        ws.send_text('{"type": "chat_message", "message": "%s"}' % ("x" * 2001))
         err = ws.receive_json()
         assert err["type"] == "error"
         assert err["error_code"] == "MESSAGE_TOO_LONG"
