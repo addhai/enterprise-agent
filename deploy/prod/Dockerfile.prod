@@ -1,0 +1,79 @@
+# =============================================================================
+# Enterprise Agent - 生产镜像 Dockerfile
+#
+# 基于 P2-4 多阶段构建，增加：
+#   - 非 root 用户（uid 10001）
+#   - 健康检查命令（增强版 /api/health）
+#   - 生产依赖（无 dev 依赖）
+#   - OCI 标签
+#
+# 构建:  docker build -f deploy/prod/Dockerfile.prod -t enterprise-agent:prod .
+# =============================================================================
+
+# ---- Stage 1: Builder ----
+FROM python:3.10-slim AS builder
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install \
+    -r requirements.txt \
+    -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \
+    --prefer-binary
+
+# ---- Stage 2: Runtime ----
+FROM python:3.10-slim AS runtime
+
+LABEL org.opencontainers.image.title="enterprise-agent"
+LABEL org.opencontainers.image.description="Enterprise AI Customer Service Agent"
+LABEL org.opencontainers.image.version="1.0.0-rc.1"
+LABEL org.opencontainers.image.created="2026-09-12T19:00:00Z"
+LABEL org.opencontainers.image.source="https://github.com/addhai/enterprise-agent"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    PATH="/app/venv/bin:$PATH"
+
+WORKDIR /app
+
+# 依赖（仅运行时，无 dev 依赖）
+COPY --from=builder /install /app/venv
+
+# 应用代码
+COPY src/ src/
+COPY main.py .
+COPY scripts/ scripts/
+
+# 知识库文档（默认内置，可被 volume 覆盖）
+COPY data/docs/ data/docs/
+
+# 非 root 用户
+RUN mkdir -p /app/logs /app/chroma_data && \
+    useradd --create-home --uid 10001 appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 8000
+
+# 健康检查：增强版 /api/health（含依赖检查）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD python -c \
+    "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)" \
+    || exit 1
+
+CMD ["python", "-m", "uvicorn", "main:app", \
+     "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
