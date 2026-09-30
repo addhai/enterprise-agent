@@ -17,11 +17,18 @@ repos:
       - id: ruff-format
 
   # ---- gitleaks：密钥扫描（commit 前拦截，与 CI A1 门禁双保险）----
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.4
+  # 与上方 ruff 不同，这里用「本地预编译二进制」而非源码编译。
+  # 原因（2026-09-30 实测）：源码编译需完整 Go 工具链，本机未安装且
+  # 国际带宽受限（go.dev 下载 70MB 包超时）。改用官方 release 的 Windows
+  # 预编译二进制，版本与 CI 完全一致（v8.18.4），功能等价。
+  # 二进制位置：D:\Go\bin\gitleaks.exe（如需升级，替换该 exe 并同步改 rev 注释）
+  - repo: local
     hooks:
       - id: gitleaks
-        args: [--redact]
+        name: gitleaks (secret scan)
+        entry: D:/Go/bin/gitleaks.exe protect --staged --redact
+        language: system
+        pass_filenames: false
 
   # ---- 本地快测：仅在 push 前跑，不拖慢每次 commit ----
   # 跑「非集成 / 非 LLM」子集（与 CI 的 -m "not integration" 一致），
