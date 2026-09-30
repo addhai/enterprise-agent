@@ -85,16 +85,40 @@ class HybridRetriever:
         self._kb_weights_map: Dict[str, float] = self._parse_kb_weights(
             settings.kb_weights
         )
+        # 文档级权重表（按文件名加权，缓存到 _doc_weights_cache）
+        self._doc_weights_cache: Dict[str, float] = {}
 
         # 重排序器（懒加载，对齐阿里云百炼 + RAGFlow）
         self._reranker = None
-        self._rerank_enabled = settings.rerank_enabled
-        self._rerank_top_n = settings.rerank_top_n
+        # ⚠️ 不要在这里把 settings 的值拷进实例属性。
+        # 拷贝 = 构造时快照 = 假热更新：配置中心改了 rerank_enabled，行为不变。
+        # 正确做法是访问时读（见下面 _rerank_enabled / _rerank_top_n 两个 property）。
+        # 初始化失败闩锁：一旦重排序器创建失败就置位，避免每次检索都白跑一次
+        # 注定失败的初始化。置位后开关恒为关闭，需重启进程才能恢复（有意为之）。
+        self._rerank_init_failed = False
 
         logger.info("HybridRetriever initialized: backend=%s, rag_url=%s, rerank=%s",
                      self.backend,
                      self.rag_service_url if self.backend == "remote" else "N/A",
                      self._rerank_enabled)
+
+    @property
+    def _rerank_enabled(self) -> bool:
+        """重排序开关（每次访问都实时读配置）
+
+        为什么要用 property 而不是实例属性：
+            配置中心支持热更新 rerank_enabled。若在 __init__ 里拷贝成实例属性，
+            改配置后检索行为不变（假热更新），只能重启进程。这里读时取值，
+            改完立即生效。初始化失败闩锁优先：闩锁置位后恒为 False。
+        """
+        if getattr(self, "_rerank_init_failed", False):
+            return False
+        return bool(getattr(settings, "rerank_enabled", False))
+
+    @property
+    def _rerank_top_n(self) -> int:
+        """重排序返回条数（同样读时取值，理由同上）"""
+        return int(getattr(settings, "rerank_top_n", 5) or 5)
 
     @staticmethod
     def _parse_kb_weights(raw: str) -> Dict[str, float]:
@@ -118,6 +142,83 @@ class HybridRetriever:
         except (ValueError, TypeError):
             logger.warning("Invalid kb_weights config, ignored: %s", raw)
             return {}
+
+    def _get_doc_weights_map(self) -> Dict[str, float]:
+        """解析文档级权重表（settings.doc_weights，JSON 字符串 → dict）
+
+        与 _parse_kb_weights 的区别：
+            kb_weights    按知识库 id（kb_id）加权，粒度粗
+            doc_weights   按文档文件名（metadata["source"]）加权，粒度细
+        两者在 RRF 融合中相乘，共同决定最终分数。
+
+        为什么要缓存（_doc_weights_cache）：
+            每次检索都对同一份配置做 json.loads 是纯浪费；配置热更新由配置中心
+            负责，不走这里。缓存为空 dict 时才解析，非空直接返回同一对象，
+            调用方可依赖 `w1 is w2` 判断命中缓存。
+
+        权重范围与 kb_weights 一致（0.5~2.0），非法值截断。
+        未配置的文档由调用方按 1.0 兜底，本表只存显式配置项。
+        """
+        if self._doc_weights_cache:
+            return self._doc_weights_cache
+
+        raw = getattr(settings, "doc_weights", "")
+        if not raw or not str(raw).strip():
+            # 空配置：保持空 dict（调用方按 1.0 处理）
+            self._doc_weights_cache = {}
+            return self._doc_weights_cache
+
+        try:
+            import json
+
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                self._doc_weights_cache = {}
+                return self._doc_weights_cache
+            self._doc_weights_cache = {
+                str(k): max(0.5, min(2.0, float(v))) for k, v in data.items()
+            }
+        except (ValueError, TypeError):
+            logger.warning("Invalid doc_weights config, ignored: %s", raw)
+            self._doc_weights_cache = {}
+
+        return self._doc_weights_cache
+
+    def _get_doc_weight(self, doc: Document) -> float:
+        """获取单篇文档的权重（按 metadata["source"] 匹配）
+
+        未配置权重的文档默认 1.0（权重表为空时全部 1.0，等价于不加权）。
+        """
+        weights = self._get_doc_weights_map()
+        if not weights:
+            return 1.0
+        source = doc.metadata.get("source", "")
+        if not source:
+            return 1.0
+        return weights.get(source, 1.0)
+
+    def _source_chunk_cap(self) -> int:
+        """单个来源（同一文件）最多贡献多少条结果
+
+        取值规则（顺序即优先级）：
+            settings.retrieval_source_cap 存在且为正整数 → 原值
+            值 <= 0（0 会把结果整体截空，属配置事故）→ 夹到 1
+            值非数字 / 属性缺失 → 兜底默认 2
+        """
+        raw = getattr(settings, "retrieval_source_cap", 2)
+        try:
+            cap = int(raw)
+        except (ValueError, TypeError):
+            logger.warning(
+                "Invalid retrieval_source_cap=%r, fallback to 2", raw
+            )
+            return 2
+        if cap < 1:
+            logger.warning(
+                "retrieval_source_cap=%d 会把结果截空，已夹到 1", cap
+            )
+            return 1
+        return cap
 
     # ------------------------------------------------------------------
     # Milvus 懒加载 + 降级
@@ -514,22 +615,26 @@ class HybridRetriever:
     ) -> List[Tuple[Document, float]]:
         """Reciprocal Rank Fusion — 合并两组检索结果
 
-        多知识库权重（对齐阿里云百炼）：当文档 metadata 含 kb_id 且
-        kb_weights 配置了对应权重时，RRF 分数按权重调整（范围 0.5~2）。
-        相同 RRF 分数时，权重高的知识库结果优先返回。
+        权重体系（两级相乘）：
+            kb_weights   按知识库 id，范围 0.5~2，默认 1.0
+            doc_weights  按文档文件名，范围 0.5~2，默认 1.0
+        同一文档在两个通道（向量 + BM25）都命中时，分数自然累积，
+        因此高权重文档在多通道命中时优势更明显。
+
+        相同 RRF 分数时，权重高的结果优先返回。
         """
         scores = {}
         doc_map = {}
 
         for rank, (doc, _) in enumerate(vector_results):
             doc_id = doc.page_content[:100]
-            weight = self._get_kb_weight(doc)
+            weight = self._get_kb_weight(doc) * self._get_doc_weight(doc)
             scores[doc_id] = scores.get(doc_id, 0) + weight * 1.0 / (k + rank + 1)
             doc_map[doc_id] = doc
 
         for rank, (doc, _) in enumerate(bm25_results):
             doc_id = doc.page_content[:100]
-            weight = self._get_kb_weight(doc)
+            weight = self._get_kb_weight(doc) * self._get_doc_weight(doc)
             scores[doc_id] = scores.get(doc_id, 0) + weight * 1.0 / (k + rank + 1)
             doc_map[doc_id] = doc
 
@@ -583,7 +688,10 @@ class HybridRetriever:
                 "Reranker init failed (%s: %s), rerank disabled",
                 settings.rerank_provider, e,
             )
-            self._rerank_enabled = False
+            # 置闩锁而非赋值开关：_rerank_enabled 现在是读时取值的 property，
+            # 直接赋值会掩盖配置。闩锁让开关恒为 False，且语义清晰
+            # （初始化失败过，本次进程内不再重试）。
+            self._rerank_init_failed = True
             self._reranker = None
         return self._reranker
 
@@ -730,82 +838,113 @@ class HybridRetriever:
         results: List[Tuple[Document, float]],
         top_k: int,
     ) -> List[Tuple[Document, float]]:
-        """解决同一问题召回多个版本的冲突
+        """解决同一问题召回多个版本的冲突 + 单来源配额截断
 
-        处理策略：
-            1. 按 source（文件名）分组，识别同一文档的多个版本
-            2. 每组内按 version 字段排序（升序：旧→新）
-            3. 过滤 status="deprecated" 或 status="superseded" 的版本
-            4. 保留每组中最新的有效版本
-            5. 如果同一组有多个活跃版本 → 标记 conflict 并提示用户
+        处理顺序（重要，三步不可换位）：
+            第 1 步 版本消解：只对「真的有多个版本号」的 source 生效。
+                    同一篇文档的多个 chunk 不是版本，必须全部保留。
+            第 2 步 来源配额：单个 source 最多贡献 _source_chunk_cap() 条，
+                    避免一篇长文档占满 top_k、把其他来源挤出上下文。
+            第 3 步 保序截断：保持入参的相关性顺序，最后按 top_k 截断。
+
+        历史缺陷（2026-10-01 修复）：
+            原实现把「同一 source 的多个 chunk」当成「同一文档的多个版本」，
+            于是 manual.md 的 3 个片段只保留 1 个。判定依据是 _extract_versions
+            对无 version 元数据的 chunk 也会生成记录（version_str 为空、
+            sort_key=0），len(versions) > 1 就误入版本冲突分支。
+            真实场景下这会让长文档的相邻片段（参数表在前、状态码说明在后）
+            只进来一条，答案缺关键事实。
         """
         if not results:
             return results
 
-        # 按 source 分组
-        groups: Dict[str, List[Tuple[Document, float]]] = {}
-        for doc, score in results:
-            source = doc.metadata.get("source", "unknown")
-            if source not in groups:
-                groups[source] = []
-            groups[source].append((doc, score))
+        # ---- 第 1 步：版本消解 ----
+        # 只有「同一 source 出现多个不同版本号」才算版本冲突。
+        # 判定标准是版本号去重后 > 1，而非 chunk 数 > 1。
+        resolved = self._dedupe_versions(results)
 
-        resolved = []
+        # ---- 第 2 步：来源配额 ----
+        cap = self._source_chunk_cap()
+        per_source_count: Dict[str, int] = {}
+        capped: List[Tuple[Document, float]] = []
+        for doc, score in resolved:
+            source = doc.metadata.get("source", "unknown")
+            n = per_source_count.get(source, 0)
+            if n >= cap:
+                continue
+            per_source_count[source] = n + 1
+            capped.append((doc, score))
+
+        # ---- 第 3 步：保序 + top_k ----
+        return capped[:top_k]
+
+    def _dedupe_versions(
+        self,
+        results: List[Tuple[Document, float]],
+    ) -> List[Tuple[Document, float]]:
+        """按 source 消解版本冲突，同时保持全局相关性顺序
+
+        返回顺序与入参一致（仅剔除被判定为「旧版本/废弃版本」的项）。
+        无版本号的 chunk 一律保留。
+        """
+        from collections import defaultdict
+
+        # 按 source 收集，用于判断哪些 source 存在真实版本冲突
+        groups: Dict[str, List[Tuple[Document, float]]] = defaultdict(list)
+        for doc, score in results:
+            groups[doc.metadata.get("source", "unknown")].append((doc, score))
+
+        # 每个 source：决定哪些 doc 要剔除
+        drop_ids: set = set()
         conflict_warnings: List[str] = []
 
         for source, group_docs in groups.items():
-            # 提取版本号
             versions = self._extract_versions(group_docs)
-
-            if len(versions) <= 1:
-                # 只有一个版本，直接保留
-                resolved.extend(group_docs)
+            # 版本号去重后仍 <= 1 → 没有版本冲突，全部保留
+            distinct_versions = {v["version"] for v in versions}
+            if len(distinct_versions) <= 1:
                 continue
 
-            # 按版本排序（升序）
             sorted_versions = self._sort_versions(versions)
-
-            # 过滤废弃版本
-            active_versions = [
+            active = [
                 v for v in sorted_versions
                 if v["status"] not in ("deprecated", "superseded", "archived")
             ]
 
-            if not active_versions:
-                # 所有版本都废弃了，保留最新的废弃版本（作为参考）
-                resolved.append(sorted_versions[-1]["doc_tuple"])
+            if not active:
+                # 全部废弃：保留最新的废弃版本作参考，其余剔除
+                keep = sorted_versions[-1]["doc_tuple"]
                 conflict_warnings.append(
                     f"警告：文档 {source} 的所有版本均已废弃，仅供参考"
                 )
-                continue
+            else:
+                keep = active[-1]["doc_tuple"]
+                if len(active) > 1:
+                    latest_ver = active[-1].get("version", "latest")
+                    other_vers = [
+                        v.get("version", f"v{i}")
+                        for i, v in enumerate(active[:-1])
+                    ]
+                    conflict_warnings.append(
+                        f"冲突：文档 {source} 有多个活跃版本 "
+                        f"({', '.join(other_vers)})，已选择最新版本 {latest_ver}。"
+                        f"请确认是否需要切换到其他版本。"
+                    )
 
-            # 保留最新的活跃版本
-            latest = active_versions[-1]
-            resolved.append(latest["doc_tuple"])
+            for doc, _score in group_docs:
+                if doc is not keep[0]:
+                    drop_ids.add(id(doc))
 
-            # 如果有多个活跃版本 → 冲突
-            if len(active_versions) > 1:
-                latest_ver = latest.get("version", "latest")
-                other_vers = [
-                    v.get("version", f"v{i}")
-                    for i, v in enumerate(active_versions[:-1])
-                ]
-                conflict_warnings.append(
-                    f"冲突：文档 {source} 有多个活跃版本 "
-                    f"({', '.join(other_vers)})，已选择最新版本 {latest_ver}。"
-                    f"请确认是否需要切换到其他版本。"
-                )
+        kept = [(d, s) for d, s in results if id(d) not in drop_ids]
 
-        # 附加冲突警告到第一个结果的 metadata
-        if conflict_warnings:
-            if resolved:
-                resolved[0][0].metadata["version_conflicts"] = conflict_warnings
-                resolved[0][0].metadata["has_conflicts"] = True
-                logger.warning(
-                    "Version conflicts detected: %s", conflict_warnings
-                )
+        if conflict_warnings and kept:
+            kept[0][0].metadata["version_conflicts"] = conflict_warnings
+            kept[0][0].metadata["has_conflicts"] = True
+            logger.warning(
+                "Version conflicts detected: %s", conflict_warnings
+            )
 
-        return resolved[:top_k]
+        return kept
 
     def _extract_versions(
         self, docs: List[Tuple[Document, float]]

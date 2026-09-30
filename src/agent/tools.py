@@ -874,8 +874,26 @@ def create_tools(
             from src.config import settings
 
             top_k = int(getattr(settings, "retrieval_top_k", 5) or 5)
+
+            # 同义词扩展（query_rewriter）：把口语化提问扩成检索友好的词表。
+            # 为什么需要：LLM 生成的检索词有时仍是用户原话（「激光定位灯不亮」），
+            #   而知识库里写的是「激光模组」「指示灯」；直接检索命中率低。
+            # 为什么放在这里：这是全项目唯一的检索入口，接在这里才算真正生效
+            #   （模块此前只被单测引用，生产链路从未调用，属「写了没接线」）。
+            # 失败不影响检索：改写是纯规则表计算，异常时用原 query 兜底。
+            search_query = query
+            if getattr(settings, "rewrite_enabled", True):
+                try:
+                    from src.rag.query_rewriter import rewrite_query
+
+                    search_query = rewrite_query(query) or query
+                    if search_query != query:
+                        logger.debug("查询改写: %r → %r", query, search_query)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("查询改写失败，使用原始查询：%s", e)
+
             results = retriever.search(
-                query,
+                search_query,
                 top_k=top_k,
                 user_id=user_id,
                 tenant_id=tenant_id,

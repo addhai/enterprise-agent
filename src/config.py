@@ -82,10 +82,27 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 5
     retrieval_rerank_top_n: int = 3
     retrieval_min_tokens: int = 200  # 最小检索 token 数，低于此值标记低置信度
+    # 单篇文档最多贡献多少条结果（来源配额）
+    # 目的：避免一份长文档（拆成几十个 chunk）占满 top_k，把其他来源挤出上下文。
+    # 设为 0 或负数会把结果整体截空，属配置事故，运行时夹到 1。
+    retrieval_source_cap: int = 2
+    # 文档级权重 JSON，如 {"产品规格书.md":1.3}，范围 0.5~2.0，参与 RRF 分数加权
+    # 与 kb_weights（按知识库）是两个维度：本项按具体文档文件加细粒度权重。
+    # 默认值体现工厂知识库的检索优先级：故障手册最具体（1.5），
+    # 产品规格次之（1.3），FAQ 泛化程度最高故降权（0.8）。可在 .env 覆盖。
+    doc_weights: str = (
+        '{"fault_troubleshooting_manual.md": 1.5, '
+        '"product_spec_manual.md": 1.3, '
+        '"faq_full.md": 0.8}'
+    )
     # 知识库配置（对齐阿里云百炼 AI 助理）
     kb_similarity_threshold: float = 0.2   # 相似度阈值 0.01~1，仅高于此值才召回（阿里云默认 0.2）
     kb_call_mode: str = "always"           # 调用模式：always 必定调用 / smart 智能调用（AI 自主判断）
     kb_weights: str = ""                   # 多知识库权重 JSON，如 {"kb_a":1.0,"kb_b":1.5}，范围 0.5~2
+    # 查询改写开关（口语化提问 → 检索友好查询）
+    # 开启后对用户输入做同义词扩展/指代消解，提升召回；代价是多一次处理开销。
+    # 默认开启：改写是纯规则表计算（不调 LLM），开销极低而召回收益明确。
+    rewrite_enabled: bool = True           # 是否启用查询改写（默认开启）
     # 重排序配置（对齐阿里云百炼 + RAGFlow）
     rerank_enabled: bool = False           # 是否启用重排序（默认关闭，开启后检索准确率提升 10-20%）
     rerank_provider: str = "dashscope"     # Provider: dashscope(阿里云gte-rerank) / local_bge(BGE本地) / llm(LLM降级)
@@ -242,6 +259,10 @@ class Settings(BaseSettings):
     a2a_orchestrator_url: str = "http://localhost:9000"      # Orchestrator Agent
     a2a_orchestrator_enabled: bool = True
     a2a_expert_timeout: int = 120                             # A2A 委托超时秒数（cs 调 LLM 较慢）
+    # Agent Card 缓存 TTL（秒）。Card 属服务发现元数据，极少变化，
+    # 每个 RAG 工具循环都重拉会造成冗余 HTTP 往返与对象分配。
+    # 太短则缓存形同虚设，太长则专家 Agent 重启后地址变更不及时感知。
+    a2a_card_cache_ttl: float = 60.0
 
     # ---- 外部 MCP 消费配置（客服 Agent 作为 Client）----
     mcp_client_github_url: str = ""                           # GitHub MCP Server URL (如 http://localhost:9000/mcp)

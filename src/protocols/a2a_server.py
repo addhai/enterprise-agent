@@ -292,40 +292,67 @@ async def delegate_to_expert(
     from a2a.types import Message, Part, Role
     from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
 
+    # Agent Card + Client 缓存（进程级 TTL）
+    # 为什么需要：本函数在每个 RAG 工具循环里被反复调用，原先每次都做一次
+    #   HTTP 往返拉 Card + 新建 httpx 连接池。Card 是服务发现元数据，极少变化，
+    #   这部分开销纯属浪费。
+    # 注意与「模块写好但没接线」的教训相关：a2a_cache.py 早就写好了，
+    #   但这里从未引用它，缓存永不命中（测试 test_a2a_optimization 抓到）。
+    from src.protocols.a2a_cache import get_agent_card_cache
+
+    cache = get_agent_card_cache()
+    http_client = None
+
     try:
-        async with httpx.AsyncClient(timeout=timeout) as http_client:
-            # 1. 发现远程 Agent（拉取 Agent Card）
+        # ---- 1. 先查缓存 ----
+        cached_card, cached_client = await cache.get(expert_agent_url)
+        if cached_card is not None and cached_client is not None:
+            agent_card = cached_card
+            agent_client = cached_client
+            logger.debug("Agent Card 缓存命中: %s", expert_agent_url)
+        else:
+            # ---- 2. 未命中：拉 Card + 建持久 client 并写缓存 ----
+            # 用长生命周期 client（不放在 async with 里），否则退出即关闭，
+            # 缓存里存的 client 下次使用时已是 closed 状态。
+            http_client = httpx.AsyncClient(timeout=timeout)
             card_resolver = A2ACardResolver(http_client, expert_agent_url)
             agent_card = await card_resolver.get_agent_card()
+            config = ClientConfig(httpx_client=http_client)
+            factory = ClientFactory(config=config)
+            agent_client = factory.create(agent_card)
+            await cache.set(expert_agent_url, agent_card, agent_client)
             logger.info(
-                "Discovered expert agent: %s - %s",
+                "Discovered expert agent (cached): %s - %s",
                 agent_card.name,
                 agent_card.description,
             )
 
-            # 2. 创建 client 连接
-            config = ClientConfig(httpx_client=http_client)
-            factory = ClientFactory(config=config)
-            agent_client = factory.create(agent_card)
+        # ---- 3. 发送委托消息 ----
+        message = Message(
+            role=Role.ROLE_USER,
+            parts=[Part(text=query)],
+        )
 
-            # 3. 发送委托消息
-            message = Message(
-                role=Role.ROLE_USER,
-                parts=[Part(text=query)],
-            )
+        # ---- 4. 收集响应 ----
+        response_parts = []
+        async for event in agent_client.send_message(message):
+            if hasattr(event, "parts"):
+                for part in event.parts:
+                    if part.text:
+                        response_parts.append(part.text)
 
-            # 4. 收集响应
-            response_parts = []
-            async for event in agent_client.send_message(message):
-                if hasattr(event, "parts"):
-                    for part in event.parts:
-                        if part.text:
-                            response_parts.append(part.text)
-
-            return "\n".join(response_parts) if response_parts else None
+        return "\n".join(response_parts) if response_parts else None
 
     except Exception as e:
         logger.error("Failed to delegate to expert agent: %s", e)
+        # 本次新建的 client 在失败路径上要关掉，避免连接泄漏；
+        # 缓存中的 client 不关（由缓存管理其生命周期）。
+        # 关闭失败不影响返回，但要留日志痕迹，避免静默吞异常（S110）。
+        if http_client is not None:
+            try:
+                await http_client.aclose()
+            except Exception as close_err:  # noqa: BLE001
+                logger.debug("关闭临时 httpx client 失败：%s", close_err)
         return None
 
 
