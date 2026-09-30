@@ -50,11 +50,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # 导入所有加载器模块以触发 @register_loader 装饰器
+# 注意：这段 import 必须在 LoaderRegistry 定义之后，故触发 E402（模块级
+# import 不在文件顶部）。这是「导入即注册」模式的必然形态，非失误。
 from src.rag.loaders import markdown_loader  # noqa: F401
 from src.rag.loaders import pdf_loader  # noqa: F401
 from src.rag.loaders import html_loader  # noqa: F401
 from src.rag.loaders import docx_loader  # noqa: F401
 from src.rag.loaders import image_loader  # noqa: F401
+# text_loader：漏了这一行会让 .txt 无法上传（2026-09-30 修复）
+# 症状：LoaderRegistry 里没有 ".txt"，上传 txt 报「不支持的格式」。
+# text_loader.py 本身写好了类和装饰器，但装饰器只在模块被 import 时才执行，
+# 没有人 import 它 = 注册从未发生。与 config_center 未挂载是同一类断层。
+from src.rag.loaders import text_loader  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
 # 向后兼容：重新导出所有类型和工具函数
