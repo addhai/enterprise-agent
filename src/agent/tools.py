@@ -864,11 +864,19 @@ def create_tools(
             return "知识库当前不可用。请转人工客服。"
 
         try:
-            # top_k=5：技术文档答案常分散在相邻 chunk（如参数表在前、
-            # 状态码说明在后），召回过少会导致关键事实进不了 LLM 上下文
+            # top_k 走实时配置（默认 5）。为什么不能硬编码：
+            #   技术文档的答案常分散在相邻 chunk（参数表在前、状态码说明在后），
+            #   召回过少会让关键事实进不了 LLM 上下文，过多则挤占窗口。
+            #   这个权衡在不同工厂的文档结构下结论不同，必须让现场能在
+            #   配置中心里调（/api/v1/config/retrieval_top_k，改完即生效），
+            #   否则每次调整都要改代码重建镜像。
+            #   注意：这里用 getattr 实时读，而非启动时快照，热更新才有效。
+            from src.config import settings
+
+            top_k = int(getattr(settings, "retrieval_top_k", 5) or 5)
             results = retriever.search(
                 query,
-                top_k=5,
+                top_k=top_k,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 user_access_levels=checker.access_levels,

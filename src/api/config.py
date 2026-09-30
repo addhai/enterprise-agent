@@ -126,8 +126,25 @@ for cat in CONFIG_CATEGORIES.values():
 # ====================================================================
 
 def _is_sensitive(field_name: str) -> bool:
-    """判断字段是否敏感（需要脱敏）"""
-    return any(kw in field_name.lower() for kw in SENSITIVE_KEYWORDS)
+    """判断字段是否敏感（需要脱敏）
+
+    ⚠️ 规则唯一来源：src.config_center.schema.is_sensitive
+
+    历史问题（2026-09-30 修复）：此处曾用「子串匹配」
+        any(kw in field_name.lower() for kw in SENSITIVE_KEYWORDS)
+    把 llm_max_tokens / retrieval_min_tokens 误判为敏感字段——「tokens」里
+    含有「token」子串。后果是这两个纯容量参数在旧接口里被当成凭据脱敏，
+    而在新的配置中心里按普通参数直读直写，同一字段两套行为。
+
+    新版规则改为「按 _ 分段匹配」（token 只匹配独立词 token，不匹配 tokens），
+    既消除了容量参数的误判，也不放松任何真实凭据（jwt_secret / openai_api_key
+    / 各类 password·secret·token 字段实测仍全部判为敏感）。
+
+    保留 SENSITIVE_KEYWORDS 常量仅供向后兼容引用，判定逻辑一律走 schema。
+    """
+    from src.config_center.schema import is_sensitive as _schema_is_sensitive
+
+    return _schema_is_sensitive(field_name)
 
 
 def _get_field_type(field_name: str) -> type:

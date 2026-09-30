@@ -48,6 +48,7 @@ ROUTER_MODULES = [
     ("src.api.workflow", "workflow"),
     ("src.api.evaluation", "evaluation"),
     ("src.api.config", "config"),
+    ("src.api.config_center", "config_center"),
 ]
 
 # 安全关键路由：这些一旦消失，等于鉴权体系整体失效，必须硬性守住
@@ -94,6 +95,103 @@ def test_no_router_registration_errors():
     errors = getattr(app.state, "router_registration_errors", [])
     assert not errors, "以下 router 注册失败，其接口会全部 404：\n" + "\n".join(
         f"  - {name}: {msg}" for name, msg in errors
+    )
+
+
+def test_every_listed_router_is_actually_mounted():
+    """每个登记在案的 router 模块，其路由必须真实出现在 OpenAPI 里。
+
+    为什么需要这一条（2026-09-30 补充）：
+        上面两个测试存在一个共同的盲区。test_router_module_importable 只验证
+        「模块能被导入」，test_no_router_registration_errors 只验证「注册过程
+        没抛异常」。如果一个模块写好了却压根没写 include_router 那几行代码，
+        两件事都成立，测试全绿，但接口在线上是 404。
+
+        真实案例：src/api/config_center.py（1527 行，含 36 个单测）就处于
+        这种状态——模块能导入、注册无报错、守卫测试通过，但它从未被挂载。
+        直到 36 个接口测试全部 404 才被发现。
+
+        修法：这里不依赖 ROUTER_MODULES 的完整性，改为反向扫描——
+        把 src/api/ 下所有「定义了 router 变量」的模块与 OpenAPI 实际路径
+        做交叉验证，任何「有 router 但没挂载」的模块都会被点名。
+    """
+    import ast
+    from pathlib import Path
+
+    api_dir = Path(__file__).resolve().parents[2] / "src" / "api"
+    server_path = api_dir / "server.py"
+
+    # ---- 第一步：找出哪些模块定义了模块级 router 变量 ----
+    defines_router: list[str] = []
+    for py in sorted(api_dir.glob("*.py")):
+        if py.name.startswith("_") or py.name in {"server.py", "dependencies.py"}:
+            continue
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        # 形如 router = APIRouter(...)
+        defines_router.extend(
+            py.stem
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            for tgt in node.targets
+            if isinstance(tgt, ast.Name) and tgt.id == "router"
+        )
+
+    # ---- 第二步：找出 server.py 真正 include_router 了哪些模块 ----
+    # 关键：不能只匹配 import 语句。`import router as xxx` 这类别名写法会让
+    # 单纯的 import 检查永远为真，测试形同虚设（2026-09-30 反向验证踩坑）。
+    # 必须追踪「哪个 import 名来自哪个模块」→「哪个 import 名被 include_router 用」。
+    server_src = server_path.read_text(encoding="utf-8")
+    server_tree = ast.parse(server_src)
+
+    # import_name -> 来源模块（如 config_center_router -> config_center）
+    alias_to_module: dict[str, str] = {}
+    for node in ast.walk(server_tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            # 形如 from src.api.config_center import router as config_center_router
+            if not node.module.startswith("src.api."):
+                continue
+            mod = node.module[len("src.api.") :]
+            for a in node.names:
+                if a.name == "router":
+                    # 无别名时导入名就是 "router"（多个模块会互相覆盖，
+                    # 所以只认带别名或本模块独有的情况）
+                    alias_to_module[a.asname or "router"] = mod
+
+    # 被实际用于挂载的 import 名。必须同时识别两种挂载形式：
+    #   ① app.include_router(xxx_router, ...)      —— 主流写法
+    #   ② for route in xxx_router.routes: app.add_api_route(...)
+    #      —— monitoring.py 用的历史写法，等价但形态不同，只认 ① 会误报
+    used_names: set[str] = set()
+    for node in ast.walk(server_tree):
+        # 形式①：include_router(xxx_router)
+        if isinstance(node, ast.Call):
+            fn = node.func
+            is_include = (
+                isinstance(fn, ast.Attribute) and fn.attr == "include_router"
+            ) or (isinstance(fn, ast.Name) and fn.id == "include_router")
+            if is_include and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Name):
+                    used_names.add(first.id)
+        # 形式②：xxx_router.routes（for 循环遍历子路由）
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "routes"
+            and isinstance(node.value, ast.Name)
+        ):
+            used_names.add(node.value.id)
+
+    mounted = {alias_to_module[n] for n in used_names if n in alias_to_module}
+    missing = sorted(set(defines_router) - mounted)
+
+    assert not missing, (
+        "以下模块定义了 router 却从未在 src/api/server.py 挂载（或挂载后被注释），"
+        "其接口在线上会全部 404：\n"
+        + "\n".join(f"  - src/api/{m}.py" for m in missing)
+        + "\n  修法：在 server.py 中补 include_router，并在上方 ROUTER_MODULES 登记。"
     )
 
 

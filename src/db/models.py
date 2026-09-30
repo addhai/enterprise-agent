@@ -208,3 +208,37 @@ class LongTermMemoryDB(Base):
     timestamp = Column(DateTime, default=_utcnow)
     status = Column(String(32), default="active")
     access_count = Column(Integer, default=0)
+
+
+class ConfigAuditLog(Base):
+    """配置变更审计日志（src/config_center 的持久化落地表）
+
+    为什么需要这张表（2026-09-30 补建）：
+        src/config_center/audit.py 从建立起就在向本表写记录，但模型定义从未
+        被添加进来。init_db() 走 Base.metadata.create_all()，表不在 models.py
+        里就不会被创建，于是每一次审计写入都在 except 中被静默吞掉，只留一行
+        WARNING。配置能改能生效，变更历史却全部丢失——功能空转且极难察觉。
+
+    字段与 audit.py 的实际用法一一对应，不额外扩展：
+        record_change() 写入 / query_logs() 查询 / count_all() 计数 /
+        latest_timestamp() 取最近时间（供自检端点判断审计链路是否存活）
+
+    敏感值处理：old_value / new_value 在写入前已由 audit._serialize_value
+    按字段名脱敏（敏感字段只存 [REDACTED]），此处不再做二次处理。
+    """
+
+    __tablename__ = "config_audit_logs"
+
+    id = Column(String(64), primary_key=True)  # CFG-xxxxxxxxxxxx
+    tenant_id = Column(String(64), default="default", index=True)
+    config_key = Column(String(128), nullable=False, index=True)
+    # 脱敏后的值快照（敏感字段存 [REDACTED]，非敏感字段存字符串形式）
+    old_value = Column(Text, default="")
+    new_value = Column(Text, default="")
+    action = Column(String(32), default="update")  # update / reset
+    operator = Column(String(200), default="unknown", index=True)
+    operator_ip = Column(String(64), default="")
+    # 是否热生效（True=无需重启；False=需重启容器，用于排查「改了没反应」）
+    hot_applied = Column(Boolean, default=True)
+    source = Column(String(32), default="api")  # api / cli / test
+    created_at = Column(DateTime, default=_utcnow, index=True)

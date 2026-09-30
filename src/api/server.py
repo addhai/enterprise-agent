@@ -257,8 +257,17 @@ def create_app() -> FastAPI:
     # 注册监控路由
     try:
         from src.api.monitoring import router as monitoring_router
+
+        # 注意：这里逐个 add_api_route 而非 include_router，是历史写法。
+        # 效果等价（8 条 /api/v1/metrics/* 与 /monitoring/self-check 均已挂载），
+        # 但接线守卫测试需同时识别这两种形式，详见 test_app_wiring.py。
         for route in monitoring_router.routes:
-                app.add_api_route(f"/api/v1{route.path}", route.endpoint, methods=list(route.methods or ["GET"]), tags=route.tags)
+            app.add_api_route(
+                f"/api/v1{route.path}",
+                route.endpoint,
+                methods=list(route.methods or ["GET"]),
+                tags=route.tags,
+            )
         logger.info("Registered monitoring router")
     except Exception as e:
         _on_router_error("monitoring", e)
@@ -383,13 +392,26 @@ def create_app() -> FastAPI:
     except Exception as e:
         _on_router_error("evaluation", e)
 
-    # 注册配置中心路由
+    # 注册配置中心路由（旧版 /admin/config 接口，保留兼容）
     try:
         from src.api.config import router as config_router
         app.include_router(config_router, prefix="/api/v1", tags=["配置中心 Config"])
         logger.info("Registered config router")
     except Exception as e:
         _on_router_error("config", e)
+
+    # 注册运行时配置中心路由（Phase3 新增：热更新 + 审计 + 分类）
+    # 与上面的 config_router 是两套并存接口：
+    #   src/api/config.py        → 旧 /admin/config/*，保持不动以降风险
+    #   src/api/config_center.py → 新 /config/*，测试指向的就是这一套
+    try:
+        from src.api.config_center import router as config_center_router
+        app.include_router(
+            config_center_router, prefix="/api/v1", tags=["配置中心 Config Center"]
+        )
+        logger.info("Registered config_center router")
+    except Exception as e:
+        _on_router_error("config_center", e)
 
     # 注册静态文件（必须在所有路由之后，否则会拦截 /api 请求）
     #
