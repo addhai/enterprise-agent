@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage
 
+from src.config import settings
 from src.graph.state import AgentState
 from src.api.dependencies import get_workflow
 
@@ -84,7 +85,9 @@ async def chat(request: ChatRequest):
             user_roles=request.user_roles or [],
             user_plan=request.user_plan or "free",
             faq_match=None,
-            effective_max_turns=5,
+            # 每次请求重新读取，使 max_reasoning_turns 的热更新立即生效。
+            # 此处曾硬编码为 5，导致配置中心改了这个值也不起作用（假热更新）。
+            effective_max_turns=getattr(settings, "max_reasoning_turns", 5),
             has_reflected=False,
             memory_context="",
             quality_score=None,

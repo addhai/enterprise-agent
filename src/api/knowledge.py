@@ -37,6 +37,95 @@ router = APIRouter(tags=["knowledge"])
 
 
 # ====================================================================
+# 上传安全校验
+# ====================================================================
+
+# 单文件大小上限：与 src/mcp_tools/filesystem.py 的 _MAX_FILE_SIZE 保持一致。
+# 为什么要有上限：上传接口会把整个文件读进内存（await file.read()），
+# 没有上限时一个 2GB 的请求就能把进程内存打满（DoS）。
+_MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+def _safe_filename(raw_name: str) -> str:
+    """把用户提交的文件名洗成安全的纯文件名，阻断路径穿越。
+
+    修复的漏洞（2026-10-01）：
+        原实现直接 `os.path.join(upload_dir, file.filename)`。两种攻击面：
+          1. 相对穿越：filename = "../../../etc/passwd"
+             → 拼出 upload_dir/../../../etc/passwd，写到目录外。
+          2. 绝对路径覆盖：filename = "/etc/passwd"
+             → os.path.join 遇到绝对路径会丢弃前面所有段，直接写到 /etc/passwd。
+        这里只取 basename，并过滤 Windows 盘符与特殊目录名，
+        再做一次 resolve + relative_to 兜底断言，确保落在沙箱内。
+
+    返回：清洗后的文件名（非法输入回退到 "uploaded_doc"）。
+    """
+    # 统一分隔符后再取最后一段：Windows 客户端可能传 "..\\..\\evil.md"，
+    # 在 POSIX 上 os.path.basename 认不出反斜杠，所以先归一化。
+    name = (raw_name or "").replace("\\", "/").split("/")[-1]
+    # 去掉可能残留的父目录标记与盘符（如 "C:"）
+    name = name.replace("..", "").strip().strip(":")
+    # 前导点会让文件在 POSIX 上变成隐藏文件。剥前导点时要保住扩展名：
+    # "../../.md" 洗出来应是 ".md" 而不是被 lstrip 剥成 "md"（那样会丢掉后缀，
+    # 后续白名单校验就会误判为「无扩展名」而拒绝合法文件）。
+    stripped = name.lstrip(".")
+    if stripped != name:
+        # 原本有点，优先保住「点 + 扩展名」形态
+        name = "." + stripped if stripped else ""
+    if not name or name == ".":
+        return "uploaded_doc"
+    return name
+
+
+def _resolve_upload_path(upload_dir: str, safe_name: str) -> tuple[str, str]:
+    """把上传目录与已清洗的文件名解析成 (根目录, 目标路径)，并做归属校验
+
+    为什么单独抽成**同步**函数：
+        上传接口是 async 的，而路径绝对化会触发 ASYNC240（该规则禁止在
+        async 函数里调用 os.path / pathlib 的方法，意在防止阻塞式 IO）。
+        路径规范化本身是纯字符串运算、不阻塞，放进独立的同步函数既能表达
+        这一事实，又不必给整条链路引入 anyio.Path。
+
+    为什么用 realpath 而非 abspath：
+        realpath 会解析符号链接，防止攻击者先在 upload_dir 内建一个指向
+        外部的软链，再传文件把它写穿。abspath 不做这一步。
+
+    返回 (root_abs, target_abs)；调用方用 target_abs 是否落在 root_abs 下
+    做最终把关。
+    """
+    root_abs = os.path.realpath(upload_dir)
+    target_abs = os.path.realpath(os.path.join(root_abs, safe_name))
+    return root_abs, target_abs
+
+
+def _validate_upload_ext(filename: str) -> str:
+    """校验扩展名是否在白名单内，返回规范化扩展名（含点，小写）。
+
+    白名单唯一来源：LoaderRegistry.list_supported()。
+    为什么不另写一份常量清单：解析器注册表才是「系统真正能读哪些格式」的
+    事实源。另写一份必然与它漂移，出现「白名单放行但解析器不认识」的空洞。
+
+    不在白名单 → 抛 400，detail 必须含「不支持的文件类型」（前端与测试依赖此文案）。
+    """
+    # 延迟导入两件事：
+    #   src.rag.loader 模块（import 时才执行 @register_loader，注册表才非空）
+    #   LoaderRegistry 类本身
+    # 不在模块顶部导入：API 层启动时不该拉起全部解析器（含图像/PDF 的重依赖）。
+    import src.rag.loader  # noqa: F401  触发各 loader 模块的注册副作用
+    from src.rag.loaders import LoaderRegistry
+
+    ext = os.path.splitext(filename)[1].lower()
+    supported = set(LoaderRegistry.list_supported())
+    if ext not in supported:
+        allowed = "、".join(sorted(supported))
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {ext or '(无扩展名)'}；允许的格式: {allowed}",
+        )
+    return ext
+
+
+# ====================================================================
 # 数据模型
 # ====================================================================
 
@@ -531,14 +620,45 @@ async def upload_document_file(
     if kb is None:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
 
-    # 保存到本地临时目录
-    upload_dir = os.path.join(getattr(settings, "chroma_persist_dir", "./chroma_data"), "uploads", kb_id)
+    # ---- 校验 1：扩展名白名单（先做，无 IO 开销，且能挡住大部分恶意输入）----
+    # 注意顺序：必须在写盘之前。否则恶意文件已经落地才报错，
+    # 沙箱里会留下垃圾文件，而测试断言「upload_dir 外无新文件」也会因此失败。
+    safe_name = _safe_filename(file.filename or "")
+    _validate_upload_ext(safe_name)
+
+    # ---- 校验 2：大小限制 ----
+    # 先读进内存再判断大小是有意为之：UploadFile 的底层 spool 文件在
+    # `await file.read()` 之前 size 属性可能不准。这里的取舍是
+    # 「宁可多一次内存峰值，也不要漏判」，因为 10MB 上限本身已把峰值框住。
+    content = await file.read()
+    if len(content) > _MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"文件过大: {len(content) / 1024 / 1024:.1f}MB，"
+                f"超过限制 {_MAX_UPLOAD_SIZE / 1024 / 1024:.0f}MB"
+            ),
+        )
+
+    # ---- 保存到本地（路径已清洗，且落盘前做一次越界兜底断言）----
+    upload_dir = os.path.join(
+        getattr(settings, "chroma_persist_dir", "./chroma_data"), "uploads", kb_id
+    )
     os.makedirs(upload_dir, exist_ok=True)
-    save_path = os.path.join(upload_dir, file.filename or "uploaded_doc")
+    # 路径绝对化与归属校验放在同步函数里完成（见 _resolve_upload_path 的说明）
+    upload_root, target_path = _resolve_upload_path(upload_dir, safe_name)
+
+    # 兜底闸门：即使 _safe_filename 未来被改坏，这里也能拦住越界写入。
+    # 用 os.path.commonpath 判断归属，比字符串 startswith 更严谨：
+    # startswith 会被「同前缀的兄弟目录」绕过（如 /a/uploads2 命中 /a/uploads）。
+    if os.path.commonpath([upload_root, target_path]) != upload_root:
+        logger.warning(
+            "拦截疑似路径穿越的上传: filename=%r resolved=%s", file.filename, target_path
+        )
+        raise HTTPException(status_code=400, detail="文件名非法")
 
     try:
-        content = await file.read()
-        with open(save_path, "wb") as f:
+        with open(target_path, "wb") as f:
             f.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"文件保存失败: {e}")
@@ -547,8 +667,12 @@ async def upload_document_file(
         item = _ingest_document_internal(
             tenant_id=tenant_id,
             kb_id=kb_id,
-            file_path=save_path,
-            title=title or file.filename or "",
+            # 传字符串：下游会把它存进 KBItem.file_path（字段为字符串），
+            # 也会交给 os.path.splitext / loader，统一按字符串协议传递。
+            file_path=target_path,
+            # 用清洗后的 safe_name 做标题，与落盘文件名一致；
+            # 用原始 file.filename 会让展示名里带 "../../" 这类噪声。
+            title=title or safe_name,
             source_type="document",
             upload_method="single",
             kb=kb,
@@ -559,7 +683,7 @@ async def upload_document_file(
     _recount_kb(tenant_id, kb_id)
     logger.info(
         "Document uploaded: id=%s kb=%s filename=%s by=%s",
-        item.id, kb_id, file.filename, current_user.get("user_id"),
+        item.id, kb_id, safe_name, current_user.get("user_id"),
     )
     return {"success": True, "document": _kb_item_to_dict(item)}
 

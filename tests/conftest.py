@@ -134,3 +134,90 @@ def make_agent():
         )
 
     return _make
+
+
+# ---------------------------------------------------------------------------
+# REST /chat 链路打桩
+# ---------------------------------------------------------------------------
+# 背景（2026-10-01）：
+#     `POST /api/v1/chat` 会调 `src.api.routes.get_workflow()` 拿编译好的
+#     LangGraph 工作流，再 `app.invoke(...)` 真正跑一遍 Agent 编排。工作流构建时
+#     会初始化 LLM 客户端并向外发请求。测试环境无凭据时，这个请求会一直挂着
+#     （出网被丢包，不返回错误），表现为 pytest 进程卡死、被外部超时工具 SIGTERM。
+#
+#     此前那些用例只能标 `requires_llm` 跳过，等于「接口测了但永远不跑」。
+#     本 fixture 遵循项目既有的注入范式（同 `test_llm_rebuild_hot_reload.py` 中
+#     `monkeypatch.setattr("src.api.routes.get_workflow", ...)` 的写法），
+#     在 get_workflow 这一层把工作流换成确定性的假实现，
+#     于是 chat 用例可以在无 Key 环境下真跑、真断言，无需触网。
+
+
+class FakeWorkflow:
+    """确定性的假工作流，替代 LangGraph 编译产物。
+
+    只实现 routes.chat 用到的契约：`invoke(state, config=None) -> dict`。
+    返回值覆盖 chat 处理函数会读取的字段（final_response / needs_human /
+    suggest_human / access_filtered / intent / turn_count / quality_score）。
+
+    `captured` 记录每次 invoke 收到的 state，供测试断言调用方是否正确传参
+    （例如 effective_max_turns 是否跟随配置）。
+    """
+
+    def __init__(self, response: str = "这是一段确定性的测试回复。"):
+        self.response = response
+        self.calls: list = []
+
+    def invoke(self, state, config=None):
+        self.calls.append({"state": state, "config": config})
+        return {
+            "final_response": self.response,
+            "needs_human": False,
+            "suggest_human": False,
+            "access_filtered": 0,
+            "intent": "faq",
+            "turn_count": 1,
+            "quality_score": 0.9,
+        }
+
+
+@pytest.fixture
+def fake_workflow(monkeypatch):
+    """把 routes.chat 的工作流换成假实现，返回该假实例供断言。
+
+    用法：
+        def test_xxx(client, fake_workflow):
+            resp = client.post("/api/v1/chat", json={"message": "你好"})
+            assert resp.status_code == 200
+            # 可断言调用方传了什么 state
+            assert fake_workflow.calls[0]["state"]["user_id"] == "anonymous"
+    """
+    wf = FakeWorkflow()
+    monkeypatch.setattr("src.api.routes.get_workflow", lambda: wf)
+    return wf
+
+
+@pytest.fixture(autouse=True)
+def _patch_chat_workflow_by_default(monkeypatch, request):
+    """默认给所有测试打上 chat 打桩，防止误触网导致套件卡死。
+
+    为什么要 autouse：chat 接口被 4 个测试文件、十几处调用散点引用，
+    逐处补 fixture 难免漏；漏一处就是一次「进程静默挂死」，代价极高。
+    全局兜底后，任何忘记声明的用例也不会把整个测试套件拖死。
+
+    需要真实工作流的用例（例如断言 chat 落库副作用）可显式声明
+    `fake_workflow` 之外的方式，或给用例加 `no_chat_stub` 标记解耦：
+        @pytest.mark.no_chat_stub
+        def test_xxx(...): ...
+    """
+    if "no_chat_stub" in request.keywords:
+        return
+    monkeypatch.setattr("src.api.routes.get_workflow", lambda: FakeWorkflow())
+
+
+def pytest_configure(config):
+    """注册自定义 marker，避免 pytest 报 unknown marker 警告。"""
+    config.addinivalue_line(
+        "markers",
+        "no_chat_stub: 不使用 tests/conftest.py 默认的 chat 工作流打桩，"
+        "用于需要真实工作流的用例（如验证 chat 落库副作用）",
+    )
