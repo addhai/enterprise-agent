@@ -1,0 +1,35 @@
+{"id": "f01", "type": "fact", "question": "测温仪的测温范围是多少？", "expected_doc": "product_spec_manual.md", "expected_keywords": ["-20", "550"]}
+{"id": "f02", "type": "fact", "question": "保修期是多久？", "expected_doc": "after_sales_policy.md", "expected_keywords": ["12个月", "整机"]}
+{"id": "f03", "type": "fact", "question": "电池保修期多长时间？", "expected_doc": "after_sales_policy.md", "expected_keywords": ["6个月", "电池"]}
+{"id": "f04", "type": "fact", "question": "测温精度是多少？", "expected_doc": "product_spec_manual.md", "expected_keywords": ["1.5", "精度"]}
+{"id": "f05", "type": "fact", "question": "发射率可调范围是多少？", "expected_doc": "product_spec_manual.md", "expected_keywords": ["0.10", "1.00"]}
+{"id": "f06", "type": "fact", "question": "仪器能存储多少组测量记录？", "expected_doc": "product_spec_manual.md", "expected_keywords": ["100", "存储"]}
+{"id": "f07", "type": "fact", "question": "距离系数D:S是多少？", "expected_doc": "product_spec_manual.md", "expected_keywords": ["50:1"]}
+{"id": "f08", "type": "fact", "question": "响应时间是多少？", "expected_doc": "product_spec_manual.md", "expected_keywords": ["300ms", "300"]}
+{"id": "f09", "type": "fact", "question": "售后客服热线的工作时间是什么时候？", "expected_doc": "after_sales_policy.md", "expected_keywords": ["9:00", "18:00"]}
+{"id": "f10", "type": "fact", "question": "技术支持邮箱是什么？", "expected_doc": "after_sales_policy.md", "expected_keywords": ["support@thermoview.com"]}
+{"id": "f11", "type": "fact", "question": "光谱响应范围是多少？", "expected_doc": "application_guide.md", "expected_keywords": ["8", "14"]}
+{"id": "f12", "type": "fact", "question": "维修更换部件的保修期是多久？", "expected_doc": "after_sales_policy.md", "expected_keywords": ["3个月"]}
+{"id": "f13", "type": "fault", "question": "测温仪无法开机怎么办？", "expected_doc": "fault_troubleshooting_manual.md", "expected_keywords": ["电池", "3.5V", "主板"]}
+{"id": "f14", "type": "fault", "question": "测温读数不准确偏差大怎么处理？", "expected_doc": "fault_troubleshooting_manual.md", "expected_keywords": ["发射率", "镜头", "校准"]}
+{"id": "f15", "type": "fault", "question": "激光定位灯不亮是什么原因？", "expected_doc": "fault_troubleshooting_manual.md", "expected_keywords": ["激光", "模组"]}
+{"id": "f16", "type": "fault", "question": "仪器跌落后必须立即做什么？", "expected_doc": "calibration_guide.md", "expected_keywords": ["校准", "跌落"]}
+{"id": "f17", "type": "fault", "question": "测温偏差超过多少需要重新校准？", "expected_doc": "fault_troubleshooting_manual.md", "expected_keywords": ["2"]}
+{"id": "f18", "type": "fault", "question": "C级故障的维修周期是几天？", "expected_doc": "fault_troubleshooting_manual.md", "expected_keywords": ["3", "7"]}
+{"id": "f19", "type": "fault", "question": "电池触点氧化了怎么处理？", "expected_doc": "fault_troubleshooting_manual.md", "expected_keywords": ["酒精", "清洁"]}
+{"id": "f20", "type": "operation", "question": "怎么切换温度单位摄氏度华氏度？", "expected_doc": "faq_full.md", "expected_keywords": ["MODE", "Unit"]}
+{"id": "f21", "type": "operation", "question": "如何设置高低温报警？", "expected_doc": "faq_full.md", "expected_keywords": ["Alarm", "MODE"]}
+{"id": "f22", "type": "operation", "question": "怎么查看测量最大值和最小值？", "expected_doc": "faq_full.md", "expected_keywords": ["MAX", "MIN"]}
+{"id": "f23", "type": "operation", "question": "校准前需要放置多长时间？", "expected_doc": "calibration_guide.md", "expected_keywords": ["30分钟", "30"]}
+{"id": "f24", "type": "operation", "question": "校准时环境温度变化超过多少需要暂停？", "expected_doc": "calibration_guide.md", "expected_keywords": ["2"]}
+{"id": "f25", "type": "operation", "question": "日常维护应该在什么时间做？", "expected_doc": "maintenance_guide.md", "expected_keywords": ["每次使用后"]}
+{"id": "f26", "type": "operation", "question": "黑体炉的发射率要求是多少？", "expected_doc": "calibration_guide.md", "expected_keywords": ["0.995"]}
+{"id": "f27", "type": "parameter", "question": "校准环境温度要求是多少？", "expected_doc": "calibration_guide.md", "expected_keywords": ["20", "3"]}
+{"id": "f28", "type": "parameter", "question": "校准环境相对湿度要求是多少？", "expected_doc": "calibration_guide.md", "expected_keywords": ["60", "RH"]}
+{"id": "f29", "type": "parameter", "question": "校准时大气压力范围是多少？", "expected_doc": "calibration_guide.md", "expected_keywords": ["86", "106"]}
+{"id": "f30", "type": "parameter", "question": "常规工业巡检的校准周期是多久？", "expected_doc": "calibration_guide.md", "expected_keywords": ["每年", "1次"]}
+{"id": "f31", "type": "parameter", "question": "高精度质量检测的校准周期是多久？", "expected_doc": "calibration_guide.md", "expected_keywords": ["半年", "6个月"]}
+{"id": "f32", "type": "parameter", "question": "日常自校验的周期是多久？", "expected_doc": "calibration_guide.md", "expected_keywords": ["季度", "3个月"]}
+{"id": "f33", "type": "parameter", "question": "周维护的周期是多久？", "expected_doc": "maintenance_guide.md", "expected_keywords": ["每周", "1次"]}
+{"id": "f34", "type": "unknown", "question": "E03故障码怎么处理？", "expected_doc": null, "expected_keywords": ["未收录", "未找到", "没有收录"]}
+{"id": "f35", "type": "unknown", "question": "T200型号的参数是什么？", "expected_doc": null, "expected_keywords": ["未收录", "未找到", "没有收录"]}
