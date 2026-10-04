@@ -40,6 +40,11 @@
   **不要删** —— 它是「为什么现在要加归属校验」的直接证据。
 - `sessions.png` / `tickets.png`：2026-08-14 排查会话与工单接口时的界面截图
 - `tool_test.json`：工具调用测试的输出快照
+- `screenshots/`：2026-08-14 前端联调时抓的界面截图（dashboard / knowledge /
+  customers / health / homepage）。**当前仓库内没有任何文档引用这些图**，
+  所以一并归档而不是留在 `docs/screenshots/`——留着只会让人误以为
+  文档里配了图而实际找不到。原 `login_page.png` 与 `homepage_full.png`
+  内容完全相同（md5 一致），只保留一份并改名为 `homepage.png`。
 
 ## 使用约定
 
