@@ -40,6 +40,11 @@
   **不要删** —— 它是「为什么现在要加归属校验」的直接证据。
 - `sessions.png` / `tickets.png`：2026-08-14 排查会话与工单接口时的界面截图
 - `tool_test.json`：工具调用测试的输出快照
+- `acceptance_report_2026-09.md`：早期手工粘贴的功能验收问答输出。**内容残缺**
+  （多处回答被截断，如「1. 95）、目标充满视场」这种断句），且测试6 的
+  「引用片段截断」当时是写死的常量而非真实检测结果（该脚本已修正）。
+  仅作为历史记录保留，**不要当作有效的验收结论引用**。要重新验收请跑
+  `python scripts/acceptance_test.py`。
 - `screenshots/`：2026-08-14 前端联调时抓的界面截图（dashboard / knowledge /
   customers / health / homepage）。**当前仓库内没有任何文档引用这些图**，
   所以一并归档而不是留在 `docs/screenshots/`——留着只会让人误以为
