@@ -1,0 +1,100 @@
+# =============================================================================
+# Enterprise Agent — Cloud-Native Docker Compose
+# Phase 1: 全量基础设施 + 微服务拆分
+# =============================================================================
+#
+# 服务清单:
+#   网关层:  apisix (网关) + apisix-dashboard (管理UI)
+#   业务层:  api-service, ws-service, agent-worker, rag-service
+#   数据层:  postgres, milvus, minio, redis
+#   中间件:  rabbitmq
+#   前端:    frontend
+#
+# 启动(单副本):    docker compose up -d
+# 水平扩展(多副本): docker compose up -d --scale api-service=3 --scale ws-service=3 --scale agent-worker=3 --scale rag-service=3 --scale frontend=3
+#   说明: 应用层(api/ws/worker/rag/frontend)已去除固定 container_name，可安全 --scale 水平扩展；
+#         数据层(postgres/milvus/minio/redis/rabbitmq)与网关 apisix 保持单实例(有状态/需持久化)。
+# 停止:    docker compose down
+# 日志:    docker compose logs -f <service-name>
+# =============================================================================
+
+services:
+  # =========================================================================
+  # 网关层 — Apache APISIX (替代 Nginx)
+  # =========================================================================
+  apisix:
+    env_file:
+      - docker/no_proxy.env
+    image: apache/apisix:3.14.1-debian
+    container_name: agent-apisix
+    restart: unless-stopped
+    ports:
+      - "9080:9080"   # HTTP
+      - "9443:9443"   # HTTPS (TLS)
+      - "9092:9092"   # Prometheus metrics
+    environment:
+      - APISIX_STAND_ALONE=true              # 不依赖 etcd，适合单机/开发
+      - APISIX_ADMIN_KEY=${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}
+    volumes:
+      - ./deploy/apisix/apisix.yml:/usr/local/apisix/conf/apisix.yaml:ro
+      - ./deploy/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./logs/apisix:/usr/local/apisix/logs
+    networks:
+      - agent-net
+    depends_on:
+      - api-service
+      - ws-service
+      - frontend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "--noproxy", "*", "http://127.0.0.1:9080/apisix/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  apisix-dashboard:
+    env_file:
+      - docker/no_proxy.env
+    image: apache/apisix-dashboard:3.0.1-alpine
+    container_name: agent-apisix-dashboard
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      - APISIX_DASHBOARD_ADMIN_KEY=${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}
+    volumes:
+      - ./deploy/apisix/dashboard-conf.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
+    networks:
+      - agent-net
+    profiles:
+      - dashboard  # 按需启动: docker compose --profile dashboard up -d
+
+  # =========================================================================
+  # 业务服务层 — 微服务拆分
+  # =========================================================================
+
+  # REST API 入口 — 同步对话、健康检查、管理接口
+  api-service:
+    env_file:
+      - docker/no_proxy.env
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-v4}
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-agent}
+      - MILVUS_HOST=milvus-standalone
+      - MILVUS_PORT=19530
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-agent}:${RABBITMQ_PASS:-agent}@rabbitmq:5672
+      - RAG_SERVICE_URL=http://rag-service:8001
+      - MEMORY_SERVICE_URL=http://api-service:8000   # 当前 memory 内嵌在 api 中
+      - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID:-}
+      - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET:-}
+      - ALIYUN_REGION_ID=${ALIYUN_REGION_ID:-cn-hangzhou}

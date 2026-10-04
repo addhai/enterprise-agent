@@ -51,6 +51,33 @@
   文档里配了图而实际找不到。原 `login_page.png` 与 `homepage_full.png`
   内容完全相同（md5 一致），只保留一份并改名为 `homepage.png`。
 
+### 根目录 — 方案快照与损坏留证
+
+- `compose_main.Phase1-microservices.yml`：**已废弃的微服务部署方案**（2026-07-15
+  Phase1「云原生架构」时期，100 行）。包含 apisix 网关 + apisix-dashboard +
+  api-service / ws-service / agent-worker / rag-service / frontend 六层业务拆分，
+  数据层用 milvus + minio + rabbitmq 而非当前的 chroma + redis。
+  **当前路线已改为单体 + 内嵌 Ollama**（见 `deploy/prod/docker-compose.prod.yml`），
+  这份只作架构演进的对照参考。**不要用它部署** —— 里面的 `docker/api/Dockerfile`、
+  `deploy/apisix/` 等配套文件大多已不存在，且 `APISIX_ADMIN_KEY` 有硬编码默认值。
+  另注意它标了 `--scale` 水平扩展，但数据层与网关仍是单实例，不能真水平扩展。
+  ⚠️ **这份文件本身是截断的**：只有 100 行，YAML 解析出 3 个服务
+  （`apisix` / `apisix-dashboard` / `api-service`）就在 `api-service` 的
+  `environment` 中途断掉了，`ws-service` / `agent-worker` / `rag-service` /
+  `frontend` / 数据层 / volumes / networks 全部缺失。所以它连「完整的旧方案」
+  都不算，只是**方案片段**——当历史思路看可以，当配置看会误导。
+
+- `docker-compose.prod.yml.CORRUPTED-714KB`：**已损坏文件的留证**（2026-10-04 发现）。
+  原 `deploy/prod/docker-compose.prod.yml` 在 09-22 提交（`9fb9f6e`）时就已损坏：
+  文件 714675 字节 / 184 行，其中第 12~16 行是 1.6~2.2 万字符的乱码块
+  （正常注释行只该 50 字符内），文件头注释与全部中文注释都是 mojibake。
+  症状是 `docker compose config` 无法解析、或解析出空的 environment。
+  损坏版本在 git 里只有一个提交，**没有干净版本可回滚**。
+  已用桌面留存的正确版本重建（714KB → 9.2KB，YAML 校验通过，关键配置逐项对齐）。
+  **这份备份留着是为了对照「重建时有没有漏配置」**，重建已完成，确认无遗漏后可删。
+  如果将来再遇到「文件莫名膨胀 + 中文变乱码」，先怀疑同类问题：
+  某些编辑器/工具以错误编码反复读写 UTF-8 文件会把内容撑成乱码堆。
+
 ## 使用约定
 
 - 新写的探针脚本放这里，**不要放 `scripts/`**（那个目录是可复用的运维工具，
