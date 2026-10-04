@@ -1,0 +1,36 @@
+# =============================================================================
+# Git 属性 — 二进制素材不做文本 diff
+# =============================================================================
+# 背景（2026-09-15 实测）：
+#   Git for Windows 的系统级 gitattributes 会把 *.docx / *.pdf 等映射到
+#   `diff=astextplain`，而 astextplain 内部要调用 `file` 命令判断真实类型。
+#   本机 Git 安装中不带 `file`，于是 git diff 对这类文件直接报
+#       E: unsupported filetype <path>
+#       fatal: unable to read files to diff
+#   并且这个失败是**整体性**的：只要暂存区里有一个这样的文件，
+#   `git diff --cached` 就整体失败，进而把依赖它的 pre-commit gitleaks 扫描
+#   一并打挂，表现为「提交被钩子拦下」，实际根因与密钥无关。
+#
+# 显式声明为二进制后，git 不再尝试文本转换与逐行 diff，问题消失。
+# 这与「文件内容」无关，只影响 diff / merge 行为，不影响检出与运行。
+# =============================================================================
+
+# 知识库验证用的二进制素材
+fixtures/kb_test/*.docx binary
+fixtures/kb_test/*.pdf  binary
+
+# 常见二进制格式统一声明，避免同类问题在其它目录复现
+*.docx binary
+*.doc  binary
+*.xlsx binary
+*.xls  binary
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.zip  binary
+*.gz   binary
+*.whl  binary

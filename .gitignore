@@ -135,3 +135,19 @@ openapi.json
 # 手工验证留下的临时输出（内容是某次运行的即时结果）
 intranet_test.txt
 docker_validation_report.md
+
+# ============================================================================
+# 早期原型（已被 src/ 主流水线取代，保留本地作参考，不入库）
+# ============================================================================
+# 判定依据：这些是项目早期的验证原型，功能已被 src/api/server.py（正式后端）
+# 与 src/ 下的模块覆盖。它们的接口路径、模型调用方式都已过时，入库会误导
+# 后来者以为存在两条并行实现。
+# main.py            355 行轻量 FastAPI 后端 —— 已被 src/api/server.py 取代
+# streamlit_app.py   190 行 Streamlit 前端 —— 属于原型阶段的界面演示
+main.py
+streamlit_app.py
+
+# 本机性能与链路探针（依赖本地 Ollama 端口 / 临时服务状态，换机即失效）
+benchmark_cpu_perf.py
+_a2a_call.py
+ws_e2e_test.py

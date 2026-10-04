@@ -1,0 +1,72 @@
+# =============================================================================
+# 运行时依赖（私有化镜像专用，Python 3.10 兼容）
+#
+# Phase4a 起改称「运行时依赖」而非「精简依赖」：工厂级部署不做精简设计，
+# 功能完整性与检索质量优先于镜像体积。
+#
+# 与 requirements.txt（开发/全功能）的差异：
+#   - 排除 zeromcp / a2a-sdk：仅独立协议服务使用，且 zeromcp 要求 Python>=3.11
+#   - 排除 ruff：开发期 lint 工具
+#   - 排除 pymilvus / minio / pika / boto3：Milvus/MinIO/RabbitMQ 为独立服务
+#     ⚠️ Phase4a 待确认：以上四包排除的前提是「不启用 Milvus / MinIO / RabbitMQ」。
+#     若工厂现场要用 Milvus 做向量库、MinIO 存文档、RabbitMQ 做任务队列，
+#     需一并纳入。本阶段按任务范围未改，列为待确认项。
+#   - Phase4a 已纳入 sentence-transformers（连带 torch，约 2GB）：
+#     rerank 走本地 BGE 模型必需。详见表末 RAG（重排序）小节。
+#   - 已纳入 pymupdf / beautifulsoup4 / python-docx（2026-09-14 修正）：
+#     原假设「文档入库在镜像构建前离线完成，问答运行时不需要解析器」与实际
+#     接口能力矛盾 —— 知识库上传接口 /admin/knowledge/{kb_id}/documents/upload
+#     的白名单明确接受 .pdf / .docx / .html，运行时必须能解析，否则上传会
+#     静默产出 0 切片（加载器 ImportError 被吞）。
+#
+# Phase4a 订正: Embedding 默认走本地 Ollama bge-m3（OpenAI 兼容接口）
+# （原注释声称 Embedding 走云端在线 embedding API，随离线改造失效，已删除）
+#
+# 离线批量入库（可选，用于预置知识库）请在联网机构建机执行：
+#   pip install -r requirements.txt && python scripts/ingest_docs.py
+# 生成的 chroma_data/ 随镜像 COPY 分发。
+# =============================================================================
+
+# Core
+langchain>=0.3.0
+langgraph>=0.2.0
+langsmith>=0.2.0
+langchain-openai>=0.2.0
+langchain-chroma>=0.2.0
+langchain-community>=0.3.0
+
+# Server
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.20
+websockets>=13.0
+sse-starlette
+
+# Security
+bcrypt>=4.0.0
+
+# Data
+chromadb>=0.5.0
+redis>=5.0.0
+psycopg2-binary>=2.9.0
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# RAG（运行时检索）
+rank-bm25>=0.2.0
+chardet>=5.0.0
+
+# RAG（文档解析）—— 知识库上传接口运行时要用的加载器后端
+pymupdf>=1.23.0          # PDF 加载（PyMuPDF）
+python-docx>=0.8.11      # DOCX 加载
+beautifulsoup4>=4.12.0   # HTML 加载（bs4）
+
+# RAG（重排序）
+sentence-transformers>=3.0.0  # Phase4a: 工厂级不做精简，rerank 必需（连带 torch）
+
+# Utils
+python-dotenv>=1.0.0
+httpx>=0.27.0
+tiktoken>=0.7.0

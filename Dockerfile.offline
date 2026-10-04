@@ -1,0 +1,50 @@
+# =============================================================================
+# 完全离线（air-gapped）构建专用 Dockerfile
+#
+# 前置步骤（在任意一台联网的、同架构 Linux/容器环境中执行一次）：
+#   1. 准备 Python 3.10 环境（python:3.10-slim 容器内最稳妥，保证 ABI 一致）
+#   2. 下载全部 wheel 到 wheels/ 目录：
+#        pip wheel -r requirements-runtime.txt -w wheels \
+#          --prefer-binary
+#   3. 将整个构建目录（含 wheels/、chroma_data/）拷贝到离线机房
+#   4. 离线机构建（全程不访问公网）：
+#        docker build -f Dockerfile.offline -t thermo-chatbot:1.0.0 .
+#
+# 验证不联网：构建时可加 --network=none
+#   docker build --network=none -f Dockerfile.offline -t thermo-chatbot:1.0.0 .
+# =============================================================================
+
+FROM python:3.10-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    PIP_NO_CACHE_DIR=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1
+
+WORKDIR /app
+
+# ---- 离线依赖：全部 wheel 来自构建上下文 wheels/，pip 禁用任何网络访问 ----
+COPY requirements-runtime.txt requirements.txt
+COPY wheels/ wheels/
+RUN pip install --no-cache-dir --no-index --find-links=/wheels \
+    -r requirements.txt
+
+# ---- 应用代码与知识库资产 ----
+COPY main.py .
+COPY src/ src/
+COPY scripts/ scripts/
+COPY data/docs/ data/docs/
+COPY chroma_data/ chroma_data/
+
+RUN mkdir -p /app/logs \
+    && useradd --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')" || exit 1
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
