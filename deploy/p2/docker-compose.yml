@@ -1,0 +1,154 @@
+# =============================================================================
+# Enterprise Agent - P2-4 Docker Compose
+#
+# 服务清单:
+#   app       应用主服务 (FastAPI + LangGraph + RAG)
+#   postgres  业务结构化数据 (用户/知识库/工单/对话)
+#   redis     缓存 + 分布式锁 + 会话状态
+#
+# 启动:    docker compose -f deploy/p2/docker-compose.yml --env-file deploy/p2/.env.p2 up -d
+# 停止:    docker compose -f deploy/p2/docker-compose.yml down
+# 日志:    docker compose -f deploy/p2/docker-compose.yml logs -f app
+# 进入:    docker compose -f deploy/p2/docker-compose.yml exec app bash
+# =============================================================================
+
+services:
+  # =========================================================================
+  # 应用主服务
+  # =========================================================================
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/p2/Dockerfile
+    image: enterprise-agent:latest
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    environment:
+      # LLM / Embedding
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-v4}
+      # 向量库后端
+      - VECTOR_STORE_BACKEND=chroma
+      - CHROMA_PERSIST_DIR=/app/chroma_data
+      # 数据库（连接 compose 内的 postgres）
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-agent}
+      - STORAGE_BACKEND=auto
+      # Redis
+      - REDIS_URL=redis://redis:6379
+      # LangSmith (可选)
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      # Agent 配置
+      - MAX_REASONING_TURNS=${MAX_REASONING_TURNS:-5}
+      # 评估 (默认关闭)
+      - EVAL_LLM_JUDGE_ENABLED=false
+      - EVAL_ONLINE_SAMPLING_RATE=0.0
+    volumes:
+      # 挂载本地知识库目录（只读，容器读取文档）
+      - ../../data/docs:/app/data/docs:ro
+      # 向量库持久化（读写，容器写入/更新向量）
+      - agent_chroma:/app/chroma_data
+      # 日志持久化
+      - agent_logs:/app/logs
+    networks:
+      - p2-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # =========================================================================
+  # PostgreSQL - 业务数据
+  # =========================================================================
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-agent}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --locale=C
+    volumes:
+      - agent_pg:/var/lib/postgresql/data
+    networks:
+      - p2-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # =========================================================================
+  # Redis - 缓存 + 会话状态
+  # =========================================================================
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - agent_redis:/data
+    networks:
+      - p2-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+# =========================================================================
+# 持久化卷
+# =========================================================================
+volumes:
+  agent_chroma:
+    name: p2-agent-chroma
+  agent_logs:
+    name: p2-agent-logs
+  agent_pg:
+    name: p2-agent-pg
+  agent_redis:
+    name: p2-agent-redis
+
+# =========================================================================
+# 网络
+# =========================================================================
+networks:
+  p2-net:
+    name: p2-net
+    driver: bridge
