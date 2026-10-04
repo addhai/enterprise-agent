@@ -14,7 +14,11 @@ repos:
     hooks:
       - id: ruff
         args: [--fix]
+        # dev/ 是归档区（一次性调试探针、漏洞现场证据），不是生产代码。
+        # 保留原貌便于日后对照排查，不参与格式化与 lint 门禁。
+        exclude: ^dev/
       - id: ruff-format
+        exclude: ^dev/
 
   # ---- gitleaks：密钥扫描（commit 前拦截，与 CI A1 门禁双保险）----
   # 与上方 ruff 不同，这里用「本地预编译二进制」而非源码编译。
