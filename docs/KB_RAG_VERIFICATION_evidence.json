@@ -1,0 +1,517 @@
+{
+  "generated_at": "2026-09-14 21:09:56",
+  "base_url": "http://localhost:8000",
+  "kb": {
+    "id": "KBS-B82D28",
+    "name": "RAG验证库-0914-210650"
+  },
+  "fixtures": [
+    "kb_md_manual.md",
+    "kb_txt_note.txt",
+    "kb_docx_upgrade.docx",
+    "kb_pdf_safety.pdf"
+  ],
+  "uploaded_documents": {
+    "md": {
+      "id": "KB-3B2358",
+      "kb_id": "KBS-B82D28",
+      "title": "kb_md_manual.md",
+      "file_path": "/app/chroma_data/uploads/KBS-B82D28/kb_md_manual.md",
+      "source_type": "document",
+      "status": "indexed",
+      "parse_status": "completed",
+      "chunk_count": 9,
+      "doc_format": "md",
+      "file_size": 917,
+      "kb_version": "standard",
+      "kb_type": "document",
+      "upload_method": "single",
+      "similarity_threshold": 0.2,
+      "weight": 1.0,
+      "created_at": "2026-09-14T13:06:50.393738+00:00",
+      "indexed_at": "2026-09-14T13:07:10.005491+00:00"
+    },
+    "txt": {
+      "id": "KB-6F3099",
+      "kb_id": "KBS-B82D28",
+      "title": "kb_txt_note.txt",
+      "file_path": "/app/chroma_data/uploads/KBS-B82D28/kb_txt_note.txt",
+      "source_type": "document",
+      "status": "indexed",
+      "parse_status": "completed",
+      "chunk_count": 1,
+      "doc_format": "txt",
+      "file_size": 757,
+      "kb_version": "standard",
+      "kb_type": "document",
+      "upload_method": "single",
+      "similarity_threshold": 0.2,
+      "weight": 1.0,
+      "created_at": "2026-09-14T13:07:10.200597+00:00",
+      "indexed_at": "2026-09-14T13:07:14.996544+00:00"
+    },
+    "docx": {
+      "id": "KB-67C37F",
+      "kb_id": "KBS-B82D28",
+      "title": "kb_docx_upgrade.docx",
+      "file_path": "/app/chroma_data/uploads/KBS-B82D28/kb_docx_upgrade.docx",
+      "source_type": "document",
+      "status": "indexed",
+      "parse_status": "completed",
+      "chunk_count": 3,
+      "doc_format": "docx",
+      "file_size": 37081,
+      "kb_version": "standard",
+      "kb_type": "document",
+      "upload_method": "single",
+      "similarity_threshold": 0.2,
+      "weight": 1.0,
+      "created_at": "2026-09-14T13:07:15.107628+00:00",
+      "indexed_at": "2026-09-14T13:07:18.295265+00:00"
+    },
+    "pdf": {
+      "id": "KB-5272FE",
+      "kb_id": "KBS-B82D28",
+      "title": "kb_pdf_safety.pdf",
+      "file_path": "/app/chroma_data/uploads/KBS-B82D28/kb_pdf_safety.pdf",
+      "source_type": "document",
+      "status": "indexed",
+      "parse_status": "completed",
+      "chunk_count": 1,
+      "doc_format": "pdf",
+      "file_size": 3684,
+      "kb_version": "standard",
+      "kb_type": "document",
+      "upload_method": "single",
+      "similarity_threshold": 0.2,
+      "weight": 1.0,
+      "created_at": "2026-09-14T13:07:18.391142+00:00",
+      "indexed_at": "2026-09-14T13:07:22.305426+00:00"
+    }
+  },
+  "hit_test": {
+    "md": {
+      "status_code": 200,
+      "total_hits": 3,
+      "keyword_expected": "187",
+      "keyword_found": true,
+      "top_hit_source": "kb_md_manual.md",
+      "top_hit_score": 1.0,
+      "top_hit_preview": "XG-9000 型真空镀膜机的腔体预热温度为 187 摄氏度,预热时长为 43 分钟。\n预热完成后需静置 12 分钟再开启靶材电源,否则会导致靶面氧化。\n预热阶段若真空度未达到 3.7e-4 帕,需延长预热 15 分钟并重新抽真空。"
+    },
+    "txt": {
+      "status_code": 200,
+      "total_hits": 3,
+      "keyword_expected": "XO-2026-0912",
+      "keyword_found": true,
+      "top_hit_source": "kb_txt_note.txt",
+      "top_hit_score": 1.0,
+      "top_hit_preview": "[Contains lists]\nXG-9000 现场调试交接记录(纯文本格式测试)\n交接编号:XO-2026-0912\n交接人:张工\n一、本次调试发现的问题\n1. 冷却水回路在连续运行 6 小时后出现轻微流量衰减,实测从 5.2 升每分钟"
+    },
+    "docx": {
+      "status_code": 200,
+      "total_hits": 3,
+      "keyword_expected": "192",
+      "keyword_found": true,
+      "top_hit_source": "kb_docx_upgrade.docx",
+      "top_hit_score": 1.0,
+      "top_hit_preview": "XG-9000 型真空镀膜机在 V3 固件后的腔体预热温度调整为 192 摄氏度,预热时长为 47 分钟。此变更仅适用于 2026 年 7 月以后出厂的机型。\n升级后需在首次开机时执行一次温度自校准,自校准耗时 26 分钟。"
+    },
+    "pdf": {
+      "status_code": 200,
+      "total_hits": 3,
+      "keyword_expected": "74",
+      "keyword_found": true,
+      "top_hit_source": "kb_pdf_safety.pdf",
+      "top_hit_score": 1.0,
+      "top_hit_preview": "XG-9000 真空镀膜机 安全操作规范(PDF 格式测试)\n第一条 启动前检查\n操作人员在启动 XG-9000 前,必须确认腔体门锁紧销已插入到位。\n未插入到位时启动,联锁装置会在 8 秒内切断主电源。\n第二条 高温防护\n腔体预热期间,外"
+    }
+  },
+  "chroma": {
+    "embeddings": 14,
+    "collections": [
+      "knowledge_base",
+      "long_term_memory"
+    ],
+    "metadata_keys": [
+      [
+        "tenant_id",
+        14
+      ],
+      [
+        "source_type",
+        14
+      ],
+      [
+        "source_file",
+        14
+      ],
+      [
+        "source",
+        14
+      ],
+      [
+        "modified_time",
+        14
+      ],
+      [
+        "kb_type",
+        14
+      ],
+      [
+        "kb_id",
+        14
+      ],
+      [
+        "encoding",
+        14
+      ],
+      [
+        "doc_id",
+        14
+      ],
+      [
+        "doc_format",
+        14
+      ],
+      [
+        "created_time",
+        14
+      ],
+      [
+        "chroma:document",
+        14
+      ],
+      [
+        "category",
+        14
+      ],
+      [
+        "heading_text",
+        12
+      ],
+      [
+        "heading_level",
+        12
+      ],
+      [
+        "chapter_path",
+        12
+      ],
+      [
+        "author",
+        4
+      ],
+      [
+        "total_pages",
+        1
+      ],
+      [
+        "title",
+        1
+      ],
+      [
+        "producer",
+        1
+      ]
+    ]
+  },
+  "chat": [
+    {
+      "format": "md",
+      "question": "XG-9000 的腔体预热温度是多少摄氏度，需要预热多久？",
+      "answer": "",
+      "citation_count": 0,
+      "citations": [],
+      "keyword_expected": "187",
+      "keyword_found": false,
+      "done_received": false
+    }
+  ],
+  "steps": [
+    {
+      "step": "GET /api/v1/health",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "body": {
+          "status": "ok",
+          "service": "enterprise-agent",
+          "aliyun_demo_fallback": false
+        }
+      }
+    },
+    {
+      "step": "POST /api/v1/auth/login",
+      "ok": true,
+      "detail": {
+        "username": "admin",
+        "token_prefix": "eyJhbGciOiJIUzI1NiIsInR5..."
+      }
+    },
+    {
+      "step": "POST /api/v1/admin/knowledge",
+      "ok": true,
+      "detail": {
+        "kb_id": "KBS-B82D28",
+        "name": "RAG验证库-0914-210650"
+      }
+    },
+    {
+      "step": "上传 kb_md_manual.md",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "doc_id": "KB-3B2358",
+        "doc_format": "md",
+        "chunk_count": 9,
+        "status": "indexed",
+        "file_size": 917
+      }
+    },
+    {
+      "step": "上传 kb_txt_note.txt",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "doc_id": "KB-6F3099",
+        "doc_format": "txt",
+        "chunk_count": 1,
+        "status": "indexed",
+        "file_size": 757
+      }
+    },
+    {
+      "step": "上传 kb_docx_upgrade.docx",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "doc_id": "KB-67C37F",
+        "doc_format": "docx",
+        "chunk_count": 3,
+        "status": "indexed",
+        "file_size": 37081
+      }
+    },
+    {
+      "step": "上传 kb_pdf_safety.pdf",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "doc_id": "KB-5272FE",
+        "doc_format": "pdf",
+        "chunk_count": 1,
+        "status": "indexed",
+        "file_size": 3684
+      }
+    },
+    {
+      "step": "MD 产出切片数 > 0",
+      "ok": true,
+      "detail": {
+        "chunk_count": 9
+      }
+    },
+    {
+      "step": "TXT 产出切片数 > 0",
+      "ok": true,
+      "detail": {
+        "chunk_count": 1
+      }
+    },
+    {
+      "step": "DOCX 产出切片数 > 0",
+      "ok": true,
+      "detail": {
+        "chunk_count": 3
+      }
+    },
+    {
+      "step": "PDF 产出切片数 > 0",
+      "ok": true,
+      "detail": {
+        "chunk_count": 1
+      }
+    },
+    {
+      "step": "GET .../documents",
+      "ok": true,
+      "detail": {
+        "total": 4,
+        "formats": [
+          "docx",
+          "md",
+          "pdf",
+          "txt"
+        ]
+      }
+    },
+    {
+      "step": "hit_test 命中 MD 独有事实",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "total_hits": 3,
+        "keyword_expected": "187",
+        "keyword_found": true,
+        "top_hit_source": "kb_md_manual.md",
+        "top_hit_score": 1.0,
+        "top_hit_preview": "XG-9000 型真空镀膜机的腔体预热温度为 187 摄氏度,预热时长为 43 分钟。\n预热完成后需静置 12 分钟再开启靶材电源,否则会导致靶面氧化。\n预热阶段若真空度未达到 3.7e-4 帕,需延长预热 15 分钟并重新抽真空。"
+      }
+    },
+    {
+      "step": "hit_test 命中 TXT 独有事实",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "total_hits": 3,
+        "keyword_expected": "XO-2026-0912",
+        "keyword_found": true,
+        "top_hit_source": "kb_txt_note.txt",
+        "top_hit_score": 1.0,
+        "top_hit_preview": "[Contains lists]\nXG-9000 现场调试交接记录(纯文本格式测试)\n交接编号:XO-2026-0912\n交接人:张工\n一、本次调试发现的问题\n1. 冷却水回路在连续运行 6 小时后出现轻微流量衰减,实测从 5.2 升每分钟"
+      }
+    },
+    {
+      "step": "hit_test 命中 DOCX 独有事实",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "total_hits": 3,
+        "keyword_expected": "192",
+        "keyword_found": true,
+        "top_hit_source": "kb_docx_upgrade.docx",
+        "top_hit_score": 1.0,
+        "top_hit_preview": "XG-9000 型真空镀膜机在 V3 固件后的腔体预热温度调整为 192 摄氏度,预热时长为 47 分钟。此变更仅适用于 2026 年 7 月以后出厂的机型。\n升级后需在首次开机时执行一次温度自校准,自校准耗时 26 分钟。"
+      }
+    },
+    {
+      "step": "hit_test 命中 PDF 独有事实",
+      "ok": true,
+      "detail": {
+        "status_code": 200,
+        "total_hits": 3,
+        "keyword_expected": "74",
+        "keyword_found": true,
+        "top_hit_source": "kb_pdf_safety.pdf",
+        "top_hit_score": 1.0,
+        "top_hit_preview": "XG-9000 真空镀膜机 安全操作规范(PDF 格式测试)\n第一条 启动前检查\n操作人员在启动 XG-9000 前,必须确认腔体门锁紧销已插入到位。\n未插入到位时启动,联锁装置会在 8 秒内切断主电源。\n第二条 高温防护\n腔体预热期间,外"
+      }
+    },
+    {
+      "step": "Chroma embeddings 行数 > 0",
+      "ok": true,
+      "detail": {
+        "embeddings": 14,
+        "collections": [
+          "knowledge_base",
+          "long_term_memory"
+        ],
+        "metadata_keys": [
+          [
+            "tenant_id",
+            14
+          ],
+          [
+            "source_type",
+            14
+          ],
+          [
+            "source_file",
+            14
+          ],
+          [
+            "source",
+            14
+          ],
+          [
+            "modified_time",
+            14
+          ],
+          [
+            "kb_type",
+            14
+          ],
+          [
+            "kb_id",
+            14
+          ],
+          [
+            "encoding",
+            14
+          ],
+          [
+            "doc_id",
+            14
+          ],
+          [
+            "doc_format",
+            14
+          ],
+          [
+            "created_time",
+            14
+          ],
+          [
+            "chroma:document",
+            14
+          ],
+          [
+            "category",
+            14
+          ],
+          [
+            "heading_text",
+            12
+          ],
+          [
+            "heading_level",
+            12
+          ],
+          [
+            "chapter_path",
+            12
+          ],
+          [
+            "author",
+            4
+          ],
+          [
+            "total_pages",
+            1
+          ],
+          [
+            "title",
+            1
+          ],
+          [
+            "producer",
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "step": "聊天引用命中 MD 独有事实",
+      "ok": false,
+      "detail": {
+        "format": "md",
+        "question": "XG-9000 的腔体预热温度是多少摄氏度，需要预热多久？",
+        "answer": "",
+        "citation_count": 0,
+        "citations": [],
+        "keyword_expected": "187",
+        "keyword_found": false,
+        "done_received": false
+      }
+    }
+  ],
+  "failures": [
+    "聊天引用命中 MD 独有事实"
+  ],
+  "summary": {
+    "total_checks": 18,
+    "passed": 17,
+    "failed": 1
+  }
+}

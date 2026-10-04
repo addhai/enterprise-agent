@@ -1,0 +1,345 @@
+{
+  "generated_at": "2026-09-15 19:20:54",
+  "app_metrics_path": "/api/v1/metrics/prometheus",
+  "metric_families": 13,
+  "panels": [
+    {
+      "title": "Services Status",
+      "type": "stat",
+      "status": "有数据",
+      "exprs": [
+        "count(up == 1) / count(up)"
+      ]
+    },
+    {
+      "title": "API Requests per Second",
+      "type": "timeseries",
+      "status": "有数据",
+      "exprs": [
+        "sum(rate(http_requests_total{service=\"api\"}[1m])) by (endpoint)"
+      ]
+    },
+    {
+      "title": "API Latency (P50/P95/P99)",
+      "type": "timeseries",
+      "status": "有数据",
+      "exprs": [
+        "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{service=\"api\"}[5m])) by (le))",
+        "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service=\"api\"}[5m])) by (le))",
+        "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service=\"api\"}[5m])) by (le))"
+      ]
+    },
+    {
+      "title": "HTTP Status Distribution",
+      "type": "timeseries",
+      "status": "有数据",
+      "exprs": [
+        "sum(rate(http_requests_total{service=\"api\"}[1m])) by (status)"
+      ]
+    },
+    {
+      "title": "LLM Call Success Rate",
+      "type": "gauge",
+      "status": "有数据",
+      "exprs": [
+        "sum(rate(llm_calls_success_total[5m])) / sum(rate(llm_calls_total[5m]))"
+      ]
+    },
+    {
+      "title": "Active WebSocket Connections",
+      "type": "timeseries",
+      "status": "有数据",
+      "exprs": [
+        "sum(ws_active_connections) by (service)"
+      ]
+    },
+    {
+      "title": "RabbitMQ Queue Depth",
+      "type": "timeseries",
+      "status": "无数据",
+      "exprs": [
+        "rabbitmq_queue_messages_ready{queue=~\"agent.*\"}"
+      ]
+    },
+    {
+      "title": "RAG Search Latency (P95)",
+      "type": "timeseries",
+      "status": "有数据",
+      "exprs": [
+        "histogram_quantile(0.95, sum(rate(rag_search_duration_seconds_bucket[5m])) by (le, backend))"
+      ]
+    },
+    {
+      "title": "Milvus Collection Stats",
+      "type": "stat",
+      "status": "无数据",
+      "exprs": [
+        "milvus_num_entities{collection_name=\"knowledge_chunks\"}"
+      ]
+    },
+    {
+      "title": "Redis Memory Usage",
+      "type": "gauge",
+      "status": "有数据",
+      "exprs": [
+        "redis_memory_used_bytes / redis_memory_max_bytes"
+      ]
+    },
+    {
+      "title": "Conversation Quality & Resolution",
+      "type": "timeseries",
+      "status": "有数据",
+      "exprs": [
+        "agent_quality_score_avg",
+        "agent_resolution_rate",
+        "agent_escalation_rate"
+      ]
+    },
+    {
+      "title": "Alert Events (Firing)",
+      "type": "table",
+      "status": "无数据",
+      "exprs": [
+        "ALERTS{alertstate=\"firing\"}"
+      ]
+    },
+    {
+      "title": "LLM Token Usage by Model (cost driver)",
+      "type": "timeseries",
+      "status": "有数据",
+      "exprs": [
+        "sum(rate(llm_tokens_total[5m])) by (model, type)"
+      ]
+    },
+    {
+      "title": "LLM Token Usage by Tenant",
+      "type": "timeseries",
+      "status": "有数据",
+      "exprs": [
+        "sum(rate(llm_tokens_total[5m])) by (tenant)"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "check": "prod-app-1 运行中",
+      "ok": true,
+      "detail": {
+        "status": "Up 12 minutes (healthy)"
+      }
+    },
+    {
+      "check": "prod-postgres-1 运行中",
+      "ok": true,
+      "detail": {
+        "status": "Up 41 minutes (healthy)"
+      }
+    },
+    {
+      "check": "prod-redis-1 运行中",
+      "ok": true,
+      "detail": {
+        "status": "Up 41 minutes (healthy)"
+      }
+    },
+    {
+      "check": "agent-prometheus 运行中",
+      "ok": true,
+      "detail": {
+        "status": "Up About a minute (healthy)"
+      }
+    },
+    {
+      "check": "agent-grafana 运行中",
+      "ok": true,
+      "detail": {
+        "status": "Up About a minute (healthy)"
+      }
+    },
+    {
+      "check": "agent-pg-exporter 运行中",
+      "ok": true,
+      "detail": {
+        "status": "Up 39 minutes"
+      }
+    },
+    {
+      "check": "agent-redis-exporter 运行中",
+      "ok": true,
+      "detail": {
+        "status": "Up 39 minutes"
+      }
+    },
+    {
+      "check": "有抓取目标",
+      "ok": true,
+      "detail": {
+        "targets": 4
+      }
+    },
+    {
+      "check": "job=app 状态 UP",
+      "ok": true,
+      "detail": {
+        "health": "up",
+        "scrape_url": "http://app:8000/api/v1/metrics/prometheus"
+      }
+    },
+    {
+      "check": "所有目标均为 UP",
+      "ok": true,
+      "detail": {
+        "app": "up",
+        "postgres": "up",
+        "prometheus": "up",
+        "redis": "up"
+      }
+    },
+    {
+      "check": "up{job=\"app\"} == 1",
+      "ok": true,
+      "detail": {
+        "result": [
+          {
+            "metric": {
+              "__name__": "up",
+              "instance": "app:8000",
+              "job": "app",
+              "service": "api"
+            },
+            "value": [
+              1789471252.036,
+              "1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "check": "GET /api/v1/metrics/prometheus 返回 200",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "check": "指标族数 >= 5",
+      "ok": true,
+      "detail": {
+        "type_lines": 13
+      }
+    },
+    {
+      "check": "样本行数 > 0",
+      "ok": true,
+      "detail": {
+        "sample_lines": 118
+      }
+    },
+    {
+      "check": "面板总数 >= 4",
+      "ok": true,
+      "detail": {
+        "panels": 14
+      }
+    },
+    {
+      "check": "有数据的面板 >= 4",
+      "ok": true,
+      "detail": {
+        "有数据": 11,
+        "无数据": 3
+      }
+    },
+    {
+      "check": "Grafana 健康检查",
+      "ok": true,
+      "detail": {
+        "version": "11.6.0"
+      }
+    },
+    {
+      "check": "可登录（admin/***）",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "check": "存在 prometheus 数据源",
+      "ok": true,
+      "detail": [
+        {
+          "name": "Prometheus",
+          "url": "http://prometheus:9090",
+          "default": true
+        }
+      ]
+    },
+    {
+      "check": "prometheus 为默认数据源",
+      "ok": true,
+      "detail": {
+        "isDefault": [
+          true
+        ]
+      }
+    },
+    {
+      "check": "仪表盘已 provisioning",
+      "ok": true,
+      "detail": [
+        {
+          "uid": "enterprise-agent",
+          "title": "Enterprise Agent — Service Overview"
+        }
+      ]
+    },
+    {
+      "check": "日志文件 /app/logs/app.jsonl 存在且有内容",
+      "ok": true,
+      "detail": {
+        "lines": 666
+      }
+    },
+    {
+      "check": "日志为 JSON 且含 request_id",
+      "ok": true,
+      "detail": {
+        "sample": {
+          "timestamp": "2026-09-15T11:20:52.224731",
+          "level": "INFO",
+          "message": "http_request",
+          "logger": "src.access",
+          "request_id": "c2a7c7305b82",
+          "duration_ms": 0.8,
+          "status_code": 200,
+          "method": "GET",
+          "path": "/health"
+        }
+      }
+    },
+    {
+      "check": "日志含 duration_ms",
+      "ok": true,
+      "detail": {
+        "sample": {
+          "timestamp": "2026-09-15T11:20:52.224731",
+          "level": "INFO",
+          "message": "http_request",
+          "logger": "src.access",
+          "request_id": "c2a7c7305b82",
+          "duration_ms": 0.8,
+          "status_code": 200,
+          "method": "GET",
+          "path": "/health"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total": 24,
+    "passed": 24,
+    "failed": []
+  }
+}
