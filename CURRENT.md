@@ -112,6 +112,22 @@ Docker daemon 未运行，无法读取现网镜像状态。改用 `git log` 取�
 **坐实证据**：Phase4b 验收（2026-09-21）实测 `GET /` 返回 **404**（现网镜像不托管前端）。
 ⚠️ `static/` 被 `.gitignore` 忽略，CI 与纯后端环境不存在该目录 —— `server.py:419-424` 注释记录了 GitHub Actions 曾因此连续红灯，代码已用 `is_dir()` 守卫解决，**但 Dockerfile 侧仍需显式构建前端或明确接受只发 API**。
 
+### 已修复：`docker-compose.prod.yml` 曾整体损坏（2026-10-04）
+
+`deploy/prod/docker-compose.prod.yml` 在 **09-22 提交 `9fb9f6e` 时就已损坏**，不是本轮造成：
+
+- 体积 **714675 字节 / 184 行**（正常应约 9KB / 200 行）
+- 第 12~16 行是 **1.6~2.2 万字符的乱码块**，文件头与全部中文注释均为 mojibake
+- git 历史里该文件**只有这一个提交**，无干净版本可回滚
+- 症状：`docker compose config` 无法解析，或解析出空的 `environment`
+
+**已用桌面留存的正确版本重建**（commit `ced2092`）：714KB → **9.2KB / 218 行**，Python `yaml.safe_load` 校验通过，3 服务 / 5 卷 / 1 网络，app 26 条 `environment`。
+逐项保留项目版特有配置：单容器内嵌 Ollama（`target: runtime-with-ollama`）、GPU 声明、`no_proxy`/`NO_PROXY`、`LANG`/`LC_ALL`/`PYTHONIOENCODING`、`OLLAMA_NUM_PARALLEL=1`、`JWT_SECRET` 注入、健康检查走 `/api/v1/health`。
+逐项比对旧文件有效行确认**无配置丢失**，且**无任何外网地址**（全内网红线保持）。
+
+损坏原件留证在 `dev/docker-compose.prod.yml.CORRUPTED-714KB`，确认无遗漏后可删。
+⚠️ **教训**：文件「莫名膨胀 + 中文变乱码」是同一类问题 —— 某工具以错误编码反复读写 UTF-8 会把内容撑成乱码堆。以后遇到先怀疑这类损坏，并**入库前用 `yaml.safe_load` 验一次**。
+
 ---
 
 ## 生产口径注入缺失（P0-7，仍未做）
