@@ -15,17 +15,17 @@ v0.5 更新（2026-07-15）：
     - 远程 RAG Service 调用：可选的 HTTP 调用 rag-service
     - 自动降级：Milvus 不可用时降级到 Chroma
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
-import os
 import re
 import time
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 
-from langchain_core.documents import Document
 from langchain_community.retrievers import BM25Retriever
+from langchain_core.documents import Document
+
 from src.config import settings
 from src.rag.chunker import SentenceWindowSplitter
 from src.rag.vector_store import VectorStoreManager
@@ -51,7 +51,7 @@ class HybridRetriever:
         persist_directory: str = None,
         collection_name: str = None,
         context_window: int = 3,
-        backend: str = None,      # "chroma" | "milvus" | "auto" | "remote"
+        backend: str = None,  # "chroma" | "milvus" | "auto" | "remote"
         rag_service_url: str = None,
     ):
         self.context_window = context_window
@@ -73,20 +73,24 @@ class HybridRetriever:
         )
 
         # 句子粒度索引（独立 collection）— 仅 Chroma 模式
-        self.sentence_store = VectorStoreManager(
-            persist_directory=persist_directory,
-            collection_name=f"{collection_name}_sentences",
-        ) if collection_name and self.backend != "remote" else None
+        self.sentence_store = (
+            VectorStoreManager(
+                persist_directory=persist_directory,
+                collection_name=f"{collection_name}_sentences",
+            )
+            if collection_name and self.backend != "remote"
+            else None
+        )
 
         self.bm25_retriever: BM25Retriever = None
-        self._all_documents: List[Document] = []
+        self._all_documents: list[Document] = []
 
         # 多知识库权重映射（对齐阿里云百炼，范围 0.5~2，默认 1.0）
-        self._kb_weights_map: Dict[str, float] = self._parse_kb_weights(
+        self._kb_weights_map: dict[str, float] = self._parse_kb_weights(
             settings.kb_weights
         )
         # 文档级权重表（按文件名加权，缓存到 _doc_weights_cache）
-        self._doc_weights_cache: Dict[str, float] = {}
+        self._doc_weights_cache: dict[str, float] = {}
 
         # 重排序器（懒加载，对齐阿里云百炼 + RAGFlow）
         self._reranker = None
@@ -97,10 +101,12 @@ class HybridRetriever:
         # 注定失败的初始化。置位后开关恒为关闭，需重启进程才能恢复（有意为之）。
         self._rerank_init_failed = False
 
-        logger.info("HybridRetriever initialized: backend=%s, rag_url=%s, rerank=%s",
-                     self.backend,
-                     self.rag_service_url if self.backend == "remote" else "N/A",
-                     self._rerank_enabled)
+        logger.info(
+            "HybridRetriever initialized: backend=%s, rag_url=%s, rerank=%s",
+            self.backend,
+            self.rag_service_url if self.backend == "remote" else "N/A",
+            self._rerank_enabled,
+        )
 
     @property
     def _rerank_enabled(self) -> bool:
@@ -121,7 +127,7 @@ class HybridRetriever:
         return int(getattr(settings, "rerank_top_n", 5) or 5)
 
     @staticmethod
-    def _parse_kb_weights(raw: str) -> Dict[str, float]:
+    def _parse_kb_weights(raw: str) -> dict[str, float]:
         """解析 kb_weights 配置（JSON 字符串 → dict）
 
         示例: '{"kb_a": 1.0, "kb_b": 1.5}' → {"kb_a": 1.0, "kb_b": 1.5}
@@ -131,20 +137,68 @@ class HybridRetriever:
             return {}
         try:
             import json
+
             data = json.loads(raw)
             if not isinstance(data, dict):
                 return {}
             # 截断到 0.5~2.0 范围（对齐阿里云）
-            return {
-                str(k): max(0.5, min(2.0, float(v)))
-                for k, v in data.items()
-            }
+            return {str(k): max(0.5, min(2.0, float(v))) for k, v in data.items()}
         except (ValueError, TypeError):
             logger.warning("Invalid kb_weights config, ignored: %s", raw)
             return {}
 
-    def _get_doc_weights_map(self) -> Dict[str, float]:
-        """解析文档级权重表（settings.doc_weights，JSON 字符串 → dict）
+    @staticmethod
+    def _parse_doc_weights(raw: str) -> dict[str, float] | None:
+        """解析文档级权重配置，支持两种等价写法
+
+        1. JSON（settings 默认值口径）：
+               '{"fault_troubleshooting_manual.md": 1.5, "faq_full.md": 0.8}'
+        2. 逗号简写（.env 与部署文档的长期既有口径）：
+               'fault_troubleshooting_manual.md:1.5,faq_full.md:0.8'
+
+        历史背景：.env.production 与 .env.production.example 一直发逗号简写，
+        旧解析器只认 JSON，导致生产日志反复 `Invalid doc_weights config, ignored`，
+        文档权重长期静默失效。两种写法现在等价。
+
+        权重范围 0.5~2.0，超出截断；空白条目（尾随逗号）容忍跳过。
+        任一非空条目非法（缺冒号/权重不是数字）整体判失效返回 None，
+        由调用方告警并按空表处理，避免半份配置静默生效。
+        """
+        if not raw or not str(raw).strip():
+            return {}
+
+        text = str(raw).strip()
+        try:
+            import json
+
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                return None
+            return {str(k): max(0.5, min(2.0, float(v))) for k, v in data.items()}
+        except (ValueError, TypeError):
+            pass  # 不是 JSON，走逗号简写
+
+        pairs: dict[str, float] = {}
+        for chunk in text.split(","):
+            item = chunk.strip()
+            if not item:
+                continue
+            if ":" not in item:
+                return None
+            name, _, value = item.rpartition(":")
+            name = name.strip()
+            value = value.strip()
+            if not name:
+                return None
+            try:
+                pairs[name] = max(0.5, min(2.0, float(value)))
+            except ValueError:
+                return None
+
+        return pairs or None
+
+    def _get_doc_weights_map(self) -> dict[str, float]:
+        """解析文档级权重表（settings.doc_weights → dict），带进程内缓存
 
         与 _parse_kb_weights 的区别：
             kb_weights    按知识库 id（kb_id）加权，粒度粗
@@ -152,36 +206,21 @@ class HybridRetriever:
         两者在 RRF 融合中相乘，共同决定最终分数。
 
         为什么要缓存（_doc_weights_cache）：
-            每次检索都对同一份配置做 json.loads 是纯浪费；配置热更新由配置中心
+            每次检索都对同一份配置做解析是纯浪费；配置热更新由配置中心
             负责，不走这里。缓存为空 dict 时才解析，非空直接返回同一对象，
             调用方可依赖 `w1 is w2` 判断命中缓存。
 
-        权重范围与 kb_weights 一致（0.5~2.0），非法值截断。
-        未配置的文档由调用方按 1.0 兜底，本表只存显式配置项。
+        权重范围 0.5~2.0，非法配置告警后按空表处理（调用方按 1.0 兜底）。
         """
         if self._doc_weights_cache:
             return self._doc_weights_cache
 
         raw = getattr(settings, "doc_weights", "")
-        if not raw or not str(raw).strip():
-            # 空配置：保持空 dict（调用方按 1.0 处理）
-            self._doc_weights_cache = {}
-            return self._doc_weights_cache
-
-        try:
-            import json
-
-            data = json.loads(raw)
-            if not isinstance(data, dict):
-                self._doc_weights_cache = {}
-                return self._doc_weights_cache
-            self._doc_weights_cache = {
-                str(k): max(0.5, min(2.0, float(v))) for k, v in data.items()
-            }
-        except (ValueError, TypeError):
+        parsed = self._parse_doc_weights(raw)
+        if parsed is None:
             logger.warning("Invalid doc_weights config, ignored: %s", raw)
-            self._doc_weights_cache = {}
-
+            parsed = {}
+        self._doc_weights_cache = parsed
         return self._doc_weights_cache
 
     def _get_doc_weight(self, doc: Document) -> float:
@@ -209,14 +248,10 @@ class HybridRetriever:
         try:
             cap = int(raw)
         except (ValueError, TypeError):
-            logger.warning(
-                "Invalid retrieval_source_cap=%r, fallback to 2", raw
-            )
+            logger.warning("Invalid retrieval_source_cap=%r, fallback to 2", raw)
             return 2
         if cap < 1:
-            logger.warning(
-                "retrieval_source_cap=%d 会把结果截空，已夹到 1", cap
-            )
+            logger.warning("retrieval_source_cap=%d 会把结果截空，已夹到 1", cap)
             return 1
         return cap
 
@@ -232,13 +267,17 @@ class HybridRetriever:
 
         try:
             from src.rag.milvus_store import MilvusVectorStore
+
             self._milvus_store = MilvusVectorStore(
                 host=settings.milvus_host,
                 port=settings.milvus_port,
             )
             self._milvus_store.ensure_collection()
-            logger.info("Milvus store initialized (host=%s:%d)",
-                        settings.milvus_host, settings.milvus_port)
+            logger.info(
+                "Milvus store initialized (host=%s:%d)",
+                settings.milvus_host,
+                settings.milvus_port,
+            )
         except Exception as e:
             logger.warning("Milvus unavailable (%s), falling back to Chroma", e)
             self._milvus_store = None
@@ -253,7 +292,7 @@ class HybridRetriever:
     def _use_remote(self) -> bool:
         return self.backend == "remote" and bool(self.rag_service_url)
 
-    def index_documents(self, documents: List[Document]) -> None:
+    def index_documents(self, documents: list[Document]) -> None:
         """索引文档：同时写入向量库和 BM25
 
         注意：此方法只索引标准粒度。
@@ -263,7 +302,7 @@ class HybridRetriever:
         self.vector_store.add_documents(documents)
         self.bm25_retriever = BM25Retriever.from_documents(documents)
 
-    def add_documents(self, documents: List[Document], tenant_id: str = "") -> None:
+    def add_documents(self, documents: list[Document], tenant_id: str = "") -> None:
         """增量索引文档（知识库 API 单文档入库用）
 
         与 index_documents 不同，本方法不清空既有索引：
@@ -285,26 +324,22 @@ class HybridRetriever:
         except Exception as e:
             logger.warning("BM25 rebuild failed (non-fatal): %s", e)
 
-    def index_sentence_chunks(
-        self, sentence_chunks: List[Document]
-    ) -> None:
+    def index_sentence_chunks(self, sentence_chunks: list[Document]) -> None:
         """索引句子级 chunk（由 HybridChunker.split_sentences() 产出）"""
         if self.sentence_store:
             self.sentence_store.add_documents(sentence_chunks)
-            logger.info(
-                "Indexed %d sentence chunks", len(sentence_chunks)
-            )
+            logger.info("Indexed %d sentence chunks", len(sentence_chunks))
 
     def search(
         self,
         query: str,
         top_k: int = 5,
         expand_context: bool = True,
-        filter_by: Optional[dict] = None,
+        filter_by: dict | None = None,
         user_id: str = "",
         tenant_id: str = "",
-        user_access_levels: Optional[List[str]] = None,
-    ) -> List[Document]:
+        user_access_levels: list[str] | None = None,
+    ) -> list[Document]:
         """混合检索，返回去重合并后的结果
 
         Args:
@@ -324,7 +359,10 @@ class HybridRetriever:
                 - access_filtered: 被权限过滤掉的文档数
         """
         results = self.search_with_scores(
-            query, top_k, expand_context, filter_by,
+            query,
+            top_k,
+            expand_context,
+            filter_by,
             user_id=user_id,
             tenant_id=tenant_id,
             user_access_levels=user_access_levels,
@@ -336,11 +374,11 @@ class HybridRetriever:
         query: str,
         top_k: int = 5,
         expand_context: bool = True,
-        filter_by: Optional[dict] = None,
+        filter_by: dict | None = None,
         user_id: str = "",
         tenant_id: str = "",
-        user_access_levels: Optional[List[str]] = None,
-    ) -> List[Tuple[Document, float]]:
+        user_access_levels: list[str] | None = None,
+    ) -> list[tuple[Document, float]]:
         """带分数的混合检索
 
         权限过滤流程：
@@ -364,9 +402,11 @@ class HybridRetriever:
         bm25_results = self._bm25_search(query, top_k * 2, filter_by)
 
         # 句子粒度：向量检索
-        sentence_results = self._sentence_vector_search(
-            query, top_k, filter_by
-        ) if self.sentence_store else []
+        sentence_results = (
+            self._sentence_vector_search(query, top_k, filter_by)
+            if self.sentence_store
+            else []
+        )
 
         # RRF 融合（标准粒度）
         standard_merged = self._rrf_fusion(vector_results, bm25_results, top_k)
@@ -416,7 +456,7 @@ class HybridRetriever:
                 hit=bool(final),
             )
         except Exception:  # pragma: no cover - 指标不应影响业务
-            pass
+            logger.debug("record_rag_search metric failed", exc_info=True)
 
         return final
 
@@ -425,8 +465,8 @@ class HybridRetriever:
     # ------------------------------------------------------------------
 
     def _vector_search(
-        self, query: str, top_k: int, filter_by: Optional[dict]
-    ) -> List[Tuple[Document, float]]:
+        self, query: str, top_k: int, filter_by: dict | None
+    ) -> list[tuple[Document, float]]:
         """向量检索 — 根据 backend 自动路由
 
         Chroma:  本地 LangChain Chroma wrapper
@@ -453,15 +493,17 @@ class HybridRetriever:
         # 即便应用层后过滤（_filter_by_permission）出 bug 也不会跨租户串台；
         # default 沿用历史行为（历史文档可能无 tenant_id 元数据，避免误伤）。
         tenant_id = (filter_by or {}).get("tenant_id")
-        where = {"tenant_id": tenant_id} if tenant_id and tenant_id != "default" else None
+        where = (
+            {"tenant_id": tenant_id} if tenant_id and tenant_id != "default" else None
+        )
         results = self.vector_store.search_with_scores(query, top_k, where=where)
         if filter_by:
             results = self._apply_filter(results, filter_by)
         return self._filter_by_similarity(results)
 
     def _milvus_vector_search(
-        self, query: str, top_k: int, filter_by: Optional[dict]
-    ) -> List[Tuple[Document, float]]:
+        self, query: str, top_k: int, filter_by: dict | None
+    ) -> list[tuple[Document, float]]:
         """通过 Milvus 进行向量检索"""
         tenant_id = filter_by.get("tenant_id", "") if filter_by else ""
         access_levels = filter_by.get("access_levels") if filter_by else None
@@ -492,12 +534,12 @@ class HybridRetriever:
         return results
 
     def _remote_vector_search(
-        self, query: str, top_k: int, filter_by: Optional[dict]
-    ) -> List[Tuple[Document, float]]:
+        self, query: str, top_k: int, filter_by: dict | None
+    ) -> list[tuple[Document, float]]:
         """通过 HTTP 调用远端 RAG Service"""
         import json
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         payload = {
             "query": query,
@@ -509,12 +551,14 @@ class HybridRetriever:
 
         try:
             data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
+            req = urllib.request.Request(  # noqa: S310  URL 来自受信任配置
                 f"{self.rag_service_url}/search",
                 data=data,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=settings.rag_service_timeout) as resp:  # nosec B310  # URL 来自受信任配置(settings.rag_service_url)
+            with urllib.request.urlopen(  # noqa: S310
+                req, timeout=settings.rag_service_timeout
+            ) as resp:  # nosec B310  # URL 来自受信任配置(settings.rag_service_url)
                 body = json.loads(resp.read().decode("utf-8"))
 
             results = []
@@ -531,20 +575,25 @@ class HybridRetriever:
                 )
                 results.append((doc, item["score"]))
 
-            logger.debug("Remote RAG search: %d hits in %.1fms",
-                         len(results), body.get("latency_ms", 0))
+            logger.debug(
+                "Remote RAG search: %d hits in %.1fms",
+                len(results),
+                body.get("latency_ms", 0),
+            )
             return results
 
         except urllib.error.URLError as e:
-            logger.error("Remote RAG service unreachable (%s): %s", self.rag_service_url, e)
+            logger.error(
+                "Remote RAG service unreachable (%s): %s", self.rag_service_url, e
+            )
             return []
         except Exception as e:
             logger.exception("Remote RAG search failed: %s", e)
             return []
 
     def _bm25_search(
-        self, query: str, top_k: int, filter_by: Optional[dict]
-    ) -> List[Tuple[Document, float]]:
+        self, query: str, top_k: int, filter_by: dict | None
+    ) -> list[tuple[Document, float]]:
         if not self.bm25_retriever:
             return []
         bm25_docs = self.bm25_retriever.invoke(query)[:top_k]
@@ -554,8 +603,8 @@ class HybridRetriever:
         return results
 
     def _sentence_vector_search(
-        self, query: str, top_k: int, filter_by: Optional[dict]
-    ) -> List[Tuple[Document, float]]:
+        self, query: str, top_k: int, filter_by: dict | None
+    ) -> list[tuple[Document, float]]:
         results = self.sentence_store.search_with_scores(query, top_k * 2)
         if filter_by:
             results = self._apply_filter(results, filter_by)
@@ -563,9 +612,9 @@ class HybridRetriever:
 
     def _apply_filter(
         self,
-        results: List[Tuple[Document, float]],
+        results: list[tuple[Document, float]],
         filter_by: dict,
-    ) -> List[Tuple[Document, float]]:
+    ) -> list[tuple[Document, float]]:
         """按元数据过滤结果"""
         filtered = []
         for doc, score in results:
@@ -580,8 +629,8 @@ class HybridRetriever:
 
     def _filter_by_similarity(
         self,
-        results: List[Tuple[Document, float]],
-    ) -> List[Tuple[Document, float]]:
+        results: list[tuple[Document, float]],
+    ) -> list[tuple[Document, float]]:
         """相似度阈值过滤（对齐阿里云百炼 AI 助理）
 
         仅保留语义相似度 >= kb_similarity_threshold 的结果。
@@ -591,14 +640,27 @@ class HybridRetriever:
             - Milvus: 内积/cosine 相似度
             - Remote: 上游 RAG Service 返回的相似度
         """
+        if not results:
+            return results
+        # Phase5 P0-4：把向量通道的「未归一化绝对相似度」盖到 metadata，
+        # 供 call_policy.judge_probe 作 smart 模式的绝对判据信号。
+        # RRF 的 metadata["score"] 是组内相对分（top1 恒为 1.0），不能承担该判据。
+        # 各后端每次检索都新建 Document 对象，盖戳不会污染长期持有的索引文档。
+        for doc, score in results:
+            try:
+                doc.metadata["vector_similarity"] = round(float(score), 6)
+            except (TypeError, ValueError):  # noqa: PERF203 - 跳过坏分数继续盖戳
+                continue
         threshold = settings.kb_similarity_threshold
-        if threshold <= 0 or not results:
+        if threshold <= 0:
             return results
         filtered = [(doc, score) for doc, score in results if score >= threshold]
         if len(filtered) < len(results):
             logger.debug(
                 "Similarity filter: %d → %d (threshold=%.2f)",
-                len(results), len(filtered), threshold,
+                len(results),
+                len(filtered),
+                threshold,
             )
         return filtered
 
@@ -608,38 +670,64 @@ class HybridRetriever:
 
     def _rrf_fusion(
         self,
-        vector_results: List[Tuple[Document, float]],
-        bm25_results: List[Tuple[Document, float]],
+        vector_results: list[tuple[Document, float]],
+        bm25_results: list[tuple[Document, float]],
         top_k: int,
         k: int = 60,
-    ) -> List[Tuple[Document, float]]:
+    ) -> list[tuple[Document, float]]:
         """Reciprocal Rank Fusion — 合并两组检索结果
 
-        权重体系（两级相乘）：
-            kb_weights   按知识库 id，范围 0.5~2，默认 1.0
-            doc_weights  按文档文件名，范围 0.5~2，默认 1.0
-        同一文档在两个通道（向量 + BM25）都命中时，分数自然累积，
-        因此高权重文档在多通道命中时优势更明显。
+        排序主键是裸 RRF 累积分 1/(k+rank+1)。同一文档在两个通道
+        （向量 + BM25）都命中时分数自然累积，多通道共识是最健康的
+        相关性信号，必须保持不被权重稀释。
 
-        相同 RRF 分数时，权重高的结果优先返回。
+        权重体系（两级相乘，kb_weights × doc_weights，范围 0.5~2，默认 1.0）
+        只在裸 RRF 分完全相同时做平局裁决，权重高者优先。
+
+        历史教训（2026-10-06，生产 F02 查询回归）：权重曾直接乘进 RRF 分。
+        RRF 相邻 rank 的分差极窄（rank0=1/61 与 rank5=1/66 仅差 8%），
+        1.5x 权重等价于把文档提前约 20 个 rank 位，导致高权重文档的 5 个
+        低相关 chunk 集体反超他源 rank0 的最相关块，正确资料在截断前出局。
         """
         scores = {}
+        weights = {}
         doc_map = {}
 
         for rank, (doc, _) in enumerate(vector_results):
             doc_id = doc.page_content[:100]
             weight = self._get_kb_weight(doc) * self._get_doc_weight(doc)
-            scores[doc_id] = scores.get(doc_id, 0) + weight * 1.0 / (k + rank + 1)
+            scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
+            weights[doc_id] = weight
             doc_map[doc_id] = doc
 
         for rank, (doc, _) in enumerate(bm25_results):
             doc_id = doc.page_content[:100]
             weight = self._get_kb_weight(doc) * self._get_doc_weight(doc)
-            scores[doc_id] = scores.get(doc_id, 0) + weight * 1.0 / (k + rank + 1)
-            doc_map[doc_id] = doc
+            scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
+            weights[doc_id] = weight
+            # 同内容已在向量通道命中时保留向量对象：它是每次检索新建的、
+            # metadata 带 vector_similarity 绝对分；BM25 对象是索引期长期持有的
+            # 原始文档，覆盖会丢绝对分戳并造成跨查询 metadata 残留。
+            if doc_id not in doc_map:
+                doc_map[doc_id] = doc
 
-        sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
-        return [(doc_map[doc_id], scores[doc_id]) for doc_id in sorted_ids[:top_k]]
+        # 裸 RRF 分优先；仅同分时权重做 tiebreak
+        sorted_ids = sorted(
+            scores.keys(),
+            key=lambda x: (scores[x], weights[x]),
+            reverse=True,
+        )
+        # Phase5 §2.5：留 RRF 原始分到 metadata，供内容级去重时「同键保留高分者」。
+        # 该分数区间窄且只由排名决定，不能作「是否检索」判据
+        # （判据用 vector_similarity）。
+        fused: list[tuple[Document, float]] = []
+        for doc_id in sorted_ids[:top_k]:
+            doc = doc_map[doc_id]
+            raw = scores[doc_id]
+            with contextlib.suppress(TypeError, ValueError):
+                doc.metadata["raw_score"] = round(float(raw), 6)
+            fused.append((doc, raw))
+        return fused
 
     def _get_kb_weight(self, doc: Document) -> float:
         """获取文档所属知识库的权重（对齐阿里云百炼多知识库权重）
@@ -673,6 +761,7 @@ class HybridRetriever:
             return None
         try:
             from src.rag.reranker import create_reranker
+
             self._reranker = create_reranker(
                 provider=settings.rerank_provider,
                 model_name=settings.rerank_model,
@@ -681,12 +770,14 @@ class HybridRetriever:
             )
             logger.info(
                 "Reranker initialized: provider=%s, model=%s",
-                settings.rerank_provider, settings.rerank_model,
+                settings.rerank_provider,
+                settings.rerank_model,
             )
         except Exception as e:
             logger.warning(
                 "Reranker init failed (%s: %s), rerank disabled",
-                settings.rerank_provider, e,
+                settings.rerank_provider,
+                e,
             )
             # 置闩锁而非赋值开关：_rerank_enabled 现在是读时取值的 property，
             # 直接赋值会掩盖配置。闩锁让开关恒为 False，且语义清晰
@@ -698,8 +789,8 @@ class HybridRetriever:
     def _rerank(
         self,
         query: str,
-        candidates: List[Tuple[Document, float]],
-    ) -> List[Tuple[Document, float]]:
+        candidates: list[tuple[Document, float]],
+    ) -> list[tuple[Document, float]]:
         """对候选结果重排序
 
         在 RRF 融合后调用 reranker 对 top 候选二次打分排序。
@@ -733,11 +824,17 @@ class HybridRetriever:
 
     def _merge_standard_and_sentence(
         self,
-        standard: List[Tuple[Document, float]],
-        sentence: List[Tuple[Document, float]],
+        standard: list[tuple[Document, float]],
+        sentence: list[tuple[Document, float]],
         top_k: int,
-    ) -> List[Tuple[Document, float]]:
+    ) -> list[tuple[Document, float]]:
         """合并标准粒度 + 句子粒度结果，按内容去重"""
+        # 句子通道的 tuple 分数是原始向量相似度（expand_context 可能新建 Document
+        # 导致 _filter_by_similarity 的盖戳丢失），这里补盖，供 call_policy 判据使用
+        for doc, score in sentence:
+            if "vector_similarity" not in doc.metadata:
+                with contextlib.suppress(TypeError, ValueError):
+                    doc.metadata["vector_similarity"] = round(float(score), 6)
         all_results = standard + sentence
         seen_contents = set()
         merged = []
@@ -755,11 +852,11 @@ class HybridRetriever:
 
     def _filter_by_permission(
         self,
-        results: List[Tuple[Document, float]],
+        results: list[tuple[Document, float]],
         tenant_id: str,
         user_id: str,
-        user_access_levels: List[str],
-    ) -> List[Tuple[Document, float]]:
+        user_access_levels: list[str],
+    ) -> list[tuple[Document, float]]:
         """二次权限过滤：租户隔离 + 访问等级过滤
 
         过滤规则：
@@ -828,16 +925,20 @@ class HybridRetriever:
         if len(filtered) < len(results):
             logger.info(
                 "Permission filter: %d → %d results (tenant=%s, user=%s, access=%s)",
-                len(results), len(filtered), tenant_id, user_id, user_access_levels,
+                len(results),
+                len(filtered),
+                tenant_id,
+                user_id,
+                user_access_levels,
             )
 
         return filtered
 
     def _resolve_version_conflicts(
         self,
-        results: List[Tuple[Document, float]],
+        results: list[tuple[Document, float]],
         top_k: int,
-    ) -> List[Tuple[Document, float]]:
+    ) -> list[tuple[Document, float]]:
         """解决同一问题召回多个版本的冲突 + 单来源配额截断
 
         处理顺序（重要，三步不可换位）：
@@ -865,8 +966,8 @@ class HybridRetriever:
 
         # ---- 第 2 步：来源配额 ----
         cap = self._source_chunk_cap()
-        per_source_count: Dict[str, int] = {}
-        capped: List[Tuple[Document, float]] = []
+        per_source_count: dict[str, int] = {}
+        capped: list[tuple[Document, float]] = []
         for doc, score in resolved:
             source = doc.metadata.get("source", "unknown")
             n = per_source_count.get(source, 0)
@@ -880,8 +981,8 @@ class HybridRetriever:
 
     def _dedupe_versions(
         self,
-        results: List[Tuple[Document, float]],
-    ) -> List[Tuple[Document, float]]:
+        results: list[tuple[Document, float]],
+    ) -> list[tuple[Document, float]]:
         """按 source 消解版本冲突，同时保持全局相关性顺序
 
         返回顺序与入参一致（仅剔除被判定为「旧版本/废弃版本」的项）。
@@ -890,13 +991,13 @@ class HybridRetriever:
         from collections import defaultdict
 
         # 按 source 收集，用于判断哪些 source 存在真实版本冲突
-        groups: Dict[str, List[Tuple[Document, float]]] = defaultdict(list)
+        groups: dict[str, list[tuple[Document, float]]] = defaultdict(list)
         for doc, score in results:
             groups[doc.metadata.get("source", "unknown")].append((doc, score))
 
         # 每个 source：决定哪些 doc 要剔除
         drop_ids: set = set()
-        conflict_warnings: List[str] = []
+        conflict_warnings: list[str] = []
 
         for source, group_docs in groups.items():
             versions = self._extract_versions(group_docs)
@@ -907,7 +1008,8 @@ class HybridRetriever:
 
             sorted_versions = self._sort_versions(versions)
             active = [
-                v for v in sorted_versions
+                v
+                for v in sorted_versions
                 if v["status"] not in ("deprecated", "superseded", "archived")
             ]
 
@@ -922,8 +1024,7 @@ class HybridRetriever:
                 if len(active) > 1:
                     latest_ver = active[-1].get("version", "latest")
                     other_vers = [
-                        v.get("version", f"v{i}")
-                        for i, v in enumerate(active[:-1])
+                        v.get("version", f"v{i}") for i, v in enumerate(active[:-1])
                     ]
                     conflict_warnings.append(
                         f"冲突：文档 {source} 有多个活跃版本 "
@@ -940,19 +1041,16 @@ class HybridRetriever:
         if conflict_warnings and kept:
             kept[0][0].metadata["version_conflicts"] = conflict_warnings
             kept[0][0].metadata["has_conflicts"] = True
-            logger.warning(
-                "Version conflicts detected: %s", conflict_warnings
-            )
+            logger.warning("Version conflicts detected: %s", conflict_warnings)
 
         return kept
 
-    def _extract_versions(
-        self, docs: List[Tuple[Document, float]]
-    ) -> List[dict]:
+    def _extract_versions(self, docs: list[tuple[Document, float]]) -> list[dict]:
         """从文档元数据中提取版本号信息
 
         Returns:
-            [{"version": "v3.2", "sort_key": 302, "status": "active", "doc_tuple": ...}, ...]
+            [{"version": "v3.2", "sort_key": 302,
+              "status": "active", "doc_tuple": ...}, ...]
         """
         versions = []
         for doc, score in docs:
@@ -975,12 +1073,14 @@ class HybridRetriever:
             if status == "superseded":
                 status = "deprecated"
 
-            versions.append({
-                "version": version_str or "unknown",
-                "sort_key": sort_key,
-                "status": status,
-                "doc_tuple": (doc, score),
-            })
+            versions.append(
+                {
+                    "version": version_str or "unknown",
+                    "sort_key": sort_key,
+                    "status": status,
+                    "doc_tuple": (doc, score),
+                }
+            )
 
         return versions
 
@@ -1001,16 +1101,17 @@ class HybridRetriever:
             return major * 100 + minor
         return 0
 
-    def _sort_versions(self, versions: List[dict]) -> List[dict]:
+    def _sort_versions(self, versions: list[dict]) -> list[dict]:
         """按版本号升序排序"""
         return sorted(versions, key=lambda v: v["sort_key"])
 
-    def _get_latest_active_version(
-        self, versions: List[dict]
-    ) -> Optional[dict]:
+    def _get_latest_active_version(self, versions: list[dict]) -> dict | None:
         """获取最新的活跃版本"""
-        active = [v for v in versions if v["status"] not in
-                  ("deprecated", "superseded", "archived")]
+        active = [
+            v
+            for v in versions
+            if v["status"] not in ("deprecated", "superseded", "archived")
+        ]
         if active:
             return max(active, key=lambda v: v["sort_key"])
         return None

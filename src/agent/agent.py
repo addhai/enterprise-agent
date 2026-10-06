@@ -1,14 +1,15 @@
-from typing import List, Optional
-from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
-from src.config import settings
+
+from src.agent.cancellable_llm import make_chat_model
+from src.agent.fake_llm import LLMClient
 from src.agent.prompt import build_prompt
 from src.agent.tools import create_tools
-from src.agent.fake_llm import LLMClient
-from src.core.exceptions import AgentRuntimeError, safe_message
+from src.config import settings
+from src.core.exceptions import AgentRuntimeError
 from src.core.logging import get_logger, new_request_id
+from src.graph.cancellation import WorkflowCancelled
 
 logger = get_logger(__name__)
 
@@ -21,17 +22,26 @@ class CustomerServiceAgent:
     无需真实 API Key / 网络（见 `tests/test_agent/test_agent_deterministic.py`）。
     """
 
-    def __init__(self, retriever=None, user_id: str = "", max_turns: int = None,
-                 memory_context: str = "", tenant_id: str = "",
-                 user_access_levels: Optional[List[str]] = None,
-                 user_roles: Optional[List[str]] = None,
-                 user_plan: str = "free",
-                 llm_client: Optional[LLMClient] = None):
+    def __init__(
+        self,
+        retriever=None,
+        user_id: str = "",
+        max_turns: int = None,
+        memory_context: str = "",
+        tenant_id: str = "",
+        user_access_levels: list[str] | None = None,
+        user_roles: list[str] | None = None,
+        user_plan: str = "free",
+        llm_client: LLMClient | None = None,
+    ):
         self.max_turns = max_turns or settings.max_reasoning_turns
         self.user_id = user_id or "anonymous"
         self.tenant_id = tenant_id
         self.user_access_levels = user_access_levels or [
-            "public", "internal", "confidential", "restricted"
+            "public",
+            "internal",
+            "confidential",
+            "restricted",
         ]
         self.user_roles = user_roles or []
         self.user_plan = user_plan
@@ -98,6 +108,7 @@ class CustomerServiceAgent:
         就没法复用（测试也正是对着这个方法打桩的）。
         """
         # 生产模式：创建 LLM（对齐阿里云百炼 AI 助理参数）
+        # 走 make_chat_model：统一单次请求超时 + WS 断开协作式取消（见 cancellable_llm）
         llm_kwargs = {
             "model": settings.llm_model,
             "api_key": settings.openai_api_key,
@@ -108,7 +119,7 @@ class CustomerServiceAgent:
         # 思考模式（仅在启用时传递，避免不支持的模型报错）
         if settings.llm_enable_thinking:
             llm_kwargs["model_kwargs"] = {"extra_body": {"enable_thinking": True}}
-        self.llm = ChatOpenAI(**llm_kwargs)
+        self.llm = make_chat_model(**llm_kwargs)
 
         # 创建 Agent (LangGraph-based)
         self.agent = create_agent(
@@ -206,6 +217,10 @@ class CustomerServiceAgent:
                 "建议您把问题拆得更具体一些，或直接凭会话 ID 联系人工客服协助。"
             )
         except Exception as e:  # noqa: BLE001 - 兜底，但必须安全处理
+            # 协作式取消不属于运行时错误，透传到工作流边界收卷，
+            # 否则断线后 ReAct 会被当成普通失败转兜底，线程继续空跑
+            if isinstance(e, WorkflowCancelled):
+                raise
             # 内部细节（堆栈/第三方报错）只进日志，绝不回显给用户（安全红线）
             logger.error("agent invoke failed req=%s", request_id, exc_info=e)
             return AgentRuntimeError(
@@ -220,10 +235,15 @@ class CustomerServiceAgent:
         try:
             meta = getattr(message, "response_metadata", None) or {}
             token_usage = meta.get("token_usage") or meta.get("usage") or {}
-            prompt = token_usage.get("prompt_tokens") or token_usage.get("input_tokens", 0)
-            completion = token_usage.get("completion_tokens") or token_usage.get("output_tokens", 0)
+            prompt = token_usage.get("prompt_tokens") or token_usage.get(
+                "input_tokens", 0
+            )
+            completion = token_usage.get("completion_tokens") or token_usage.get(
+                "output_tokens", 0
+            )
             if prompt or completion:
                 from src.api.metrics import record_llm_tokens
+
                 record_llm_tokens(
                     model=settings.llm_model,
                     prompt_tokens=int(prompt),
@@ -234,7 +254,9 @@ class CustomerServiceAgent:
             # 旧代码为 `except Exception: pass`，导致线上完全盲区。
             # 改为结构化日志：至少留痕，便于排查 token 计费/上报链路问题。
             logger.warning(
-                "token usage report skipped tenant=%s: %s", self.tenant_id or "default", e
+                "token usage report skipped tenant=%s: %s",
+                self.tenant_id or "default",
+                e,
             )
 
     def _build_run_config(self) -> dict:
@@ -297,9 +319,7 @@ class CustomerServiceAgent:
         except GraphRecursionError:
             # 轮次耗尽降级：必须保持与正常返回完全一致的结构，
             # 否则下游 rag_node（读 output / messages）会因缺键而二次报错。
-            logger.warning(
-                "run_with_trace 命中轮次上限 max_turns=%s", self.max_turns
-            )
+            logger.warning("run_with_trace 命中轮次上限 max_turns=%s", self.max_turns)
             return {
                 "output": (
                     "抱歉，这个问题需要多步查询，我暂时没能收敛到答案。"

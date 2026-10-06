@@ -19,7 +19,10 @@ _JWT_DEV_SECRET_FILE = os.path.join(
 
 class Settings(BaseSettings):
     """全局配置，从 .env 和环境变量读取"""
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     # OpenAI-compatible (阿里云百炼)
     openai_api_key: str = ""
@@ -30,9 +33,15 @@ class Settings(BaseSettings):
     llm_model: str = "qwen-plus"
     llm_complex_model: str = "qwen-max"
     # LLM 推理参数（对齐阿里云百炼 AI 助理）
-    llm_temperature: float = 0.0           # 温度系数，越高越随机（阿里云默认 0.0）
-    llm_max_tokens: int = 2048             # 最长回复长度（不含提示词）
-    llm_enable_thinking: bool = False      # 思考模式（提升反思效果，需模型支持）
+    llm_temperature: float = 0.0  # 温度系数，越高越随机（阿里云默认 0.0）
+    llm_max_tokens: int = 2048  # 最长回复长度（不含提示词）
+    llm_enable_thinking: bool = False  # 思考模式（提升反思效果，需模型支持）
+    # 单次 LLM HTTP 请求超时（秒）。CPU ollama 一次生成约 2~3 分钟，
+    # 给 300s 余量；设上限是为了挂死请求能自行释放线程，配合协作式取消。
+    llm_request_timeout: float = 300.0
+    # 单轮对话工作流墙钟硬超时（秒）。WS 断开/客户端静默掉线后，图最多在
+    # 当前 LLM 调用边界（≤ llm_request_timeout）收卷，整体上限约为本值 + 一次请求。
+    ws_workflow_hard_timeout: float = 600.0
 
     # LangSmith
     langsmith_api_key: str = ""
@@ -40,8 +49,10 @@ class Settings(BaseSettings):
     langsmith_tracing: bool = True
 
     # JWT 认证（无状态 token，支持多副本部署）。
-    # 未配置 JWT_SECRET 时，config 会生成持久化随机密钥（.jwt_secret，gitignored）兜底，
-    # 杜绝使用仓库内写死的已知默认密钥（可被伪造）；多副本/生产务必在 .env 配置 JWT_SECRET 共享密钥。
+    # 未配置 JWT_SECRET 时，config 会生成持久化随机密钥
+    # （.jwt_secret，gitignored）兜底，
+    # 杜绝使用仓库内写死的已知默认密钥（可被伪造）；
+    # 多副本/生产务必在 .env 配置 JWT_SECRET 共享密钥。
     jwt_secret: str = "enterprise-agent-dev-secret-please-change-in-prod"
     access_token_expire_hours: int = 12
 
@@ -53,15 +64,15 @@ class Settings(BaseSettings):
     milvus_host: str = "localhost"
     milvus_port: int = 19530
     milvus_collection_name: str = "knowledge_chunks"
-    vector_store_backend: str = "chroma"        # "chroma" | "milvus" | "auto" | "remote"
+    vector_store_backend: str = "chroma"  # "chroma" | "milvus" | "auto" | "remote"
 
     # MinIO / S3
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
-    minio_bucket_docs: str = "agent-docs"       # 文档存储桶
-    minio_bucket_logs: str = "agent-logs"       # 日志归档桶
-    minio_bucket_models: str = "agent-models"   # 模型权重桶
+    minio_bucket_docs: str = "agent-docs"  # 文档存储桶
+    minio_bucket_logs: str = "agent-logs"  # 日志归档桶
+    minio_bucket_models: str = "agent-models"  # 模型权重桶
     minio_use_ssl: bool = False
 
     # RabbitMQ
@@ -74,7 +85,7 @@ class Settings(BaseSettings):
 
     # RAG Service (远程调用)
     rag_service_url: str = "http://localhost:8001"
-    rag_service_timeout: float = 10.0           # HTTP 调用超时 (秒)
+    rag_service_timeout: float = 10.0  # HTTP 调用超时 (秒)
 
     # Retrieval
     chunk_size: int = 512
@@ -86,7 +97,10 @@ class Settings(BaseSettings):
     # 目的：避免一份长文档（拆成几十个 chunk）占满 top_k，把其他来源挤出上下文。
     # 设为 0 或负数会把结果整体截空，属配置事故，运行时夹到 1。
     retrieval_source_cap: int = 2
-    # 文档级权重 JSON，如 {"产品规格书.md":1.3}，范围 0.5~2.0，参与 RRF 分数加权
+    # 文档级权重，范围 0.5~2.0，参与 RRF 分数加权。两种写法等价：
+    #   JSON：{"产品规格书.md": 1.3}
+    #   逗号简写（.env 常用）：故障手册.md:1.5,faq.md:0.8
+    # 解析见 HybridRetriever._parse_doc_weights；非法条目整体失效并告警。
     # 与 kb_weights（按知识库）是两个维度：本项按具体文档文件加细粒度权重。
     # 默认值体现工厂知识库的检索优先级：故障手册最具体（1.5），
     # 产品规格次之（1.3），FAQ 泛化程度最高故降权（0.8）。可在 .env 覆盖。
@@ -96,18 +110,32 @@ class Settings(BaseSettings):
         '"faq_full.md": 0.8}'
     )
     # 知识库配置（对齐阿里云百炼 AI 助理）
-    kb_similarity_threshold: float = 0.2   # 相似度阈值 0.01~1，仅高于此值才召回（阿里云默认 0.2）
-    kb_call_mode: str = "always"           # 调用模式：always 必定调用 / smart 智能调用（AI 自主判断）
-    kb_weights: str = ""                   # 多知识库权重 JSON，如 {"kb_a":1.0,"kb_b":1.5}，范围 0.5~2
+    kb_similarity_threshold: float = (
+        0.2  # 相似度阈值 0.01~1，仅高于此值才召回（阿里云默认 0.2）
+    )
+    kb_call_mode: str = (
+        "always"  # 调用模式：always 必定调用 / smart 智能调用（AI 自主判断）
+    )
+    kb_weights: str = ""  # 多知识库权重 JSON，如 {"kb_a":1.0,"kb_b":1.5}，范围 0.5~2
+    # 高置信命中旁路 ReAct：预检索 top1 向量绝对相似度达到此阈值时，
+    # 跳过工具 Agent 的多轮 ReAct，直接用检索资料做一次 LLM 直答合成。
+    # 背景：7B 模型在多工具场景误路由/ReAct 不收敛，资料已注入仍空转；
+    # 直答把单题时延从 5 轮（CPU 约 7 分钟）压到 1 次调用。关闭则全走 Agent。
+    kb_direct_answer_enabled: bool = True
+    kb_direct_answer_threshold: float = 0.35
     # 查询改写开关（口语化提问 → 检索友好查询）
     # 开启后对用户输入做同义词扩展/指代消解，提升召回；代价是多一次处理开销。
     # 默认开启：改写是纯规则表计算（不调 LLM），开销极低而召回收益明确。
-    rewrite_enabled: bool = True           # 是否启用查询改写（默认开启）
+    rewrite_enabled: bool = True  # 是否启用查询改写（默认开启）
     # 重排序配置（对齐阿里云百炼 + RAGFlow）
-    rerank_enabled: bool = False           # 是否启用重排序（默认关闭，开启后检索准确率提升 10-20%）
-    rerank_provider: str = "dashscope"     # Provider: dashscope(阿里云gte-rerank) / local_bge(BGE本地) / llm(LLM降级)
-    rerank_model: str = "gte-rerank"       # 重排序模型名（dashscope 用 gte-rerank，local_bge 用 BAAI/bge-reranker-base）
-    rerank_top_n: int = 5                  # 重排序后返回前 N 个结果
+    rerank_enabled: bool = (
+        False  # 是否启用重排序（默认关闭，开启后检索准确率提升 10-20%）
+    )
+    # Provider: dashscope(阿里云gte-rerank) / local_bge(BGE本地) / llm(LLM降级)
+    rerank_provider: str = "dashscope"
+    # 重排序模型名（dashscope 用 gte-rerank，local_bge 用 BAAI/bge-reranker-base）
+    rerank_model: str = "gte-rerank"
+    rerank_top_n: int = 5  # 重排序后返回前 N 个结果
 
     # Agent
     max_reasoning_turns: int = 5
@@ -117,55 +145,57 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379"
-    short_term_ttl: int = 3600          # 短期记忆过期时间（秒），默认 1 小时
-    short_term_max_window: int = 20     # 滑动窗口最大消息数
+    short_term_ttl: int = 3600  # 短期记忆过期时间（秒），默认 1 小时
+    short_term_max_window: int = 20  # 滑动窗口最大消息数
 
     # PostgreSQL
     database_url: str = "postgresql://localhost:5432/agent"
-    # 存储后端切换: auto(默认, 连不上 PG 自动回退 SQLite 文件) / postgres(强制 PG) / sqlite(强制 SQLite 文件)
+    # 存储后端切换: auto(默认, 连不上 PG 自动回退 SQLite 文件)
+    # / postgres(强制 PG) / sqlite(强制 SQLite 文件)
     storage_backend: str = "auto"
     long_term_max_per_user: int = 1000  # 每用户长期记忆上限
 
     # Memory
-    memory_context_max_docs: int = 3    # 注入上下文的长期记忆条数
-    memory_summary_model: str = ""      # 摘要 LLM 型号，空字符串使用 llm_model
-    context_rounds: int = 10            # 携带上下文轮数（对齐阿里云，轮数越多相关性越强）
+    memory_context_max_docs: int = 3  # 注入上下文的长期记忆条数
+    memory_summary_model: str = ""  # 摘要 LLM 型号，空字符串使用 llm_model
+    context_rounds: int = 10  # 携带上下文轮数（对齐阿里云，轮数越多相关性越强）
 
     # Server
-    host: str = "0.0.0.0"
+    # 容器内监听全部网卡是预期行为，服务只在 docker 网络/受信主机暴露
+    host: str = "0.0.0.0"  # noqa: S104
     port: int = 8000
 
     # Evaluation
-    eval_llm_judge_enabled: bool = False       # 是否启用 LLM-as-Judge（增加推理成本）
-    eval_online_sampling_rate: float = 0.0     # 在线抽样率 (0.0 ~ 1.0)，0 关闭
+    eval_llm_judge_enabled: bool = False  # 是否启用 LLM-as-Judge（增加推理成本）
+    eval_online_sampling_rate: float = 0.0  # 在线抽样率 (0.0 ~ 1.0)，0 关闭
     eval_hallucination_check_enabled: bool = True  # 幻觉引用检测（依赖检索文档）
     # 护栏配置（对齐 langgraph_multi-agent 的 Guardrail Agent）
-    guardrail_enabled: bool = True             # 护栏总开关（正则快检默认开启）
-    guardrail_llm_jailbreak: bool = False      # LLM 越狱检测（成本高，默认关闭）
-    guardrail_llm_relevance: bool = False      # LLM 业务相关性检测（成本高，默认关闭）
+    guardrail_enabled: bool = True  # 护栏总开关（正则快检默认开启）
+    guardrail_llm_jailbreak: bool = False  # LLM 越狱检测（成本高，默认关闭）
+    guardrail_llm_relevance: bool = False  # LLM 业务相关性检测（成本高，默认关闭）
 
     # Vision / OCR
-    vision_engine_name: str = "qwen"            # 视觉引擎：qwen / openai
-    vision_model: str = "qwen-vl-plus"          # 视觉模型名
-    vision_timeout: float = 10.0                # 视觉 API 超时秒数
-    ocr_engine_name: str = "paddle"             # 主 OCR：paddle / tesseract
-    fallback_ocr_name: str = "tesseract"        # 降级 OCR
-    ocr_max_image_size: int = 1024              # OCR 大图缩放阈值
-    vision_circuit_threshold: int = 5           # 熔断阈值（连续失败 N 次）
-    vision_circuit_reset_seconds: int = 60      # 熔断恢复时间（秒）
+    vision_engine_name: str = "qwen"  # 视觉引擎：qwen / openai
+    vision_model: str = "qwen-vl-plus"  # 视觉模型名
+    vision_timeout: float = 10.0  # 视觉 API 超时秒数
+    ocr_engine_name: str = "paddle"  # 主 OCR：paddle / tesseract
+    fallback_ocr_name: str = "tesseract"  # 降级 OCR
+    ocr_max_image_size: int = 1024  # OCR 大图缩放阈值
+    vision_circuit_threshold: int = 5  # 熔断阈值（连续失败 N 次）
+    vision_circuit_reset_seconds: int = 60  # 熔断恢复时间（秒）
     # DeepDoc 增强（对齐 RAGFlow，扫描件 PDF 解析）
-    deepdoc_enabled: bool = False               # 启用 DeepDoc（扫描件 PDF 渲染图片→Vision/OCR）
-    deepdoc_scan_threshold: int = 50            # 扫描件判定阈值（每页最少字符数）
-    deepdoc_render_dpi: int = 150               # 扫描页渲染 DPI（越高越清晰但越慢）
-    dedup_exact_enabled: bool = True           # 一级：精确去重（整文档哈希）
-    dedup_simhash_enabled: bool = True         # 二级：SimHash 近重去重
-    dedup_simhash_threshold: float = 0.95      # SimHash 相似度阈值
-    dedup_simhash_window: int = 500            # SimHash 计算的文本窗口长度
-    dedup_semantic_enabled: bool = False       # 三级：语义去重（预留，默认关闭）
-    dedup_semantic_threshold: float = 0.90     # 语义相似度阈值（预留）
+    deepdoc_enabled: bool = False  # 启用 DeepDoc（扫描件 PDF 渲染图片→Vision/OCR）
+    deepdoc_scan_threshold: int = 50  # 扫描件判定阈值（每页最少字符数）
+    deepdoc_render_dpi: int = 150  # 扫描页渲染 DPI（越高越清晰但越慢）
+    dedup_exact_enabled: bool = True  # 一级：精确去重（整文档哈希）
+    dedup_simhash_enabled: bool = True  # 二级：SimHash 近重去重
+    dedup_simhash_threshold: float = 0.95  # SimHash 相似度阈值
+    dedup_simhash_window: int = 500  # SimHash 计算的文本窗口长度
+    dedup_semantic_enabled: bool = False  # 三级：语义去重（预留，默认关闭）
+    dedup_semantic_threshold: float = 0.90  # 语义相似度阈值（预留）
 
     # Outline / Chapter metadata
-    outline_store_full_json: bool = False      # 是否在 chunk metadata 中存储完整大纲 JSON
+    outline_store_full_json: bool = False  # 是否在 chunk metadata 中存储完整大纲 JSON
     # False: 仅存 chapter_path + heading_level + heading_text（默认，节省存储）
     # True: 额外存储 outline 完整树 JSON（支持按章节路由，增加存储开销）
 
@@ -178,7 +208,7 @@ class Settings(BaseSettings):
     mcp_pg_database: str = "agent"
     mcp_pg_user: str = "postgres"
     mcp_pg_password: str = ""
-    mcp_pg_read_only: bool = True              # 只读模式（禁止 DROP/DELETE 等危险操作）
+    mcp_pg_read_only: bool = True  # 只读模式（禁止 DROP/DELETE 等危险操作）
 
     # 钉钉 MCP (已弃用，建议使用飞书)
     mcp_dingtalk_enabled: bool = False
@@ -194,8 +224,8 @@ class Settings(BaseSettings):
     # GitHub MCP
     mcp_github_enabled: bool = False
     mcp_github_token: str = ""
-    mcp_github_default_owner: str = ""         # 默认仓库所有者
-    mcp_github_default_repo: str = ""          # 默认仓库名
+    mcp_github_default_owner: str = ""  # 默认仓库所有者
+    mcp_github_default_repo: str = ""  # 默认仓库名
 
     # Email MCP
     mcp_email_enabled: bool = False
@@ -207,30 +237,34 @@ class Settings(BaseSettings):
     mcp_email_imap_ssl: bool = True
     mcp_email_username: str = ""
     mcp_email_password: str = ""
-    mcp_email_from_addr: str = ""              # 发件人地址
+    mcp_email_from_addr: str = ""  # 发件人地址
 
     # Calendar MCP
     mcp_calendar_enabled: bool = False
-    mcp_calendar_provider: str = "ical"        # ical / google / outlook
-    mcp_calendar_ical_url: str = ""            # iCal 订阅地址
+    mcp_calendar_provider: str = "ical"  # ical / google / outlook
+    mcp_calendar_ical_url: str = ""  # iCal 订阅地址
     mcp_calendar_timezone: str = "Asia/Shanghai"
 
     # 文件系统 MCP
     mcp_fs_enabled: bool = False
-    mcp_fs_root_dir: str = "./fs_mount"        # 允许访问的根目录（沙箱）
-    mcp_fs_allow_write: bool = False           # 是否允许写入操作
+    mcp_fs_root_dir: str = "./fs_mount"  # 允许访问的根目录（沙箱）
+    mcp_fs_allow_write: bool = False  # 是否允许写入操作
 
     # Slack MCP
     mcp_slack_enabled: bool = False
-    mcp_slack_token: str = ""                  # Slack API Token
+    mcp_slack_token: str = ""  # Slack API Token
 
     # Chatwoot 渠道配置
     channel_chatwoot_enabled: bool = False
-    channel_chatwoot_base_url: str = ""       # Chatwoot API 地址，如 https://app.chatwoot.com/api/v1
-    channel_chatwoot_api_token: str = ""      # Chatwoot Agent Bot Token 或 User Token
-    channel_chatwoot_account_id: str = "1"    # Account ID
-    channel_chatwoot_inbox_id: str = "1"      # Inbox ID
-    channel_chatwoot_webhook_token: str = ""  # Webhook 验证 Token（与 Chatwoot 端配置一致）
+    channel_chatwoot_base_url: str = (
+        ""  # Chatwoot API 地址，如 https://app.chatwoot.com/api/v1
+    )
+    channel_chatwoot_api_token: str = ""  # Chatwoot Agent Bot Token 或 User Token
+    channel_chatwoot_account_id: str = "1"  # Account ID
+    channel_chatwoot_inbox_id: str = "1"  # Inbox ID
+    channel_chatwoot_webhook_token: str = (
+        ""  # Webhook 验证 Token（与 Chatwoot 端配置一致）
+    )
 
     # 飞书渠道配置
     channel_feishu_enabled: bool = False
@@ -239,47 +273,52 @@ class Settings(BaseSettings):
 
     # ---- 告警通知配置（Agent offline 触发）----
     # 复用 mcp_feishu_* 凭证发送消息；告警开关独立
-    alert_feishu_enabled: bool = False                # 总开关：是否在 Agent offline 时发飞书告警
-    alert_feishu_receive_id: str = ""                 # 接收者 ID（open_id / chat_id / user_id / email）
-    alert_feishu_receive_id_type: str = "open_id"     # 接收者 ID 类型
-    alert_feishu_title_prefix: str = "[EA 告警]"      # 消息标题前缀
+    alert_feishu_enabled: bool = False  # 总开关：是否在 Agent offline 时发飞书告警
+    alert_feishu_receive_id: str = (
+        ""  # 接收者 ID（open_id / chat_id / user_id / email）
+    )
+    alert_feishu_receive_id_type: str = "open_id"  # 接收者 ID 类型
+    alert_feishu_title_prefix: str = "[EA 告警]"  # 消息标题前缀
 
     # ---- HITL 人工审批配置（对齐 langgraph_multi-agent 的 humanloop_manager）----
     # 敏感操作执行前需人工审批（退款/注销/数据导出等）
     # 复用 alert_feishu_receive_id 作为审批接收人
-    humanloop_enabled: bool = False               # 总开关（默认关闭，开启后敏感操作需审批）
-    humanloop_timeout: int = 300                  # 审批超时秒数（默认 5 分钟）
-    humanloop_notify_channel: str = "feishu"      # 通知渠道（目前仅支持 feishu）
+    humanloop_enabled: bool = False  # 总开关（默认关闭，开启后敏感操作需审批）
+    humanloop_timeout: int = 300  # 审批超时秒数（默认 5 分钟）
+    humanloop_notify_channel: str = "feishu"  # 通知渠道（目前仅支持 feishu）
 
     # ---- A2A 专家 Agent 配置 ----
-    a2a_perf_expert_url: str = "http://localhost:9002"       # 性能诊断专家 Agent
+    a2a_perf_expert_url: str = "http://localhost:9002"  # 性能诊断专家 Agent
     a2a_perf_expert_enabled: bool = True
-    a2a_security_expert_url: str = "http://localhost:9003"   # 安全审计专家 Agent
+    a2a_security_expert_url: str = "http://localhost:9003"  # 安全审计专家 Agent
     a2a_security_expert_enabled: bool = True
-    a2a_orchestrator_url: str = "http://localhost:9000"      # Orchestrator Agent
+    a2a_orchestrator_url: str = "http://localhost:9000"  # Orchestrator Agent
     a2a_orchestrator_enabled: bool = True
-    a2a_expert_timeout: int = 120                             # A2A 委托超时秒数（cs 调 LLM 较慢）
+    a2a_expert_timeout: int = 120  # A2A 委托超时秒数（cs 调 LLM 较慢）
     # Agent Card 缓存 TTL（秒）。Card 属服务发现元数据，极少变化，
     # 每个 RAG 工具循环都重拉会造成冗余 HTTP 往返与对象分配。
     # 太短则缓存形同虚设，太长则专家 Agent 重启后地址变更不及时感知。
     a2a_card_cache_ttl: float = 60.0
 
     # ---- 外部 MCP 消费配置（客服 Agent 作为 Client）----
-    mcp_client_github_url: str = ""                           # GitHub MCP Server URL (如 http://localhost:9000/mcp)
-    mcp_client_slack_url: str = ""                            # Slack MCP Server URL
-    mcp_client_timeout: int = 30                              # MCP Client 超时秒数
-
+    mcp_client_github_url: str = (
+        ""  # GitHub MCP Server URL (如 http://localhost:9000/mcp)
+    )
+    mcp_client_slack_url: str = ""  # Slack MCP Server URL
+    mcp_client_timeout: int = 30  # MCP Client 超时秒数
 
     @model_validator(mode="after")
     def _resolve_jwt_secret(self) -> "Settings":
         """JWT 密钥解析（生产级安全兜底）。
 
         - 若已通过环境变量 / .env 配置 JWT_SECRET（jwt_secret 不再是默认占位值），
-          直接使用。生产 / 多副本部署必须如此：所有副本共用同一密钥，token 才能跨副本验签。
+          直接使用。生产 / 多副本部署必须如此：所有副本共用同一密钥，
+          token 才能跨副本验签。
         - 若未配置（仍是仓库默认占位值）：进入 dev/demo 模式，改用持久化在
           .jwt_secret（gitignored）的随机密钥，避免暴露写死的已知默认密钥（可被伪造）。
-          随机密钥首次启动生成并落盘，重启后仍稳定；多副本未设共享密钥时各副本密钥不同，
-          token 仅本副本有效，因此多副本务必配置 JWT_SECRET 环境变量。
+          随机密钥首次启动生成并落盘，重启后仍稳定；
+          多副本未设共享密钥时各副本密钥不同，token 仅本副本有效，
+          因此多副本务必配置 JWT_SECRET 环境变量。
         """
         if self.jwt_secret != _JWT_DEV_DEFAULT:
             return self  # 已显式配置，直接使用
@@ -290,12 +329,13 @@ class Settings(BaseSettings):
         """读取或生成 dev 随机密钥（持久化到 .jwt_secret，gitignored）。"""
         try:
             if os.path.exists(_JWT_DEV_SECRET_FILE):
-                with open(_JWT_DEV_SECRET_FILE, "r", encoding="utf-8") as f:
+                with open(_JWT_DEV_SECRET_FILE, encoding="utf-8") as f:
                     val = f.read().strip()
                 if val:
                     return val
-        except Exception:
-            pass
+        except OSError:
+            # 读不到旧密钥就走下方生成新密钥的路径，无需中断启动
+            logger.debug("读取 %s 失败，将重新生成 dev JWT 密钥", _JWT_DEV_SECRET_FILE)
         val = secrets.token_urlsafe(48)
         try:
             with open(_JWT_DEV_SECRET_FILE, "w", encoding="utf-8") as f:
@@ -307,7 +347,8 @@ class Settings(BaseSettings):
             )
         logger.warning(
             "JWT_SECRET 未配置，已生成一次性 dev 密钥（持久化于 %s）。"
-            "多副本 / 生产部署请通过环境变量 JWT_SECRET 设置共享密钥，否则跨副本 token 不可用。",
+            "多副本 / 生产部署请通过环境变量 JWT_SECRET 设置共享密钥，"
+            "否则跨副本 token 不可用。",
             _JWT_DEV_SECRET_FILE,
         )
         return val

@@ -1,4 +1,5 @@
 """graph/nodes.py 纯逻辑 helper 单元测试（确定性，不触网/不依赖 LLM）"""
+
 from src.graph.nodes import (
     _detect_missing_info,
     _detect_negative_emotion,
@@ -74,7 +75,7 @@ class TestDetectMissingInfo:
 
     def test_config_no_product(self):
         r = _detect_missing_info("怎么配置这个服务", "")
-        assert "具体产品或服务名称" in r
+        assert "设备型号或产品名称" in r
 
     def test_normal(self):
         assert _detect_missing_info("你好", "") == []

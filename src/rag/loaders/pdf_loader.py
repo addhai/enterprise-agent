@@ -1,8 +1,9 @@
 """PDF 格式加载器（PyMuPDF）"""
+
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 from src.rag.data_sources import FileInfo
 from src.rag.loaders.base import BaseLoader, register_loader
@@ -29,9 +30,8 @@ class PdfLoader(BaseLoader):
         4. 按章节拆分文档
     """
 
-    def load(self, info: FileInfo, base_meta: dict) -> List["_Doc"]:
+    def load(self, info: FileInfo, base_meta: dict) -> list[_Doc]:
         from src.rag.loader import (
-            _filter_noise_paragraphs,
             _process_page_header_footer,
             _structure_hint,
             normalize_text,
@@ -48,23 +48,24 @@ class PdfLoader(BaseLoader):
         # ===== DeepDoc 增强：扫描件 PDF 检测（对齐 RAGFlow）=====
         # 启用后先检测是否为扫描件，是则走 Vision/OCR 路径
         from src.config import settings
+
         if getattr(settings, "deepdoc_enabled", False):
             try:
                 from src.rag.deepdoc_parser import DeepDocParser
+
                 deepdoc = DeepDocParser()
                 deepdoc_docs = deepdoc.parse_pdf(info, base_meta)
                 if deepdoc_docs:
                     # 扫描件 PDF 已由 DeepDoc 处理，直接返回
                     logger.info(
                         "PDF parsed by DeepDoc (scanned): %s, %d pages extracted",
-                        info.name, len(deepdoc_docs),
+                        info.name,
+                        len(deepdoc_docs),
                     )
                     return deepdoc_docs
                 # 纯文字 PDF，继续走原有 PyMuPDF 流程
             except Exception as e:
-                logger.warning(
-                    "DeepDoc parsing failed, falling back to PyMuPDF: %s", e
-                )
+                logger.warning("DeepDoc parsing failed, falling back to PyMuPDF: %s", e)
 
         # ===== 原有流程：PyMuPDF 文字提取 =====
         doc_handle = fitz.open(str(info.path))
@@ -76,8 +77,8 @@ class PdfLoader(BaseLoader):
         base_meta["producer"] = pdf_meta.get("producer", "") or ""
 
         # 逐页提取文字，做结构化处理
-        processed_pages: List[str] = []
-        page_numbers: List[int] = []
+        processed_pages: list[str] = []
+        page_numbers: list[int] = []
         for page_num in range(len(doc_handle)):
             page = doc_handle[page_num]
             text = page.get_text()
@@ -95,9 +96,8 @@ class PdfLoader(BaseLoader):
             if processed_text.strip():
                 processed_pages.append(processed_text)
 
-        doc_handle.close()
-
         if not processed_pages:
+            doc_handle.close()
             return []
 
         # 合并为完整文档
@@ -109,22 +109,31 @@ class PdfLoader(BaseLoader):
         }
 
         # 提取大纲：优先书签，降级正文标题解析
+        # 必须在 close() 之前访问句柄，否则 PyMuPDF 抛 "document closed"，
+        # 导致整个 PDF 加载失败（2026-10-06 排查语料重建时实测）
         headings = extract_pdf_bookmarks(doc_handle)
         if not headings:
             # 书签缺失 → 从正文标题模式推断
             headings = extract_pdf_body_headings(full_text)
             if headings:
-                logger.info("PDF: extracted %d headings from body text (no bookmarks)", len(headings))
+                logger.info(
+                    "PDF: extracted %d headings from body text (no bookmarks)",
+                    len(headings),
+                )
 
         # 按章节拆分
         outline_tree = OutlineTree()
         outline_tree.build(headings)
         from src.config import settings
+
         store_json = getattr(settings, "outline_store_full_json", False)
-        chapters = outline_tree.split(full_text, meta, source_file=info.name, store_outline_json=store_json)
+        chapters = outline_tree.split(
+            full_text, meta, source_file=info.name, store_outline_json=store_json
+        )
 
         # 对每个章节注入结构感知提示
         for doc in chapters:
             doc.page_content = _structure_hint(doc)
 
+        doc_handle.close()
         return chapters

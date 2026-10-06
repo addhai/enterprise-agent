@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
@@ -530,7 +530,7 @@ async def monitoring_self_check(
 
     return {
         "ok": core_ok,
-        "checked_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
+        "checked_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
         "checks": {
             "metrics": metrics,

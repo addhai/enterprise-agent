@@ -66,7 +66,9 @@ def _openapi_paths() -> set:
     return set(app.openapi().get("paths", {}).keys())
 
 
-@pytest.mark.parametrize("module_path,name", ROUTER_MODULES, ids=[n for _, n in ROUTER_MODULES])
+@pytest.mark.parametrize(
+    "module_path,name", ROUTER_MODULES, ids=[n for _, n in ROUTER_MODULES]
+)
 def test_router_module_importable(module_path: str, name: str):
     """每个 router 模块都必须能独立导入。
 
@@ -201,7 +203,49 @@ def test_security_critical_route_present(path: str):
     paths = _openapi_paths()
     assert path in paths, (
         f"安全关键路由缺失: {path}\n"
-        f"  当前 /api/v1/auth 下的路由: {sorted(p for p in paths if p.startswith('/api/v1/auth'))}"
+        f"  当前 /api/v1/auth 下的路由: "
+        f"{sorted(p for p in paths if p.startswith('/api/v1/auth'))}"
+    )
+
+
+def test_no_py311_only_stdlib_imports():
+    """src 不得使用生产运行时（容器 Python 3.10）没有的标准库符号。
+
+    为什么需要（2026-10-06 事故）：
+        本地/CI 是 Python 3.14，``from datetime import UTC`` 完全合法，
+        全部接线测试通过；但容器里是 3.10，config_center router 在
+        create_app() 阶段 ImportError 被 try/except 吞掉，36 个接口静默 404，
+        只有启动日志一行错误。这里做静态扫描，把版本差挡在上线前。
+    """
+    import ast
+    from pathlib import Path
+
+    # (导入模块, 被禁符号, 最低支持版本)。新增 3.11+ 语法时在这里登记。
+    banned = [
+        ("datetime", "UTC", (3, 11)),
+        ("tomllib", None, (3, 11)),
+    ]
+    src_root = Path(__file__).resolve().parents[2] / "src"
+    offenders = []
+    for py in src_root.rglob("*.py"):
+        # utf-8-sig：仓内个别文件带 BOM，CPython 能正常导入但 ast 需显式容忍
+        tree = ast.parse(py.read_text(encoding="utf-8-sig"))
+        rel = py.relative_to(src_root)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or not node.module:
+                continue
+            for mod, symbol, _ver in banned:
+                if node.module != mod:
+                    continue
+                if symbol is None or any(a.name == symbol for a in node.names):
+                    offenders.append(
+                        f"{rel}:{node.lineno} 从 {mod} 导入 {symbol or '*'}"
+                    )
+
+    assert not offenders, (
+        "以下写法需要 Python 3.11+，但生产容器是 3.10，会导致 ImportError：\n"
+        + "\n".join(f"  - {o}" for o in offenders)
+        + "\n  datetime.UTC 请改用 datetime.timezone.utc。"
     )
 
 

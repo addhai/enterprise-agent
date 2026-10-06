@@ -15,7 +15,8 @@ requires-python = ">=3.11"
 [tool.ruff]
 # 行宽对齐 black 默认值，团队统一
 line-length = 88
-target-version = "py311"
+# 生产容器运行时为 Python 3.10（见 test_no_py311_only_stdlib_imports 守卫）
+target-version = "py310"
 src = ["src", "tests"]
 
 [tool.ruff.lint]

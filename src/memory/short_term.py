@@ -6,11 +6,11 @@
 摘要生成：LLM 提取（保留用户意图、关键事实、已完成操作）
          无 LLM 时降级为关键词提取
 """
+
 from __future__ import annotations
 
 import json
 import logging
-from typing import List, Optional
 
 from src.config import settings
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Redis 适配层
 # ---------------------------------------------------------------------------
 
-_redis_client: Optional[object] = None
+_redis_client: object | None = None
 
 
 def _get_redis():
@@ -36,6 +36,7 @@ def _get_redis():
 
     try:
         import redis as _redis_mod
+
         _redis_client = _redis_mod.from_url(settings.redis_url, decode_responses=True)
         _redis_client.ping()
         logger.info("ShortTermMemory: Redis connected (%s)", settings.redis_url)
@@ -48,6 +49,7 @@ def _get_redis():
 # ---------------------------------------------------------------------------
 # ShortTermMemory
 # ---------------------------------------------------------------------------
+
 
 class ShortTermMemory:
     """管理单次对话的短期记忆
@@ -65,7 +67,7 @@ class ShortTermMemory:
     ):
         self.session_id = session_id or "default"
         self.max_window_size = max_window_size or settings.short_term_max_window
-        self._full_history: List[dict] = []
+        self._full_history: list[dict] = []
         self._summary: str = ""
 
         # 尝试从 Redis 恢复
@@ -86,9 +88,9 @@ class ShortTermMemory:
         # 持久化到 Redis
         self._save_to_redis()
 
-    def get_window(self) -> List[dict]:
+    def get_window(self) -> list[dict]:
         """返回滑动窗口内的最近消息（保留原文）"""
-        return self._full_history[-self.max_window_size:]
+        return self._full_history[-self.max_window_size :]
 
     def get_summary(self) -> str:
         """返回早期对话的摘要"""
@@ -96,24 +98,26 @@ class ShortTermMemory:
             self._update_summary()
         return self._summary
 
-    def get_context_for_llm(self) -> List[dict]:
+    def get_context_for_llm(self) -> list[dict]:
         """构建注入 LLM 的完整上下文：摘要块 + 窗口消息
 
         与 LangChain Messages 格式兼容，可直接拼入 prompt
         """
-        context: List[dict] = []
+        context: list[dict] = []
 
         summary = self.get_summary()
         if summary:
-            context.append({
-                "role": "system",
-                "content": f"[对话前情摘要 — 用户此前提供的关键信息]\n{summary}"
-            })
+            context.append(
+                {
+                    "role": "system",
+                    "content": f"[对话前情摘要 — 用户此前提供的关键信息]\n{summary}",
+                }
+            )
 
         context.extend(self.get_window())
         return context
 
-    def get_conversation_history(self, max_rounds: int = None) -> List[tuple]:
+    def get_conversation_history(self, max_rounds: int = None) -> list[tuple]:
         """返回 [(human, ai), ...] 格式的对话历史（兼容现有 Agent 接口）
 
         Args:
@@ -124,15 +128,14 @@ class ShortTermMemory:
         if max_rounds is None:
             max_rounds = settings.context_rounds
 
-        pairs: List[tuple] = []
+        pairs: list[tuple] = []
         current_human = ""
         for msg in self._full_history:
             if msg["role"] == "user":
                 current_human = msg["content"]
-            elif msg["role"] == "assistant":
-                if current_human:
-                    pairs.append((current_human, msg["content"]))
-                    current_human = ""
+            elif msg["role"] == "assistant" and current_human:
+                pairs.append((current_human, msg["content"]))
+                current_human = ""
 
         # 按轮数截断（对齐阿里云百炼携带上下文轮数）
         if max_rounds > 0:
@@ -151,7 +154,7 @@ class ShortTermMemory:
 
     def _update_summary(self) -> None:
         """将超窗的早期消息压缩为摘要"""
-        early = self._full_history[:-self.max_window_size]
+        early = self._full_history[: -self.max_window_size]
         if not early:
             return
 
@@ -163,10 +166,11 @@ class ShortTermMemory:
             # 降级：关键信息提取
             self._summary = self._keyword_summarize(early)
 
-    def _llm_summarize(self, early_messages: List[dict]) -> Optional[str]:
+    def _llm_summarize(self, early_messages: list[dict]) -> str | None:
         """用 LLM 生成早期对话的结构化摘要"""
         try:
-            from langchain_openai import ChatOpenAI
+            from src.agent.cancellable_llm import make_chat_model
+            from src.graph.cancellation import WorkflowCancelled
         except Exception:
             return None
 
@@ -192,7 +196,7 @@ class ShortTermMemory:
         )
 
         try:
-            llm = ChatOpenAI(
+            llm = make_chat_model(
                 model=model_name,
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_api_base,
@@ -200,27 +204,45 @@ class ShortTermMemory:
             )
             result = llm.invoke(prompt)
             return result.content.strip()
+        except WorkflowCancelled:
+            # 取消信号不能被降级逻辑吞掉，继续向上抛让图收卷
+            raise
         except Exception as e:
             logger.warning("LLM summarization failed: %s, falling back to keyword", e)
             return None
 
-    def _keyword_summarize(self, early_messages: List[dict]) -> str:
+    def _keyword_summarize(self, early_messages: list[dict]) -> str:
         """关键词提取降级方案（无需 LLM）"""
         keywords = [
-            "password", "reset", "2fa", "api key", "sso", "version", "sdk",
-            "error", "403", "401", "429", "500", "timeout", "sync",
-            "stuck", "domain", "cors", "billing", "refund", "cancel",
+            "password",
+            "reset",
+            "2fa",
+            "api key",
+            "sso",
+            "version",
+            "sdk",
+            "error",
+            "403",
+            "401",
+            "429",
+            "500",
+            "timeout",
+            "sync",
+            "stuck",
+            "domain",
+            "cors",
+            "billing",
+            "refund",
+            "cancel",
         ]
 
-        key_points: List[str] = []
+        key_points: list[str] = []
         for msg in early_messages:
             content = msg.get("content", "")
             matched = [kw for kw in keywords if kw in content.lower()]
             if matched:
                 snippet = content[:120].replace("\n", " ")
-                key_points.append(
-                    f"- {msg['role']}: [{', '.join(matched)}] {snippet}"
-                )
+                key_points.append(f"- {msg['role']}: [{', '.join(matched)}] {snippet}")
 
         if key_points:
             return "用户在此对话中提到了以下关键信息：\n" + "\n".join(key_points[:10])
@@ -238,10 +260,12 @@ class ShortTermMemory:
         if r is None:
             return
         try:
-            payload = json.dumps({
-                "history": self._full_history,
-                "summary": self._summary,
-            })
+            payload = json.dumps(
+                {
+                    "history": self._full_history,
+                    "summary": self._summary,
+                }
+            )
             r.setex(self._redis_key(), settings.short_term_ttl, payload)
         except Exception as e:
             logger.debug("ShortTermMemory Redis save failed: %s", e)
@@ -256,8 +280,10 @@ class ShortTermMemory:
                 data = json.loads(payload)
                 self._full_history = data.get("history", [])
                 self._summary = data.get("summary", "")
-                logger.debug("Restored short-term memory from Redis: %d msgs",
-                             len(self._full_history))
+                logger.debug(
+                    "Restored short-term memory from Redis: %d msgs",
+                    len(self._full_history),
+                )
         except Exception as e:
             logger.debug("ShortTermMemory Redis load failed: %s", e)
 
@@ -267,5 +293,5 @@ class ShortTermMemory:
             return
         try:
             r.delete(self._redis_key())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ShortTermMemory Redis delete failed: %s", e)

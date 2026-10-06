@@ -3,245 +3,159 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-04 22:05（本轮全量实测复核）
-> 状态来源：`git` 实测 + `pytest` 实跑 + 源码检索，不接受「应该/大概」式描述。
-> **本文件所有结论均可溯源，不接受「应该/大概」式描述。**
+> 最后更新：2026-10-06（语料归档+索引重建+RRF 权重排序修复已上线，镜像 082f2147dcd2；F02 WS 实测 198s 直答正确 5 citations，PG answer_path=direct_synthesis；本地串行全量 0 failed）
+> 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
 
 ---
 
 ## 一句话状态
 
-代码侧全部收官：23 个 commit 已入库并 push，**286 条未入库风险已消除**。
-全量回归 `1472 passed, 17 skipped`（本轮实测，271s）。
-**唯一未收官主线**：Phase5「kb_call_mode 语义收口」—— 判据模块与单测已入库（76 用例全绿），但**调用方 `rag_node` 尚未接入**。
-**当前卡死**：Docker daemon 未运行，所有容器级动作停摆。
+**最新（2026-10-06 晚）**：语料侧 SaaS 文档归档并全量重建索引（标准 164 块/句子 1014 块，幽灵清零，句子级检索从空集合恢复生效），重建暴露出的 F02 直答回归根因是 DOC_WEIGHTS 乘法加权在窄 RRF 区间跨 rank 翻盘，已改为裸 RRF 排序、权重仅做同分裁决；新镜像 082f2147dcd2，F02 WS 实测 198s 直答正确，阈值 0.35 经 12 题分布复核维持不变。
+
+**kb_call_mode 主线之上，头号质量问题「工业问答答案合成失败」已修复并上线**：新增高置信命中直答旁路，预检索 top1 向量相似度过门槛时跳过工具 Agent 的多轮 ReAct，单次 LLM 依据资料直答。真实 ollama 7B 实测两例（F02/F01）全部答对、答案与手册逐字一致，热验证耗时 129.9s / 139.2s。全量回归 **1490 passed / 17 skipped / 0 failed**（并行 1482 + 串行 8，较上轮净增 9 个直答用例）。
+
+新镜像 `enterprise-agent-app-ollama:latest`（2026-10-06 02:02，4.48GB）已 force-recreate 上线，app 约 1 分钟内 healthy，8 容器全绿。生产 WS 复测 F02：**163.8s 返回分点正确答案**（昨天同链路 451s 兜底拒答），PG 实测 `answer_path=direct_synthesis, kb_call_mode=always, retrieval_decided_by=always, retrieval_count=1`。回滚标签 `enterprise-agent-app-ollama:backup-pre-directanswer-20261006`。
 
 ---
 
-## 头号风险（已解除）
+## 2026-10-06 交付：高置信命中直答旁路（全部实测取证）
 
-### ~~286 条改动未入库~~ → 已解决（2026-10-04）
+**问题回顾（10-05 定性）**：always 预检索把正确资料注入上下文（F02 top1=0.553），7B 模型仍无视资料，5 轮 ReAct 空转或误调云资源工具，走 CloudSync 兜底拒答。根因为 CloudSync 人设与工业知识库错位、7B 工具纪律差、CPU 推理慢。
 
-| 项 | 2026-09-30 实测 | 2026-10-04 实测 |
+**修法（最小侵入，不改 ReAct 主链路）**：资料高置信命中时直接绕开整个工具 Agent。
+
+| 文件 | 改动 |
+|---|---|
+| `src/config.py:102-107` | 新增 `kb_direct_answer_enabled=True` 与 `kb_direct_answer_threshold=0.35` |
+| `src/graph/nodes.py:646-664` | 新增中性技术支持人设 `_DIRECT_ANSWER_SYSTEM_PROMPT`（不出现任何产品名，严格依据资料、分点、禁编造）与未答标记词集 |
+| `src/graph/nodes.py:752-808` | 新增 `_direct_synthesize_with_docs()`：单次 LLM 调用；空输出/异常/模型自认资料未覆盖一律返回 None 回落 Agent |
+| `src/graph/nodes.py:949-984` | rag_node 旁路闸门：always 或 smart 的 score 命中且 max(vector_similarity) ≥ 阈值才触发；rule/fallback、缺相似度戳、低相似全部继续走 ReAct |
+| `src/graph/nodes.py:1339-1342` | reflect_node 对 `answer_path=direct_synthesis` 跳过二次 LLM 审核（省一次数分钟 CPU 调用，防好答案被改坏，与 tool_sourced 跳过同例） |
+| `src/graph/state.py:104-106` | state 新增 `answer_path`（direct_synthesis / react_agent / direct_no_retrieval） |
+| `src/websocket/routes.py:795-796` | WS 落库 metadata 增加 `answer_path`，便于上线后从 PG 统计两条路径占比 |
+| `tests/test_graph/test_nodes_llm.py` | 新增 9 用例（文件 42 → 51）：命中旁路不建 Agent、低相似回落、缺戳回落、未答话术回落、LLM 异常回落、开关关闭回落、smart score 命中、smart rule 不进入、reflect 跳过零 LLM |
+
+**安全设计**：旁路只在高置信区间生效，其余世界与旧版逐字节一致；4 个旧高相似用例显式关开关固定 ReAct 语义；任何失败都回落 Agent，不存在「旁路失败就发空答」的路径。
+
+**上线前热验证**：docker cp 三个改动文件进运行容器（不重启 uvicorn、不动镜像），独立进程真实 retriever + ollama 跑两题，取证后从镜像导出原版文件恢复容器，容器与镜像重新一致，全程服务 healthy。
+
+| 问题 | top1 sim | 路径 | 耗时 | 答案 |
+|---|---|---|---|---|
+| F02故障代码怎么处理 | 0.552896 | direct_synthesis | 129.9s | 「快门卡滞：进入维护菜单执行两次快门校正，无效检查镜头异物，严禁自行拆卸快门组件」正确 |
+| F01代码是什么意思，要怎么处理 | 0.526378 | direct_synthesis | 139.2s | 「电池温度异常：关机降温30分钟，仍复现需更换电池」分点正确 |
+
+**上线后 WS 复测（2026-10-06 02:3x，正式镜像）**：F02 走完整生产链路（router + rag + reply + WS 流式），163.8s 返回「F02 表示快门卡滞：1.进入维护菜单执行两次快门校正 2.若无效检查镜头前端异物 3.严禁自行拆卸快门组件」，done 事件 5 条 citations；PG assistant 消息 metadata 为 `answer_path=direct_synthesis / always / always / count=1`；服务日志留痕「高置信直答命中，旁路 ReAct：decided_by=always docs=5」。
+
+---
+
+## 2026-10-06 交付：WS 断开协作式取消（已上线，镜像 9b73a735bb93）
+
+**问题**：匿名 smoke 会话（125fcb4a）18:49 连接、18:51 断开，langgraph 工作流在 CPU ReAct 空跑到 20:18 才落库（88 分钟）。根因有二：接收循环直接 `await _handle_ai_chat`，图经 `asyncio.to_thread(app.invoke)` 跑在线程池时无人读套接字，检测不到断开；Python 无法强杀工作线程。修法为协作式取消，浪费 CPU 上限压到一次在途 LLM 请求（≤300s 单次超时）。
+
+| 文件 | 改动 |
+|---|---|
+| `src/graph/cancellation.py`（新） | 取消原语：`WorkflowCancelled(reason)`（:45）、会话/代际注册表（threading.Event + deadline，:54-133）、`begin_run/release_run/request_cancel/check_cancelled`、`workflow_run` 上下文（:137-154）绑 contextvar，`to_thread` 复制进工作线程；条目释放权在工作线程 finally，防 async 侧先 cancel 导致在途检查漏检；TTL 3600s 清扫残留 |
+| `src/agent/cancellable_llm.py`（新） | `CancellableChatOpenAI._generate`（:30-47）在 super 调用前后各 `check_cancelled()`，覆盖 bind_tools 回调路径；`make_chat_model`（:50-57）默认补 `timeout=llm_request_timeout` |
+| `src/config.py:36-41` | 新增 `llm_request_timeout=300`、`ws_workflow_hard_timeout=600` |
+| `src/websocket/routes.py` | 聊天处理改为后台 task，接收循环持续读套接字（:435-449）；忙时第二条回 `BUSY`；断开/异常/finally 三处 `_cancel_active_handler`（:549-563）；`_invoke_graph`（:520-546）工作线程捕获取消写 `outcome`、打日志并释放条目（断线路径 async 任务已 cancel，日志必须在线程侧）；硬超时连接仍在则发 `WORKFLOW_TIMEOUT`，client_disconnect 静默收卷 |
+| 取消信号透传 | `agent.py:210-214` 兜底 except、`nodes.py` intent（:575）/FAQ（:626）/never 直答（:754）/带资料直答（:787）/reflect（:1401）五处 broad except 全部 re-raise `WorkflowCancelled`；评测 Judge 用离线模型，进入前显式 `check_cancelled()`（:1597）；short_term 降级链同样单独 re-raise |
+| 构造点替换 | `agent.py`、`graph/nodes.py`（intent/clarify/reflect 4 处）、`fake_llm.py`、`memory/short_term.py` 全部走 `make_chat_model` |
+| 测试 | `tests/test_graph/test_cancellation.py` 8 用例（信号/硬超时/代际隔离/to_thread 透传/模型请求前取消/直答不吞取消）；`tests/test_websocket/test_cancel_on_disconnect.py` 3 用例（断开即停且注册表清理、硬超时错误帧、BUSY 并发保护）；test_nodes_llm 3 处打桩从 `ChatOpenAI` 改为 `make_chat_model` |
+
+**上线实测（2026-10-06 15:16 本地，容器 UTC 07:16）**：
+1. 断开取消：登录态发 F02 后 20s 关闭 WS（会话 be5f95ca），日志 07:16:23 检测断开、07:16:42 记录「工作流已取消 reason=client_disconnect 耗时=38.8s」（在途直答 LLM 返回后即收卷），容器 CPU 从 203% 回落到 0.11%；PG 该会话只有 user 消息、无 assistant 落库。
+2. 正常路径不回归：保持连接的 F02（会话 e7e935c6）124.9s 返回正确分点答案（快门卡滞两次校正/查异物/禁拆卸），3 条 citations；PG 落库 `answer_path=direct_synthesis, kb_call_mode=always, retrieval_count=1`。
+
+**边界**：离线评测 `evaluation/metrics.py`、`pipeline.py` 的 ChatOpenAI 未替换；取消只能在 LLM 调用边界生效，极端卡死在非 LLM 长循环（如检索）由 600s 硬超时兜底。回归 **1517 passed / 17 skipped / 0 failed**（并行 1509 + 串行 kb_phase2 8，净增 11 用例）。回滚标签 `enterprise-agent-app-ollama:backup-pre-ws-cancel-20261006`（旧镜像 113a3526b60e）。实测脚本在 `.smoke_tmp/`（smoke_disconnect.py / smoke_f02.py，勿放 .pytest_tmp，会被 pytest basetemp 清空）。
+
+---
+
+## 2026-10-06 交付：DOC_WEIGHTS 修复 + 技术问答人设收口（已上线）
+
+**上线与复测**：新镜像 `enterprise-agent-app-ollama:latest`（ID 2d7acc147385）已 build + force-recreate，8 容器全绿，回滚标签 `backup-pre-docweights-persona-20261006`（旧镜像 3e1644b182d0）。启动至今日志中 `Invalid doc_weights config` 计数为 0；容器内实测生产 env 五条逗号权重全部解析成功。登录态（smoke_kbmode）WS 复测 F02：**140.7s 返回正确分点答案**，PG metadata `answer_path=direct_synthesis, kb_call_mode=always, retrieval_count=1`，citations 为 T90 维修手册与故障手册，云资源工具零调用（会话 98a62e80-7883-4bc3-877c-9e297aaa9919）。复测脚本 `.pytest_tmp/smoke_ws.py`（登录后 token 走 query 参数）。
+
+**DOC_WEIGHTS 兼容解析**：`.env.production` 长期发逗号简写（`a.md:1.5,b.md:0.8`），旧解析器只认 JSON，权重静默失效、日志反复 `Invalid doc_weights config, ignored`。`src/rag/retriever.py:147-197` 新增 `_parse_doc_weights`，先试 JSON dict 失败回落逗号解析（`rpartition(":")`、容忍空白/尾逗号、权重 clamp 0.5~2.0）；任一非空条目非法整份返回 None 原子失效，防半份配置静默生效；`:199` 起 `_get_doc_weights_map` 调用新解析，缓存逻辑不变。`src/config.py:89-100` 与 `deploy/prod/.env.production.example:40-43` 注释补双格式与整份失效语义，默认值未动。`tests/test_rag/test_retriever_weights.py` 共 15 用例。
+
+**人设收口（只改 src/ 内用户可见文案）**：
+
+| 文件 | 改动 |
+|---|---|
+| `src/agent/prompt.py:12-39` | ReAct 人设重写为工业设备技术支持；规则 1 故障/代码/参数必须先检索且保留数字与安全警示；规则 5（:33）云资源工具仅在用户明确查自己云资源时使用，设备问题禁止调用（F02 误路由根因） |
+| `src/agent/tools.py:13-34` | `_FAQ_STORE` 从 14 条收到 4 条（问候/感谢/再见/重置密码，重置密码为既有测试依赖）；删除套餐、退订、API Key、403、SSO、加密、2FA、同步失败、定价、千问模型共 10 条 SaaS canned 答案 |
+| `src/agent/tools.py:813-821,893-901` | search_knowledge_base / search_faq 工具描述去 SaaS 化，给 7B 正确路由锚点 |
+| `src/graph/nodes.py` | faq 兜底 prompt（:608）、clarify 示例（:219-226）、配置类产品词表与追问标签（:374-383）、四处兜底文案（:1468-1551）、直答提示词规则 5（:663）全部去 CloudSync |
+| `tests/test_agent/test_persona.py` | 新增 6 用例：人设中性化、云资源工具边界、直答无品牌、FAQ 保留/删除边界 |
+
+**明确不改的边界**：A2A 协议 agents（`src/protocols/`，独立协议服务）、`src/safety/sanitizer.py` URL 白名单、`data/docs/*.md` 旧语料、helm/chatwoot/`src/mcp_tools/cloud_provider.py` 域名账号、云资源工具本身（`agent.py:49-50` 仍绑定，靠提示词规则 5 约束路由）。`tests/test_graph_nodes_helpers.py:77` 追问标签断言随设计变更同步更新；拒答正则用例里的 CloudSync 字样与正则匹配逻辑无关，未动。
+
+**回归**：全量 **1506 passed / 17 skipped / 0 failed**（并行 1498 + 串行 kb_phase2 8）。
+
+**顺带修复（同日二次上线）**：`src/api/config_center.py:23`、`src/config_center/service.py:26`、`src/config_center/audit.py:17` 使用 Python 3.11 才有的 `from datetime import UTC`，容器运行时 3.10，config_center 路由每次启动 ImportError 被 try/except 吞掉、36 个接口静默 404（本地 3.14 测试全绿，版本盲区）。三处统一改 `timezone.utc`；`tests/test_api/test_app_wiring.py` 新增 `test_no_py311_only_stdlib_imports` 静态扫描守卫（禁 `datetime.UTC` / `tomllib`，容忍 BOM 文件）。修复后镜像 `113a3526b60e`，启动日志 `Registered config_center router`，`GET /api/v1/config/hot-categories` 实测 401（修复前 404）。回滚标签 `backup-pre-utc-fix-20261006`。
+
+---
+
+## 2026-10-06 交付：语料归档 + 索引重建 + RRF 权重排序修复（镜像 082f2147dcd2）
+
+**背景**：DOC_WEIGHTS 解析与人设收口上线后，全量重建索引导致 F02 直答闸门失效（top_sim 0.345 < 0.35 退回 ReAct，WS 400s 超时）。逐段埋点定位到根因在 RRF 融合，与阈值标定无关。
+
+**语料与索引**：
+
+| 项 | 实测 |
+|---|---|
+| 归档 | 13 个英文 SaaS 文档（共 117 处 CloudSync）移至 `data/legacy_saas_docs/`，`data/docs/` 现为 9 个工业文件（7 md + 2 pdf，T90/T100 PDF 归位） |
+| PDF loader | `src/rag/loaders/pdf_loader.py` 修复 close 先于书签提取导致全部 PDF「document closed」静默失败的真 bug，书签提取移到 close 前，回归测试 `tests/test_rag/test_pdf_loader.py` |
+| 重建入口 | `scripts/rebuild_index.py`（幂等，`--yes/--persist-dir/--docs-dir`，先加载切块保护旧索引，drop 标准+句子两集合后重灌并对账，仅 Chroma） |
+| 卷重建结果 | 标准集合 328→164（4 个幽灵 kb_md/txt/docx/pdf 全清），句子集合 0→1014（旧生产句子集合一直为空，句子级检索此前从未生效） |
+| 备份与种子 | 卷冷备份 `.smoke_tmp/backups/chroma_pre_rebuild_20261006.tar.gz`（2.9MB），干净种子导出覆盖仓库 `chroma_data/`；语料清理回滚标签 `backup-pre-corpus-cleanup-20261006`（9b73a735bb93） |
+
+**RRF 权重排序真 bug（本次核心）**：`_rrf_fusion` 原实现把 doc/kb 权重直接乘进 RRF 分（retriever.py:683-694 旧逻辑）。RRF 相邻 rank 分差极窄（rank0=1/61 与 rank5=1/66 仅差 8%），fault_manual 的 1.5x 权重等价于把单个 chunk 提前约 20 个 rank 位。F02 实测向量通道 T90 PDF 0.553 排第一，被 5 个 1.5x 的 fault 低相关 chunk（0.31x）集体反超挤出 top5，rerank 无正确候选，来源配额 cap=2 再砍成 2 条，top_sim 掉到 0.338。修法对齐函数 docstring「相同 RRF 分数时权重高者优先」的原始意图：裸 RRF 累积分为唯一排序主键，权重仅在裸分完全相同时做平局裁决（retriever.py:701-706，key=(scores[x], weights[x])）；多通道命中累积的语义保持不变。测试改为 `test_bare_rank_beats_weight_in_rrf`（rank0 低权重必须压过 rank1 高权重）与 `test_weight_tiebreak_on_equal_rrf`（同分高权重胜），`tests/test_rag/test_retriever_weights.py` 现 16 用例。
+
+**修复后实测分布（容器内真实 HybridRetriever，12 题）**：强相关 7 题区间 0.467~0.687（F02 0.553、F01 0.526、快门卡滞 0.467），弱相关 5 题区间 0.000~0.300（天气 0.300 为最高噪声，API key 0.226、SSO 0.273）。强弱间隔 0.167，**直答阈值维持 0.35 不变**，降阈值反而会放进天气类噪声。F02 逐段追踪：T90 PDF rerank 分 0.987 排第一，5 条候选全部保留到最终结果。
+
+**上线验证**：镜像 `enterprise-agent-app-ollama:082f2147dcd2` build + 带 `--env-file` force-recreate（漏传 env-file 曾重建出无环境变量容器，已立即纠正），healthy 后卷计数 164/1014 不变。WS smoke（会话 bf9ca8b5）**198.0s** 返回「F02 表示快门卡滞：维护菜单两次快门校正/查异物/严禁拆卸」，5 条 citations；PG `answer_path=direct_synthesis, retrieval_count=1`。本地串行全量回归 0 failed（并行 xdist 有 metrics 懒注册/多模态等顺序抖动，与本次改动无关，隔离或串行均通过）。回滚路径：镜像用 `backup-pre-corpus-cleanup-20261006`（9b73a735bb93），RRF 单点可直接回退 retriever.py，卷用 tar 冷备份恢复。重建容器后 /tmp 临时文件与 /app 诊断脚本已随旧容器清除，rebuild_index.py 已烤入镜像。
+
+---
+
+## 2026-10-05 交付回顾：kb_call_mode 语义收口（已上线）
+
+三模式（always/smart/never）接入 rag_node；检索侧 `src/rag/retriever.py` 在阈值过滤前盖 `vector_similarity` 绝对信号；三要素 `kb_call_mode / retrieval_decided_by / retrieval_count` 沿 WS 落库 PG（会话 `305c9f48-5097-4f70-aa5c-4aa4845823cd` 实测）。回归 1481 passed。新镜像 4.48GB（2026-10-05 19:05），回滚标签 `enterprise-agent-app-ollama:backup-pre-kb-callmode-20261005`。
+
+### 10-05 排掉的 5 个部署雷（重建时必读）
+
+1. GPU `devices` 必须在 `deploy.resources.reservations.devices`，放 resources 下 Compose v5.5.1 拒收整个文件。
+2. app 启动逻辑在 `scripts/start-app.sh`（WSL 驱动挂接 + ollama + 就绪探针 + exec uvicorn），compose 只写 `command: ["/app/scripts/start-app.sh"]`；v5.5.1 下 `$$` 不还原为 `$`，内联 shell 变量不可靠。
+3. 根 Dockerfile 是四阶段，ollama 从 `FROM enterprise-agent-app-ollama:latest AS ollama-src` 提取；legacy 文件可取回 `git show a07d7d2:Dockerfile`。
+4. `.dockerignore` 不得排除 `static`、`chroma_data`（都是必烤资产）。
+5. redis `command: >` 折叠块内禁止 `#` 注释（会折进命令行变 redis-server 参数导致 FATAL），注释放块外。
+
+---
+
+## 待办与遗留观察
+
+| # | 项 | 性质 |
 |---|---|---|
-| git HEAD | `b119f24` 2026-09-22 | **`47768bc` 2026-10-04 19:39** |
-| 未提交改动 | **286 条** | **0 条**（工作区与暂存区均干净） |
-| 未跟踪文件 | 132 个 | **1 个**（`.pytest_tmp_run/`，pytest 临时目录，非产物，可删） |
-| 与 `origin/master` 差异 | 未推送 | **0 / 0 完全同步** |
-| 远端跟踪文件 | — | **657 个** |
-| `call_policy.py` / `test_call_policy.py` | `??` 未跟踪 | **已入库**（commit `1fbe790`） |
-
-**结论：Phase3 → Phase5 全部成果已有远端备份点，误操作丢失风险已解除。**
-
-⚠️ 剩余 1 个未跟踪项是 pytest 的 `--basetemp` 目录，属临时产物，不应提交。
+| 1 | 直答阈值 0.35 经索引重建后 12 题分布重新验证（强 ≥0.467 / 弱 ≤0.300），维持不变；上线后按 PG 中 direct/react 占比与人工抽检继续观察；复杂多步排查题仍可能走 ReAct | 观察项 |
+| 2 | 匿名 WS 会话被租户隔离过滤成预检索 0 条（日志 `Permission filter: 5 → 0 tenant=anon-*`），直答旁路无资料可用必然回落，7B 易误调 query_resources 后兜底拒答；登录态正常。产品需决策匿名会话可见的文档范围，或前端强制登录 | 待决策（复测中发现，既有行为） |
+| 3 | config_center UTC 兼容已修复并上线（镜像 113a3526b60e，含静态守卫防复发）；其余 3.11+ 语法排查暂无 | 已完成 |
+| 4 | WS 断开后工作流空跑：协作式取消已上线（镜像 9b73a735bb93），实测断开 38.8s 收卷、CPU 203%→0.11%、PG 不脏落库；F02 正常路径 124.9s 不回归 | 已完成 |
+| 5 | `data/docs/` 语料侧 13 个 SaaS 文档已归档并重建索引（镜像 082f2147dcd2）；A2A agents、sanitizer 白名单、helm/chatwoot 域名账号仍有 CloudSync 字样，维持边界不动 | 语料已完成，协议侧划边界 |
+| 6 | ollama 为 CPU-only 构建（无 CUDA 后端，`total_vram="0 B"`）；直答已把单题压到 2 分钟级，进一步提速需换 CUDA 构建；`static/` 仍是 09-17 产物；A2A 探针 connection failed 仅告警 | 成本/低优 |
 
 ---
 
-## 阶段进度全景
-
-| 阶段 | 内容 | 状态 | 回归基线 |
-|---|---|---|---|
-| Phase3 | 离线改造（LangGraph + Chroma + WebSocket + 多租户） | 完成 | — |
-| Phase4a | 外网残留收口 + local_bge 补齐 | 完成 | 1407 passed |
-| Phase4b | 生产配置收口 + 镜像重建 + WS 联调 + L3/L4/L5 修复 | 完成 | 1413 → 1417 passed |
-| Phase5 P0 | Q1/Q3 功能状态核查 | 完成 | — |
-| Phase5 P1 | 前端页码徽标 + kb_call_mode 测试 + T90 PDF 入库 + WS keepalive | 完成 | 1417 passed |
-| Phase5 性能基准 | 镜像 14.7GB → 4.5GB；F02 查询 558s → 112s | 完成 | 1417 passed |
-| **P0/P1 交付文档** | API / 上线 / 回滚 / 监控 / 安全 / 测试 / 质量基线 | **完成（入库）** | — |
-| **P2 部署套件** | 独立 Dockerfile + compose + Grafana→飞书告警链路 | **完成（入库）** | — |
-| **kb_call_mode 主线** | 判据模块已入库，调用方未接入 | **进行中（1/6 步）** | 单测 76 passed |
-
-**当前回归基线（本轮实测）：`1472 passed, 17 skipped, 1 warning in 271.24s`**
-
----
-
-## 主线：kb_call_mode 语义收口（唯一未收官项）
-
-### 已完成（已入库，实测复核）
-
-| 文件 | 行数 | 状态 |
-|---|---|---|
-| `src/rag/call_policy.py` | 454 行 | 已入库（`1fbe790`），**单测 76 passed / 8.54s** |
-| `tests/test_rag/test_call_policy.py` | 421 行 | 已入库（同上） |
-| `docs/Phase5-kb_call_mode语义收口-拆解方案.md` | — | 已入库 |
-
-### 卡在第 3 步：调用方未接入
-
-**实测结论（2026-10-04）：`src/graph/nodes.py` 中 `call_policy|decide_retrieval|judge_probe|retrieval_decided_by` 命中数 = 0。**
-
-⚠️ **修正旧记录的错误**：旧版 CURRENT.md 称「三分支逻辑在 `nodes.py:1098-1163`，非法值回落 `smart` 需改为 `always`」。实测该结论**不成立**：
-
-- `nodes.py` 全文**不存在任何 `kb_call_mode` 分支**（`call_mode|== "never"|== "always"|== "smart"` 均 0 命中）
-- `nodes.py:1085-1165` 实际内容是 `final_response` 节点的**意图澄清 / 低置信度拒答 / 回复精简**逻辑，与 kb_call_mode 无关
-- `nodes.py` 末次改动为 `c97a02c fix(ci): 修复测试体系并使 CI 转绿`
-
-**即：不是「三分支待改造」，而是「三分支从未实现，接入时按拆解方案新建」。** 接入时需按 `call_policy.py` 的 docstring 约束实现三分支，非法值回落 `always`（`MODE_ALWAYS` 为默认，见 `call_policy.py:48-50`）。
-
-### 最致命的技术缺陷（P0-4，仍未解决）
-
-`call_policy.py` docstring 自述（第 13-30 行）：
-
-- `metadata["score"]` 是 RRF 组内**相对分**（`retriever.py:320-334`），top1 恒为 1.0
-- `metadata["rerank_score"]` 由 `BaseReranker._normalize` min-max 归一化（`reranker.py:91-111`），top1 同样恒为 1.0
-- RRF 原始分 `raw_score` 由排名决定（权值 /(k+rank+1)），单榜区间 0.0164~0.0328，窄且与语义相关性无单调关系
-
-**结论：不补绝对相似度信号，smart 语义上等价于 always，「语义收口」名不副实。**
-
-模块已给的三级退化路径（docstring 已写明）：
-1. `metadata["vector_similarity"]`（未归一化绝对分）→ 门槛 `kb_similarity_threshold`
-2. 调用方显式传 `min_raw_score` → 用 RRF 原始分下限（**需生产实测标定**）
-3. 两者皆无 → 退化为 `signal="nonempty"`（探测列表非空即命中，保守）
-
-**要让 smart 真正有判别力，必须让检索侧补出方案 1 的绝对信号。**
-
----
-
-## 代码与镜像的落差（4 项改动仍未上线）
-
-Docker daemon 未运行，无法读取现网镜像状态。改用 `git log` 取证：
-
-`Dockerfile` 末次改动为 `a07d7d2`（**2026-07-15 05:57**），只 `COPY` 了 `requirements.txt` / `src/` / `scripts/`。以下 4 项代码已就位但**不在镜像覆盖范围内**：
-
-| 改动 | 位置 | 缺什么 |
-|---|---|---|
-| `StaticFiles` 条件挂载 | `src/api/server.py:425-441` | Dockerfile 无 `COPY static/` |
-| 前端构建产物 | `frontend/vite.config.ts` → `outDir: '../static'` | 未纳入镜像构建 |
-| `health_checker.py` 修复 | `src/protocols/health_checker.py`（**526 行**，末次改动 `44f8943`） | 未重新构建镜像 |
-| `logging.py` 结构化 JSON 日志 | `src/utils/logging.py` | 同上 |
-
-**坐实证据**：Phase4b 验收（2026-09-21）实测 `GET /` 返回 **404**（现网镜像不托管前端）。
-⚠️ `static/` 被 `.gitignore` 忽略，CI 与纯后端环境不存在该目录 —— `server.py:419-424` 注释记录了 GitHub Actions 曾因此连续红灯，代码已用 `is_dir()` 守卫解决，**但 Dockerfile 侧仍需显式构建前端或明确接受只发 API**。
-
-### 已修复：`docker-compose.prod.yml` 曾整体损坏（2026-10-04）
-
-`deploy/prod/docker-compose.prod.yml` 在 **09-22 提交 `9fb9f6e` 时就已损坏**，不是本轮造成：
-
-- 体积 **714675 字节 / 184 行**（正常应约 9KB / 200 行）
-- 第 12~16 行是 **1.6~2.2 万字符的乱码块**，文件头与全部中文注释均为 mojibake
-- git 历史里该文件**只有这一个提交**，无干净版本可回滚
-- 症状：`docker compose config` 无法解析，或解析出空的 `environment`
-
-**已用桌面留存的正确版本重建**（commit `ced2092`）：714KB → **9.2KB / 218 行**，Python `yaml.safe_load` 校验通过，3 服务 / 5 卷 / 1 网络，app 26 条 `environment`。
-逐项保留项目版特有配置：单容器内嵌 Ollama（`target: runtime-with-ollama`）、GPU 声明、`no_proxy`/`NO_PROXY`、`LANG`/`LC_ALL`/`PYTHONIOENCODING`、`OLLAMA_NUM_PARALLEL=1`、`JWT_SECRET` 注入、健康检查走 `/api/v1/health`。
-逐项比对旧文件有效行确认**无配置丢失**，且**无任何外网地址**（全内网红线保持）。
-
-损坏原件留证在 `dev/docker-compose.prod.yml.CORRUPTED-714KB`，确认无遗漏后可删。
-⚠️ **教训**：文件「莫名膨胀 + 中文变乱码」是同一类问题 —— 某工具以错误编码反复读写 UTF-8 会把内容撑成乱码堆。以后遇到先怀疑这类损坏，并**入库前用 `yaml.safe_load` 验一次**。
-
----
-
-## 生产口径注入缺失（P0-7，仍未做）
-
-| 文件 | `KB_CALL_MODE` | `RERANK_MODEL` |
-|---|---|---|
-| `deploy/prod/.env.production` | **0 处命中** | **0 处命中** |
-| `deploy/prod/docker-compose.prod.yml`（`app.environment`） | **未注入** | **未注入** |
-
-**注意**：只写 env 不生效，必须同时在 compose `environment:` 注入（Phase4b 已踩过同类坑）。
-
-已就位的：`LLM_MODEL=qwen2.5:7b`、`AGENT_PROBE_ENABLED=false`（env + compose 第 62 行透传）、`POSTGRES_PASSWORD` / `JWT_SECRET` 已轮换为随机值。
-**配置定义侧已完整**（不阻塞，只欠注入）：`src/config.py:100` 默认 `"always"`、`src/config_center/schema.py:125` 枚举三项、`categories.py:37` 已列入配置中心、`src/api/config.py:48` 已列入可热更新白名单。
-
----
-
-## 当前阻塞（2026-10-04 实测）
-
-| # | 阻塞 | 实测证据 | 影响 |
-|---|---|---|---|
-| 1 | **Docker daemon 未运行** | `docker version` → `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine` | P0-9~P0-11、P1-6、P1-7 容器部分、P3 全部停摆 |
-| 2 | **`rag_node` 未接入 call_policy** | `nodes.py` 检索命中数 = 0 | Phase5 主线停滞，smart 模式线上不存在 |
-| 3 | **无绝对相似度信号** | `call_policy.py` docstring 自述 | 即使接入，smart ≡ always |
-| 4 | **生产口径未注入** | `.env.production` 0 处命中 | 线上跑的是 `always` 默认值 |
-
----
-
-## 下一步执行顺序（按依赖）
-
-```
-P0-1 启动 Docker Desktop
-  ↓
-┌────────────────────────────────────────┐
-│ 开发侧（不依赖 Docker，可立即做）        │
-│ P0-4 检索侧补 vector_similarity 绝对信号 │
-│ P0-3 rag_node 接入 call_policy 三分支   │
-│ P0-6 call_policy 三分支单测补齐          │
-└────────────────────────────────────────┘
-  ↓
-P0-7 生产口径注入 KB_CALL_MODE + RERANK_MODEL
-  ↓
-P0-8 前端构建 static/ → 纳入 Dockerfile
-  ↓
-P0-9 重建镜像 + 重建 app 容器
-  ↓
-P0-10 前端闭环验证 / P0-11 页码徽标实测 / P1-6 探针报错实测
-  ↓
-P1-7 全量回归 → P3 交付合规复验
-```
-
-⚠️ **顺序已调整**：原 P0-2「工作区快照」已完成（代码全部入库并 push），从序列中移除。
-**P0-4 提到 P0-3 之前** —— 先有绝对信号，smart 接入才有意义，否则接了也是 always。
-
-关键命令（compose 必须显式指定文件，否则会操作到错误的编排）：
+## 上线命令与索引
 
 ```powershell
 docker compose -f deploy/prod/docker-compose.prod.yml --env-file deploy/prod/.env.production build app
 docker compose -f deploy/prod/docker-compose.prod.yml --env-file deploy/prod/.env.production up -d --force-recreate app
 ```
 
----
-
-## 任务清单索引
-
-完整清单见 `docs/Phase5-后续待完善任务清单.md`（286 行，含行号级证据）。
-kb_call_mode 主线的技术方案见 `Phase5-kb_call_mode语义收口-拆解方案.md`（已入库）。
-
-| 组 | 数量 | 内容概要 | 状态 |
-|---|---|---|---|
-| P0 | 11 项 | 阻塞项：Docker 启动、主线接入、绝对信号、口径注入、重建镜像、闭环验证 | 快照已解，余 10 项 |
-| P1 | 9 项 | 功能补齐：chapter_path 透出、页码覆盖率、探针实测、全量回归 | 部分随本轮入库推进 |
-| P2 | 10 项 | 遗留缺陷：session_id 双写、WS 推理不取消、端到端延迟、代理变量清理 | **部署套件已入库** |
-| P3 | 6 项 | 交付合规复验：外网审计、离线变量、数据完整性、文档归档 | **交付文档已入库**，复验待做 |
-
----
-
-## 本轮（2026-10-04）已解决项 —— 不要重复排查
-
-### 修复的 6 个实质缺陷
-
-| # | 缺陷 | 位置 | 性质 |
-|---|---|---|---|
-| 1 | QPS 用 `max(latencies)` 当总耗时，并发被忽略（并发 1 与 20 算出同数） | `scripts/benchmark/bench_chat_concurrency.py` | 性能数据失真 |
-| 2 | 用了 `urllib.request` 但未 import，走到登录/建库分支直接 `NameError` | `tests/rag_eval/eval_recall.py` | 脚本必崩 |
-| 3 | 启动时打印 `FEISHU_WEBHOOK[:50]`，机器人 URL 本身就是凭据 | `deploy/monitoring/feishu_adapter/app.py` | **凭据泄露** |
-| 4 | 测试 6「引用片段截断」写死 `True`，等于没测 | `scripts/acceptance_test.py` | 假验证 |
-| 5 | `base_url` 无协议校验，误传 `file:///etc` 会读本地文件 | `scripts/benchmark/` 三个脚本 | 路径穿越 |
-| 6 | 默认绑 `0.0.0.0` 且无认证，等于把代理开放给整个局域网 | `scripts/proxy_relay.py` | 暴露面 |
-
-修复 #1 后实测：并发 1/5/20 → **9.9 / 49.4 / 192.1 QPS**（理论值 10/50/200）。
-
-### 已确认修好的历史项
-
-`.txt` 上传（`0dd8e34`）、配置中心热更新 + 审计（`f88bc1f`/`173fd0d`）、结构化 JSON 日志（`2cae275`）、A2A 缓存 / 文档权重 / 来源配额 / 查询改写（`d2a12c3`）、上传安全校验 / LLM 热重建 / `recursion_limit`（`9270c55`）、`pyproject.toml:55-59` 的 `-n=4`、vite 端口 5173 与 `outDir: '../static'`、WS keepalive（`docker-compose.prod.yml:67` → 300s）。
-**代码就绪待生产验证**：前端页码徽标 `frontend/src/App.tsx:759-761`、`:1195-1196`。
-
-### 归档与仓库卫生
-
-`dev/` 归档区已建（探针、验收残片、前端截图去重）；`.pre-commit-config.yaml` 的 ruff / ruff-format 加 `exclude: ^dev/`；`dev/acceptance_report_2026-09.md` 已在 `dev/README.md` 标注「内容残缺含写死常量，不要当作有效验收结论」；远端 657 文件仅 `.example` 与 Helm 占位符，gitleaks 扫 23 个 commit 零泄漏。
-
----
-
-## 待核实异常
-
-- `health_checker.py` 行数三方口径冲突：完成度总报告（09-21）记 **529 行** → 旧 CURRENT.md 记 **469 行** → 本轮实测 **526 行**（`44f8943`）。需确认 526 行是否为最终修复版、是否曾被回退（P1-8）
-- 前端产物滞后：`static/` 时间戳 09-17，`App.tsx` 已改到 09-22，需重新构建（P0-8）
-- `static/` 被 `.gitignore` 忽略，Dockerfile 需决定：构建前端，还是明确只发 API
-
----
+技术方案见 `docs/Phase5-kb_call_mode语义收口-拆解方案.md`；完整任务清单见 `docs/Phase5-后续待完善任务清单.md`。
+热验证脚本在本机 `.pytest_tmp/verify_direct.py`（容器内副本已清理）。
 
 ## 更新规则
 
 - 完成一个阶段 → 覆盖对应区块
-- 阻塞解除 → 从「当前阻塞」移出，记入日志
-- 决策了下一步 → 更新执行顺序
-- 行号引用**必须实测复核**，代码一改行号就漂移（旧记录已因此产生三处错误行号）
-- **本文件控制在 240 行以内。** 详细证据链放 `docs/` 与 `Phase*-改动清单与验收报告.md`，这里只保留结论与索引
+- 阻塞解除 → 记入对应日志区块
+- 行号引用必须实测复核，代码一改行号就漂移
+- 本文件控制在 240 行以内，详细证据链放 docs/ 与阶段验收报告

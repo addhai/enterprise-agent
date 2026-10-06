@@ -19,30 +19,45 @@ v0.6 更新（2026-07-03）：
     - 系统提示词只做约束，不当安全边界
     - 关键资源必须靠服务端鉴权（PermissionChecker）
 """
+
 from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_openai import ChatOpenAI
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from src.config import settings
-from src.graph.state import AgentState
-from src.agent.tools import _faq_search
 from src.agent.agent import CustomerServiceAgent
+from src.agent.cancellable_llm import CancellableChatOpenAI, make_chat_model
 from src.agent.prompt import detect_prompt_injection
+from src.agent.tools import _faq_search
+from src.config import settings
+from src.graph.cancellation import WorkflowCancelled, check_cancelled
+from src.graph.state import AgentState
+from src.rag.call_policy import (
+    MODE_ALWAYS,
+    MODE_NEVER,
+    MODE_SMART,
+    REASON_FALLBACK,
+    REASON_RULE,
+    REASON_SCORE,
+    decide_retrieval,
+    dedup_docs,
+    resolve_mode,
+    warn_if_over_budget,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # 英文「转人工」意图识别正则。
 #
-# 设计取舍：纯字面子串列表维护成本低但召回差 —— "speak to agent" 无法命中
+# 设计取舍：纯字面子串列表维护成本低但召回差，"speak to agent" 无法命中
 # "speak to a human agent"。这里用两条模式覆盖绝大多数自然表达，同时保持
 # 零依赖、可预测（不引入分类模型的不确定性）：
-#   1. 动词 + 若干插入词 + 人工角色名词（speak to a human agent / connect me with a rep）
+#   1. 动词 + 若干插入词 + 人工角色名词
+#      （speak to a human agent / connect me with a rep）
 #   2. 限定词 + 角色名词（live agent / real person / human representative）
 _ENGLISH_HANDOFF_RE = re.compile(
     r"(?:\b(?:speak|talk|chat|connect|transfer|escalate|forward)\b[\w\s,']{0,30}?"
@@ -53,15 +68,15 @@ _ENGLISH_HANDOFF_RE = re.compile(
 )
 
 # 共享的 LLM 实例（用于意图分类，延迟初始化以避免无 API Key 时导入失败）
-_intent_llm: Optional[ChatOpenAI] = None
-_clarify_llm: Optional[ChatOpenAI] = None
+_intent_llm: CancellableChatOpenAI | None = None
+_clarify_llm: CancellableChatOpenAI | None = None
 
 
-def _get_intent_llm() -> ChatOpenAI:
+def _get_intent_llm() -> CancellableChatOpenAI:
     """获取或初始化意图分类 LLM"""
     global _intent_llm
     if _intent_llm is None:
-        _intent_llm = ChatOpenAI(
+        _intent_llm = make_chat_model(
             model=settings.llm_model,
             api_key=settings.openai_api_key,
             base_url=settings.openai_api_base,
@@ -70,11 +85,11 @@ def _get_intent_llm() -> ChatOpenAI:
     return _intent_llm
 
 
-def _get_clarify_llm() -> ChatOpenAI:
+def _get_clarify_llm() -> CancellableChatOpenAI:
     """获取或初始化意图澄清 LLM"""
     global _clarify_llm
     if _clarify_llm is None:
-        _clarify_llm = ChatOpenAI(
+        _clarify_llm = make_chat_model(
             model=settings.llm_model,
             api_key=settings.openai_api_key,
             base_url=settings.openai_api_base,
@@ -87,7 +102,8 @@ def _get_clarify_llm() -> ChatOpenAI:
 # Node 1: entry_node — 入口 + 长期记忆注入
 # ======================================================================
 
-def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
+
+def entry_node(state: AgentState, memory_manager=None) -> dict[str, Any]:
     """入口节点：初始化对话状态，注入长期记忆上下文
 
     职责：
@@ -108,6 +124,7 @@ def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
     # 三层检查：正则快检 → LLM越狱(可选) → 相关性(可选)
     try:
         from src.graph.guardrails import get_guardrail_agent
+
         guardrail = get_guardrail_agent()
         gr_result = guardrail.check(last_message)
 
@@ -115,7 +132,9 @@ def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
             # 被拦截：直接终止任务
             logger.warning(
                 "Guardrail blocked: reason=%s, confidence=%.2f, user=%s",
-                gr_result.block_reason, gr_result.confidence, user_id,
+                gr_result.block_reason,
+                gr_result.confidence,
+                user_id,
             )
             return {
                 "turn_count": state.get("turn_count", 0) + 1,
@@ -136,7 +155,9 @@ def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         if injection["is_injection"]:
             logger.warning(
                 "Prompt injection detected (legacy): type=%s, confidence=%.2f, user=%s",
-                injection["attack_type"], injection["confidence"], user_id,
+                injection["attack_type"],
+                injection["confidence"],
+                user_id,
             )
             return {
                 "turn_count": state.get("turn_count", 0) + 1,
@@ -148,7 +169,9 @@ def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
                 "memory_context": "",
                 "injection_blocked": True,
                 "injection_type": injection["attack_type"],
-                "final_response": "检测到异常请求，已自动终止。如需帮助请联系人工客服。",
+                "final_response": (
+                    "检测到异常请求，已自动终止。如需帮助请联系人工客服。"
+                ),
             }
 
     # 注入长期记忆上下文
@@ -161,8 +184,9 @@ def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
                 user_message=last_message,
             )
         except Exception:
-            logger.warning("Memory context injection failed, continuing without it",
-                           exc_info=True)
+            logger.warning(
+                "Memory context injection failed, continuing without it", exc_info=True
+            )
 
     return {
         "turn_count": state.get("turn_count", 0) + 1,
@@ -180,7 +204,8 @@ def entry_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
 # Node 1.5: clarify_node — 意图澄清
 # ======================================================================
 
-def clarify_node(state: AgentState) -> Dict[str, Any]:
+
+def clarify_node(state: AgentState) -> dict[str, Any]:
     """意图澄清节点：判断用户问题是否缺少关键信息
 
     处理策略：
@@ -196,7 +221,9 @@ def clarify_node(state: AgentState) -> Dict[str, Any]:
     """
     messages = state.get("messages", [])
     last_message = messages[-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    content = (
+        last_message.content if hasattr(last_message, "content") else str(last_message)
+    )
     memory_context = state.get("memory_context", "")
 
     # ===== 检查是否是无意义输入（纯数字、乱码等）=====
@@ -207,9 +234,9 @@ def clarify_node(state: AgentState) -> Dict[str, Any]:
             "clarification_question": (
                 "抱歉，我不太明白您输入的内容是什么意思～\n\n"
                 "您可以试着描述一下您遇到的问题，比如：\n"
-                "• 「同步失败怎么办」\n"
-                "• 「怎么重置密码」\n"
-                "• 「价格是多少」\n\n"
+                "• 「F02故障代码怎么处理」\n"
+                "• 「测温不准怎么校准」\n"
+                "• 「怎么重置密码」\n\n"
                 "如果需要人工客服帮助，也可以随时告诉我～"
             ),
         }
@@ -252,11 +279,11 @@ def _is_nonsensical_input(content: str) -> bool:
         return True
 
     # 纯数字（比如订单号、错误码，但没有上下文的话我们不知道是什么）
-    if re.match(r'^\d+$', stripped):
+    if re.match(r"^\d+$", stripped):
         return True
 
     # 纯符号/特殊字符
-    if re.match(r'^[^\w\u4e00-\u9fa5]+$', stripped):
+    if re.match(r"^[^\w\u4e00-\u9fa5]+$", stripped):
         return True
 
     # 重复字符（比如 "aaaaa"、"哈哈哈" 太多）
@@ -266,9 +293,9 @@ def _is_nonsensical_input(content: str) -> bool:
     # 随机乱码：连续的无意义字符组合（中英文混合且没有语义）
     # 简单判断：如果长度大于5，但中文字符少于2个，英文字母少于3个，数字占比超过80%
     if len(stripped) > 5:
-        chinese_count = len(re.findall(r'[\u4e00-\u9fa5]', stripped))
-        english_count = len(re.findall(r'[a-zA-Z]', stripped))
-        digit_count = len(re.findall(r'\d', stripped))
+        chinese_count = len(re.findall(r"[\u4e00-\u9fa5]", stripped))
+        english_count = len(re.findall(r"[a-zA-Z]", stripped))
+        digit_count = len(re.findall(r"\d", stripped))
         total_alpha = chinese_count + english_count
         if total_alpha < 2 and digit_count / len(stripped) > 0.8:
             return True
@@ -287,16 +314,16 @@ def _looks_like_react_output(text: str) -> bool:
 
     # 常见的 ReAct 标记模式
     react_patterns = [
-        r'^Action\s*:',
-        r'^Action Input\s*:',
-        r'^Observation\s*:',
-        r'^Thought\s*:',
-        r'^Final Answer\s*:',
-        r'^Question\s*:',
-        r'escalate_to_human',
-        r'search_knowledge_base',
-        r'search_faq',
-        r'Action Input.*\{',
+        r"^Action\s*:",
+        r"^Action Input\s*:",
+        r"^Observation\s*:",
+        r"^Thought\s*:",
+        r"^Final Answer\s*:",
+        r"^Question\s*:",
+        r"escalate_to_human",
+        r"search_knowledge_base",
+        r"search_faq",
+        r"Action Input.*\{",
     ]
 
     for pattern in react_patterns:
@@ -310,10 +337,10 @@ def _is_refusal_response(text: str) -> bool:
     """判断 AI 的回复是否是拒答式的（说自己做不了/不支持）
 
     比如：
-    - "我是 CloudSync 客服，不唱歌"
+    - "我是设备客服，不唱歌"
     - "不支持音乐播放功能"
-    - "我专注于解决数据同步问题"
-    - "我是 CloudSync 智能客服，专注解答数据同步问题"
+    - "我专注于解决设备故障问题"
+    - "我是设备智能客服，专注解答设备使用问题"
 
     Returns:
         True 表示是拒答式回复，应该计数失败次数
@@ -334,50 +361,72 @@ def _is_refusal_response(text: str) -> bool:
         r"是.*服务.*不提供",
     ]
 
-    for pattern in refusal_patterns:
-        if re.search(pattern, text):
-            return True
-
-    return False
+    return any(re.search(pattern, text) for pattern in refusal_patterns)
 
 
-def _detect_missing_info(content: str, memory_context: str) -> List[str]:
+def _detect_missing_info(content: str, memory_context: str) -> list[str]:
     """检测用户问题中缺失的关键信息
 
     Returns:
         缺失信息列表，如 ["SDK 版本", "错误码"]
     """
     content_lower = content.lower()
-    missing: List[str] = []
+    missing: list[str] = []
 
     # 错误类问题必须有错误码
     error_indicators = ["error", "报错", "错误", "fail", "failed", "异常", "bug"]
     if any(kw in content_lower for kw in error_indicators):
         # 检查是否提供了错误码
-        has_error_code = bool(re.search(r'\d{3,4}', content))
-        has_error_msg = bool(re.search(r'ERR_|error_code|exception|traceback', content_lower))
+        has_error_code = bool(re.search(r"\d{3,4}", content))
+        has_error_msg = bool(
+            re.search(r"ERR_|error_code|exception|traceback", content_lower)
+        )
         if not has_error_code and not has_error_msg:
             missing.append("错误码或错误详情")
 
-    # 配置类问题必须有产品/服务名称
+    # 配置类问题必须有设备型号或产品标识
     config_indicators = ["配置", "setup", "configure", "设置", "安装"]
     if any(kw in content_lower for kw in config_indicators):
-        # 检查是否指定了具体产品
-        product_names = ["sdk", "api", "dashboard", "console", "app", "cloudsync"]
+        # 检查是否指定了具体设备型号/产品（含常见工业型号与固件/SDK 标识）
+        product_names = [
+            "型号",
+            "t90",
+            "t100",
+            "thermosense",
+            "固件",
+            "firmware",
+            "sdk",
+            "api",
+            "console",
+            "app",
+        ]
         if not any(kw in content_lower for kw in product_names):
-            missing.append("具体产品或服务名称")
+            missing.append("设备型号或产品名称")
 
     # 排查类问题必须有技术环境
     troubleshoot_indicators = ["排查", "troubleshoot", "问题", "问题", "怎么"]
     if any(kw in content_lower for kw in troubleshoot_indicators):
-        env_indicators = ["version", "v\\d", "sdk", "python", "javascript", "node", "java", "windows", "linux", "mac"]
+        env_indicators = [
+            "version",
+            "v\\d",
+            "sdk",
+            "python",
+            "javascript",
+            "node",
+            "java",
+            "windows",
+            "linux",
+            "mac",
+        ]
         if not any(re.search(ind, content_lower) for ind in env_indicators):
             missing.append("技术环境（SDK 版本/操作系统）")
 
     return missing
 
 
-def _try_infer_from_memory(missing_info: List[str], memory_context: str) -> Dict[str, str]:
+def _try_infer_from_memory(
+    missing_info: list[str], memory_context: str
+) -> dict[str, str]:
     """尝试从长期记忆中推断缺失信息
 
     Returns:
@@ -386,12 +435,14 @@ def _try_infer_from_memory(missing_info: List[str], memory_context: str) -> Dict
     if not memory_context:
         return {}
 
-    inferred: Dict[str, str] = {}
+    inferred: dict[str, str] = {}
     memory_lower = memory_context.lower()
 
     # SDK 版本推断
     if "SDK 版本" in str(missing_info):
-        version_match = re.search(r"(?:SDK|sdk)[\s：:]*([\w.-]+(?:v\d+\.\d+)?)", memory_lower)
+        version_match = re.search(
+            r"(?:SDK|sdk)[\s：:]*([\w.-]+(?:v\d+\.\d+)?)", memory_lower
+        )
         if version_match:
             inferred["SDK 版本"] = version_match.group(1)
 
@@ -407,7 +458,7 @@ def _try_infer_from_memory(missing_info: List[str], memory_context: str) -> Dict
     return inferred
 
 
-def _rewrite_query(original: str, inferred: Dict[str, str]) -> str:
+def _rewrite_query(original: str, inferred: dict[str, str]) -> str:
     """根据推断信息改写查询"""
     if not inferred:
         return original
@@ -420,23 +471,21 @@ def _rewrite_query(original: str, inferred: Dict[str, str]) -> str:
     return f"{original}（补充信息：{addition_text}）"
 
 
-def _generate_clarification_question(missing_info: List[str], original: str) -> str:
+def _generate_clarification_question(missing_info: list[str], original: str) -> str:
     """生成追问用户的提示"""
     if not missing_info:
         return ""
 
-    questions = []
-    for info in missing_info:
-        questions.append(f"您能否提供关于「{info}」的更多信息？")
+    questions = [f"您能否提供关于「{info}」的更多信息？" for info in missing_info]
 
     return (
-        f"为了更好地帮助您，我需要了解更多细节：\n\n"
+        "为了更好地帮助您，我需要了解更多细节：\n\n"
         + "\n".join(f"• {q}" for q in questions)
         + "\n\n提供这些信息后我可以给您更准确的答案。"
     )
 
 
-def _detect_negative_emotion(content: str) -> Optional[str]:
+def _detect_negative_emotion(content: str) -> str | None:
     """检测用户消息中的强烈负面情绪（按场景分级转人工：情绪激动自动转）
 
     检测维度：
@@ -454,17 +503,42 @@ def _detect_negative_emotion(content: str) -> Optional[str]:
 
     # 1. 愤怒/辱骂词汇
     anger_words = [
-        "气死", "气炸", "破系统", "破软件", "垃圾", "什么玩意",
-        "太差劲", "差劲", "无语", "恶心", "骗人", "骗子", "坑人",
-        "狗屎", "他妈", "卧槽", "操", "shit", "fuck", "damn",
-        "受不了", "受够了", "崩溃", "疯掉", "烦死", "讨厌",
-        "什么破", "烂透了", "太烂了", "骗钱",
+        "气死",
+        "气炸",
+        "破系统",
+        "破软件",
+        "垃圾",
+        "什么玩意",
+        "太差劲",
+        "差劲",
+        "无语",
+        "恶心",
+        "骗人",
+        "骗子",
+        "坑人",
+        "狗屎",
+        "他妈",
+        "卧槽",
+        "操",
+        "shit",
+        "fuck",
+        "damn",
+        "受不了",
+        "受够了",
+        "崩溃",
+        "疯掉",
+        "烦死",
+        "讨厌",
+        "什么破",
+        "烂透了",
+        "太烂了",
+        "骗钱",
     ]
     if any(w in text for w in anger_words):
         return "愤怒"
 
     # 2. 标点特征：连续 3 个及以上感叹号/问号
-    if re.search(r'[！!]{3,}', content) or re.search(r'[？?]{3,}', content):
+    if re.search(r"[！!]{3,}", content) or re.search(r"[？?]{3,}", content):
         return "急躁"
 
     # 3. 重复抱怨：同一负面词重复出现 2 次以上
@@ -480,20 +554,35 @@ def _detect_negative_emotion(content: str) -> Optional[str]:
 # Node 2: router_node — 意图路由
 # ======================================================================
 
-def router_node(state: AgentState) -> Dict[str, Any]:
+
+def router_node(state: AgentState) -> dict[str, Any]:
     """意图路由节点：分析用户意图，决定走哪条路径"""
     messages = state.get("messages", [])
     if not messages:
         return {"intent": "faq"}
 
     last_message = messages[-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    content = (
+        last_message.content if hasattr(last_message, "content") else str(last_message)
+    )
 
     # 问候语快速判断（走 FAQ 路径，避免转人工
     greeting_keywords = [
-        "你好", "您好", "hello", "hi", "嗨", "在吗", "在不",
-        "谢谢", "感谢", "thank you", "thanks",
-        "再见", "拜拜", "bye", "goodbye",
+        "你好",
+        "您好",
+        "hello",
+        "hi",
+        "嗨",
+        "在吗",
+        "在不",
+        "谢谢",
+        "感谢",
+        "thank you",
+        "thanks",
+        "再见",
+        "拜拜",
+        "bye",
+        "goodbye",
     ]
     content_lower = content.lower().strip()
     if any(kw in content_lower for kw in greeting_keywords):
@@ -501,11 +590,28 @@ def router_node(state: AgentState) -> Dict[str, Any]:
 
     # 强制转人工关键词（用户明确要求或敏感问题，直接转人工）
     force_human_keywords = [
-        "转人工", "人工客服", "人工服务", "找人工", "接人工",
-        "我要投诉", "投诉", "我要举报", "举报",
-        "退款", "退费", "退钱", "我要退", "取消账户", "注销账户",
-        "talk to human", "speak to agent", "real person", "human support",
-        "complaint", "refund", "cancel my account",
+        "转人工",
+        "人工客服",
+        "人工服务",
+        "找人工",
+        "接人工",
+        "我要投诉",
+        "投诉",
+        "我要举报",
+        "举报",
+        "退款",
+        "退费",
+        "退钱",
+        "我要退",
+        "取消账户",
+        "注销账户",
+        "talk to human",
+        "speak to agent",
+        "real person",
+        "human support",
+        "complaint",
+        "refund",
+        "cancel my account",
     ]
 
     if any(kw in content.lower() for kw in force_human_keywords):
@@ -529,9 +635,15 @@ def router_node(state: AgentState) -> Dict[str, Any]:
 
     # 快速规则判断 FAQ vs Technical
     faq_keywords = [
-        "reset password", "forgot password", "change plan",
-        "pricing", "how much", "cancel subscription",
-        "api key", "enable 2fa", "two factor",
+        "reset password",
+        "forgot password",
+        "change plan",
+        "pricing",
+        "how much",
+        "cancel subscription",
+        "api key",
+        "enable 2fa",
+        "two factor",
     ]
 
     if any(kw in content.lower() for kw in faq_keywords):
@@ -541,7 +653,8 @@ def router_node(state: AgentState) -> Dict[str, Any]:
     try:
         llm = _get_intent_llm()
         classification = llm.invoke(
-            f"将以下用户消息分类为 'faq'（简单常见问题）、'technical'（需要技术文档）或 'human'（需要人工客服）。"
+            f"将以下用户消息分类为 'faq'（简单常见问题）、"
+            f"'technical'（需要技术文档）或 'human'（需要人工客服）。"
             f"只返回一个词。\n\n用户消息：{content[:500]}"
         )
         intent = classification.content.strip().lower()
@@ -556,8 +669,10 @@ def router_node(state: AgentState) -> Dict[str, Any]:
                 "technical": settings.max_turns_technical,
             }
             return {"intent": intent, "effective_max_turns": turns_map.get(intent, 5)}
-    except Exception:
-        pass
+    except Exception as e:
+        # 协作式取消透传，其余分类异常按默认 technical 降级
+        if isinstance(e, WorkflowCancelled):
+            raise
 
     return {"intent": "technical", "effective_max_turns": settings.max_turns_technical}
 
@@ -566,11 +681,14 @@ def router_node(state: AgentState) -> Dict[str, Any]:
 # Node 3: faq_node — FAQ 常见问题匹配
 # ======================================================================
 
-def faq_node(state: AgentState) -> Dict[str, Any]:
+
+def faq_node(state: AgentState) -> dict[str, Any]:
     """FAQ 节点：尝试从常见问题库匹配答案，未匹配时用 LLM + 对话历史回答"""
     messages = state.get("messages", [])
     last_message = messages[-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    content = (
+        last_message.content if hasattr(last_message, "content") else str(last_message)
+    )
 
     result = _faq_search(content)
 
@@ -590,10 +708,11 @@ def faq_node(state: AgentState) -> Dict[str, Any]:
                 history_text = "\n".join(history_parts)
 
             system_prompt = (
-                "你是 CloudSync 智能客服助手。请根据对话历史回答用户的问题。\n"
-                "如果是关于产品功能、定价、使用方法等问题，尽量简洁回答。\n"
-                "如果是闲聊或身份确认类问题，根据对话历史友好回应。\n"
-                "如果问题涉及你不知道的技术细节，请诚实说你不确定，建议用户描述具体问题。"
+                "你是工业设备产品的智能技术支持助手。请根据对话历史回答用户的问题。\n"
+                "如果是关于设备使用、故障排查、保养校准等问题，尽量简洁回答；"
+                "涉及具体型号、参数、故障代码等你不确定的事实，不要编造，"
+                "诚实说明不确定并建议用户提供型号或具体现象。\n"
+                "如果是闲聊或身份确认类问题，根据对话历史友好回应。"
             )
 
             user_prompt = f"{system_prompt}\n\n"
@@ -605,20 +724,226 @@ def faq_node(state: AgentState) -> Dict[str, Any]:
             answer = response.content.strip()
             return {"faq_match": answer, "needs_human": False, "faq_from_llm": True}
         except Exception as e:
+            if isinstance(e, WorkflowCancelled):
+                raise
             logger.warning(f"FAQ fallback LLM failed: {e}")
             return {"faq_match": None}
+
+
+# ======================================================================
+# kb_call_mode 三模式辅助（Phase5 语义收口，判据见 src/rag/call_policy.py）
+# ======================================================================
+
+#: never 模式直答的系统约束：不声称查阅知识库，不确定的事实不编造
+_NEVER_MODE_SYSTEM_PROMPT = (
+    "你是智能客服助手，当前为纯对话模式，系统没有为你检索任何知识库资料。"
+    "规则：1. 全程使用中文，依据你的通用知识与对话历史直接、简洁地回答；"
+    "2. 不得声称自己查阅了知识库、文档或资料；"
+    "3. 涉及具体参数、故障代码、政策细则等你无法核实的事实时，不要编造，"
+    "诚实说明当前无法核实，并建议用户联系人工客服。"
+)
+
+#: 预检索/探测命中后拼进用户消息的上下文模板（小模型对「消息内事实」的
+#: 遵从度高于工具返回，直接注入可降低 7B 模型无视检索结果的概率）
+_PRE_RETRIEVED_HEADER = (
+    "==== 系统已预先检索到以下知识库资料，请优先依据其中事实用中文直接回答；"
+    "资料未覆盖的部分再结合你的判断，禁止编造资料中不存在的参数或来源 ===="
+)
+
+#: 高置信命中直答的系统提示词（旁路 ReAct 专用）。
+#: 2026-10-05 实测：旧版 CloudSync SaaS 人设与工业设备知识库错位，7B 模型会
+#: 无视已注入资料去调云资源工具。直答路径用中性设备技术支持人设，把模型钉在
+#: 「只依据资料作答」这一件事上，不暴露任何具体产品或公司名。
+#: 2026-10-06 起 ReAct 主提示词已同步收口为设备技术支持，两者人设口径一致。
+_DIRECT_ANSWER_SYSTEM_PROMPT = (
+    "你是设备产品技术支持助手。请严格依据用户消息中提供的知识库资料原文事实，"
+    "用简体中文回答用户的最后一个问题。\n"
+    "规则：\n"
+    "1. 答案必须来自资料，禁止编造资料中没有的参数、代码含义、步骤或结论；\n"
+    "2. 操作步骤类问题按资料顺序分点给出，保留关键数字与警示（如禁止拆卸等）；\n"
+    "3. 回复简洁直接，先给结论再给步骤，不要寒暄，不要复述问题，"
+    "不要输出「根据文档第几条」这类元信息；\n"
+    "4. 如果资料完全无法覆盖用户问题，只回复一句：资料中未找到该问题的相关信息，"
+    "建议联系技术支持。\n"
+    "5. 不要提及你是 AI、模型，也不要出现任何与设备无关的具体产品或公司名称。"
+)
+
+#: 直答输出被判为「模型自认答不出」的严格词集。命中说明高相似资料都没被用上，
+#: 直答失败，回落 ReAct Agent 走既有兜底，而不是把这句话直接发给用户。
+_DIRECT_UNANSWERED_MARKERS = (
+    "资料中未找到",
+    "未找到相关",
+    "找不到相关",
+    "没有相关信息",
+    "无法回答",
+    "无法核实",
+    "知识库中不存在",
+    "答不上来",
+)
+
+
+def _format_pre_retrieved_context(docs: list, max_docs: int = 5) -> str:
+    """把预检索 Document 列表格式化成模型可读的参考资料块。"""
+    blocks = []
+    for i, doc in enumerate((docs or [])[:max_docs], start=1):
+        meta = getattr(doc, "metadata", None) or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        source = meta.get("source") or meta.get("doc_id") or "未知来源"
+        chapter = (
+            meta.get("chapter_path") or meta.get("chapter") or meta.get("title") or ""
+        )
+        header = f"[文档{i}] 来源：{source}" + (f" 章节：{chapter}" if chapter else "")
+        content = getattr(doc, "page_content", "") or ""
+        blocks.append(f"{header}\n{content[:1500]}")
+    return "\n\n".join(blocks)
+
+
+def _build_agent_input(content: str, pre_retrieved_docs: list) -> str:
+    """always / smart 命中时，把预检索资料随用户消息一并交给 Agent。"""
+    if not pre_retrieved_docs:
+        return content
+    context = _format_pre_retrieved_context(pre_retrieved_docs)
+    return f"{content}\n\n{_PRE_RETRIEVED_HEADER}\n{context}"
+
+
+def _count_agent_kb_searches(messages: list) -> int:
+    """事后统计 Agent 自主调用 search_knowledge_base 的次数（Phase5 §2.5）。
+
+    LangGraph create_agent 的工具调用记录在 AIMessage.tool_calls 上。
+    只计数、不阻断，超软上限由 warn_if_over_budget 出 warning。
+    """
+    count = 0
+    for message in messages or []:
+        tool_calls = getattr(message, "tool_calls", None) or []
+        for call in tool_calls:
+            if isinstance(call, dict) and call.get("name") == "search_knowledge_base":
+                count += 1
+    return count
+
+
+def _direct_answer_without_retrieval(
+    content: str, history: list, mode: str
+) -> dict[str, Any]:
+    """kb_call_mode=never：不构建 Agent、不检索，LLM 仅依据对话历史直答。
+
+    LLM 失败时置 answer_status="refused"，保持空引用，绝不静默转去检索
+    （模式契约不可被降级悄悄破坏，见拆解方案 §2.3）。
+    """
+    base = {
+        "needs_human": False,
+        "tool_sourced": False,
+        "retrieved_docs": [],
+        "kb_call_mode": mode,
+        "retrieval_decided_by": MODE_NEVER,
+        "retrieval_count": 0,
+        "answer_path": "direct_no_retrieval",
+    }
+    try:
+        llm = _get_intent_llm()
+        direct_messages: list = [SystemMessage(content=_NEVER_MODE_SYSTEM_PROMPT)]
+        for human_msg, ai_msg in history or []:
+            direct_messages.append(HumanMessage(content=human_msg))
+            if ai_msg:
+                direct_messages.append(AIMessage(content=ai_msg))
+        direct_messages.append(HumanMessage(content=content))
+        response = llm.invoke(direct_messages)
+        output = getattr(response, "content", None)
+        output = str(output).strip() if output is not None else ""
+        return {
+            **base,
+            "final_response": output,
+            "quality_score": None,
+            "answer_status": "answered",
+        }
+    except Exception as e:  # noqa: BLE001 - 直答异常只置拒答，不得触发检索
+        if isinstance(e, WorkflowCancelled):
+            raise
+        logger.warning("never 模式直答失败，置 refused（不静默转检索）：%s", e)
+        return {
+            **base,
+            "final_response": "",
+            "quality_score": 0.2,
+            "answer_status": "refused",
+            "answer_path": "direct_no_retrieval",
+        }
+
+
+def _direct_synthesize_with_docs(
+    content: str,
+    history: list,
+    docs: list,
+    mode: str,
+    retrieval_decided_by: str,
+    retrieval_count: int,
+) -> dict[str, Any] | None:
+    """高置信命中直答：不构建工具 Agent，单次 LLM 调用直接依据预检索资料合成。
+
+    用于绕过 7B 模型在多工具 ReAct 下的误路由/不收敛（生产实测：F02 检索 top1
+    相似度 0.55，资料含正确答案，Agent 仍 5 轮空转走兜底）。
+
+    返回 None 表示直答不可用（LLM 异常 / 空输出 / 模型自认答不出），
+    调用方必须回落 ReAct Agent，不得把失败信号直接发用户。
+    """
+    try:
+        llm = _get_intent_llm()
+        messages: list = [SystemMessage(content=_DIRECT_ANSWER_SYSTEM_PROMPT)]
+        for human_msg, ai_msg in history or []:
+            messages.append(HumanMessage(content=human_msg))
+            if ai_msg:
+                messages.append(AIMessage(content=ai_msg))
+        messages.append(HumanMessage(content=_build_agent_input(content, docs)))
+        response = llm.invoke(messages)
+        output = str(getattr(response, "content", "") or "").strip()
+    except Exception as e:  # noqa: BLE001 - 任何异常都回落 Agent
+        # 协作式取消必须透传，否则断线/硬超时会被当成普通失败回落 ReAct
+        if isinstance(e, WorkflowCancelled):
+            raise
+        logger.warning("高置信直答异常，回落 ReAct Agent：%s", e)
+        return None
+
+    if not output:
+        logger.info("高置信直答返回空，回落 ReAct Agent")
+        return None
+    if any(marker in output for marker in _DIRECT_UNANSWERED_MARKERS):
+        logger.info("高置信直答模型自认资料未覆盖，回落 ReAct Agent：%s", output[:60])
+        return None
+
+    logger.info(
+        "[kb_call_mode=%s] 高置信直答命中，旁路 ReAct：decided_by=%s docs=%d",
+        mode,
+        retrieval_decided_by,
+        len(docs),
+    )
+    return {
+        "needs_human": False,
+        "tool_sourced": False,
+        "final_response": output,
+        # 高相似资料直答，token 量由检索侧保证；不预设低质分，交给 reply 正常组装
+        "quality_score": None,
+        "retrieved_docs": dedup_docs(list(docs)),
+        "answer_status": "answered",
+        "kb_call_mode": mode,
+        "retrieval_decided_by": retrieval_decided_by,
+        "retrieval_count": retrieval_count,
+        "answer_path": "direct_synthesis",
+        # 资料事实直答，reflect 的二次 LLM 审核既慢（CPU 多一次数分钟调用）
+        # 又可能改坏答案，显式标记让 reflect_node 跳过（与 tool_sourced 同例）。
+        "has_reflected": True,
+    }
 
 
 # ======================================================================
 # Node 4: rag_node — RAG + ReAct Agent 推理
 # ======================================================================
 
+
 def rag_node(
     state: AgentState,
     retriever=None,
     memory_manager=None,
     user_id: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """RAG 推理节点：使用 ReAct Agent 进行深度技术排查
 
     职责：
@@ -629,7 +954,9 @@ def rag_node(
     """
     messages = state.get("messages", [])
     last_message = messages[-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    content = (
+        last_message.content if hasattr(last_message, "content") else str(last_message)
+    )
 
     # ==================================================================
     # 接入点 2: 获取对话历史
@@ -646,8 +973,9 @@ def rag_node(
                 user_message=content,
             )
         except Exception:
-            logger.warning("Memory on_rag_start failed, using manual extraction",
-                           exc_info=True)
+            logger.warning(
+                "Memory on_rag_start failed, using manual extraction", exc_info=True
+            )
 
     if memory_manager and session_id:
         try:
@@ -656,7 +984,142 @@ def rag_node(
                 user_message=content,
             )
         except Exception:
-            pass
+            logger.debug("memory on_rag_start best-effort hook failed", exc_info=True)
+
+    # ==================================================================
+    # Phase5 kb_call_mode 三模式检索策略（语义契约见 call_policy 模块）
+    #   always：强制 1 次预检索，资料直接注入用户消息（生产默认）
+    #   smart ：A 段规则短路 → C 段探测判定，命中即复用探测结果（只检 1 次）
+    #   never ：不构建 Agent、不检索，LLM 依据历史直答（下方提前 return）
+    # 非法配置值由 resolve_mode 统一回落 always（决策 3，行为最可预测）。
+    # ==================================================================
+    mode, _mode_fell_back = resolve_mode(getattr(settings, "kb_call_mode", MODE_ALWAYS))
+    retrieval_count = 0
+    retrieval_decided_by = mode
+    pre_retrieved_docs: list = []
+    agent_input = content
+    effective_tenant = state.get("tenant_id") or "default"
+    effective_user = user_id or state.get("user_id", "")
+    effective_access = state.get("user_access_levels", None)
+
+    def _run_preretrieval_search() -> list:
+        """预检索/探测共用同一次检索口径，参数与 always 预检索完全一致。"""
+        top_k = min(50, max(1, int(getattr(settings, "retrieval_top_k", 5) or 5)))
+        return retriever.search(
+            content,
+            top_k=top_k,
+            user_id=effective_user,
+            tenant_id=effective_tenant,
+            user_access_levels=effective_access,
+        )
+
+    if mode == MODE_NEVER:
+        logger.info("[kb_call_mode=never] decided_by=never retrieval_count=0")
+        return _direct_answer_without_retrieval(content, history, mode)
+
+    if retriever is not None:
+        if mode == MODE_ALWAYS:
+            try:
+                pre_retrieved_docs = _run_preretrieval_search()
+                retrieval_count += 1
+                warn_if_over_budget(
+                    retrieval_count, query=content, source="pre_retrieval"
+                )
+            except Exception as e:  # noqa: BLE001 - 预检索失败回落 Agent 自主决策
+                logger.warning("always 预检索失败，回落 Agent 自主决策：%s", e)
+            if pre_retrieved_docs:
+                agent_input = _build_agent_input(content, pre_retrieved_docs)
+        else:  # MODE_SMART：A 段规则短路 → C 段探测判定
+            policy = decide_retrieval(
+                content,
+                has_prior_citations=bool(state.get("retrieved_docs")),
+            )
+            retrieval_decided_by = policy.reason
+            if policy.reason != REASON_RULE:
+                try:
+                    probe_docs = _run_preretrieval_search()
+                    retrieval_count += 1
+                    warn_if_over_budget(
+                        retrieval_count, query=content, source="pre_retrieval"
+                    )
+                except Exception as e:  # noqa: BLE001 - 探测失败不阻断主链路
+                    logger.warning("smart 探测检索异常，回落 Agent 自主决策：%s", e)
+                    probe_docs = None
+                    retrieval_decided_by = REASON_FALLBACK
+                if probe_docs is not None:
+                    # 判据自身异常（policy_error）时按「宁多检不漏检」直接注入；
+                    # 正常路径把探测结果交给 C 段判分，命中即复用、绝不二次检索。
+                    policy_error = (
+                        policy.reason == REASON_FALLBACK and not policy.needs_probe
+                    )
+                    if policy_error:
+                        pre_retrieved_docs = probe_docs
+                        retrieval_decided_by = REASON_FALLBACK
+                    else:
+                        verdict = decide_retrieval(
+                            content,
+                            probe_docs=probe_docs,
+                            min_vector_similarity=settings.kb_similarity_threshold,
+                        )
+                        retrieval_decided_by = verdict.reason
+                        should_inject = verdict.probe_reused or (
+                            verdict.reason == REASON_FALLBACK
+                            and verdict.should_retrieve
+                        )
+                        if should_inject:
+                            pre_retrieved_docs = probe_docs
+                if pre_retrieved_docs:
+                    agent_input = _build_agent_input(content, pre_retrieved_docs)
+
+    logger.info(
+        "[kb_call_mode=%s] decided_by=%s 预检索命中=%d tenant=%s",
+        mode,
+        retrieval_decided_by,
+        len(pre_retrieved_docs),
+        effective_tenant,
+    )
+
+    # ==================================================================
+    # 高置信命中直答旁路（2026-10-06，生产实测驱动）
+    # 预检索已有高相似度资料时，跳过工具 Agent 的多轮 ReAct，单次直答合成。
+    # 触发口径刻意保守：
+    #   - always：预检索 top1 绝对相似度 >= kb_direct_answer_threshold
+    #   - smart ：仅限 score 判据命中（rule/fallback 不旁路，保持语义一致）
+    # 任何不满足/直答失败的情形都继续走下方 Agent，行为可回退。
+    # ==================================================================
+    if (
+        getattr(settings, "kb_direct_answer_enabled", False)
+        and pre_retrieved_docs
+        and (
+            mode == MODE_ALWAYS
+            or (mode == MODE_SMART and retrieval_decided_by == REASON_SCORE)
+        )
+    ):
+        top_sims = [
+            float(d.metadata.get("vector_similarity"))
+            for d in pre_retrieved_docs
+            if isinstance(getattr(d, "metadata", None), dict)
+            and d.metadata.get("vector_similarity") is not None
+        ]
+        top_sim = max(top_sims, default=0.0)
+        if top_sim >= float(settings.kb_direct_answer_threshold):
+            direct = _direct_synthesize_with_docs(
+                content,
+                history,
+                pre_retrieved_docs,
+                mode,
+                retrieval_decided_by,
+                retrieval_count,
+            )
+            if direct is not None:
+                return direct
+            # direct is None：helper 内部已记录原因，继续走 Agent 安全网
+        else:
+            logger.info(
+                "top_sim=%.3f 低于直答门槛 %.2f，走 ReAct Agent",
+                top_sim,
+                settings.kb_direct_answer_threshold,
+            )
 
     # 构建 Agent（注入长期记忆上下文 + 权限信息）
     agent = CustomerServiceAgent(
@@ -674,27 +1137,40 @@ def rag_node(
         user_plan=state.get("user_plan", "free"),
     )
 
-    result = agent.run_with_trace(content, chat_history=history)
+    # always / smart 命中时 agent_input 已带预检索资料；其余情况等于原问题
+    result = agent.run_with_trace(agent_input, chat_history=history)
 
     # 提前抽资源工具结果（create_agent 的工具结果在 messages 的 ToolMessage 里），
     # 供下方「引用气泡回填」「安全网」「强制精简跳过」三处使用，避免引用未定义变量。
     tool_docs = _extract_tool_citation_docs(result.get("messages", []))
 
+    # Phase5 §2.5：事后统计 Agent 自主检索次数，超软上限只告警不阻断
+    _agent_searches = _count_agent_kb_searches(result.get("messages", []))
+    if _agent_searches:
+        retrieval_count += _agent_searches
+        warn_if_over_budget(retrieval_count, query=content, source="agent_tool")
+
     # 检查是否触发了转人工
     output = result.get("output", "")
-    
+
     # 清理 ReAct 格式：提取最终回答部分（增强版）
     import re
-    
+
     # 1. 先尝试找 Final Answer
-    final_answer_match = re.search(r'Final Answer:\s*', output, flags=re.IGNORECASE)
+    final_answer_match = re.search(r"Final Answer:\s*", output, flags=re.IGNORECASE)
     if final_answer_match:
-        output = output[final_answer_match.end():].strip()
+        output = output[final_answer_match.end() :].strip()
     else:
         # 2. 查找最后一个内部标记之后的内容
         react_markers = [
-            'Question:', 'Thought:', 'Action:', 'Action Input:', 
-            'Observation:', 'Final Answer:', 'Thought ', 'Action '
+            "Question:",
+            "Thought:",
+            "Action:",
+            "Action Input:",
+            "Observation:",
+            "Final Answer:",
+            "Thought ",
+            "Action ",
         ]
         found_any = False
         for marker in react_markers:
@@ -702,15 +1178,17 @@ def rag_node(
             if matches:
                 found_any = True
                 last_match = matches[-1]
-                candidate = output[last_match.end():].strip()
-                if candidate and not any(candidate.lower().startswith(m.lower()) for m in react_markers):
+                candidate = output[last_match.end() :].strip()
+                if candidate and not any(
+                    candidate.lower().startswith(m.lower()) for m in react_markers
+                ):
                     output = candidate
                     break
-        
+
         # 3. 如果找到了 ReAct 标记但清理失败，说明输出格式异常，当成空处理
         if found_any and _looks_like_react_output(output):
             output = ""
-    
+
     # 4. 再次检查：如果输出看起来还是 ReAct 格式，直接清空
     if _looks_like_react_output(output):
         output = ""
@@ -729,19 +1207,23 @@ def rag_node(
     needs_human = False
     intermediate_steps = result.get("intermediate_steps", [])
     for step in intermediate_steps:
-        if hasattr(step, 'action') and hasattr(step.action, 'tool'):
-            if step.action.tool == 'escalate_to_human':
-                needs_human = True
-                break
+        if (
+            hasattr(step, "action")
+            and hasattr(step.action, "tool")
+            and step.action.tool == "escalate_to_human"
+        ):
+            needs_human = True
+            break
 
     # 强制精简：如果回复超过120字，提取前3个要点。
     # 注意：资源工具结果（tool_docs 已存在）本身结构清晰，跳过精简避免截断/畸形。
     import re
+
     if len(output) > 120 and not tool_docs:
         # 兼容两种格式：编号点跨行（"1. a\n2. b"）或挤在同一行（"1. a 2. b 3. c"）。
         # 旧正则 [^\n]+ 在单行情形会贪心吞掉整行导致去重失效、回复出现重复编号，
         # 改用「匹配到下一个编号点或结尾」的非贪婪切分。
-        points = re.findall(r'\d+\.\s*(.*?)(?=\s*\d+\.\s|$)', output, flags=re.DOTALL)
+        points = re.findall(r"\d+\.\s*(.*?)(?=\s*\d+\.\s|$)", output, flags=re.DOTALL)
         if points:
             # 去重（LLM 偶发把同一编号点重复输出），再取前3个要点
             _seen = set()
@@ -752,79 +1234,107 @@ def rag_node(
                     _seen.add(ps)
                     _dedup.append(ps)
             top3 = _dedup[:3]
-            output = "\n".join(f"{i+1}. {p}" for i, p in enumerate(top3))
+            output = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(top3))
         else:
             # 没有编号列表，截断到第一句或前80字
-            sentences = re.split(r'[。！？]', output)
+            sentences = re.split(r"[。！？]", output)
             if len(sentences) >= 2:
                 output = sentences[0] + "。" + sentences[1] + "。"
             else:
                 output = output[:80] + "..."
 
     # ===== 幻觉防护 1: 检索置信度检查 =====
-    # 如果 Agent 返回了"没有找到相关信息"，标记为拒答（不强制转人工，由 reply_node 决定是否建议转人工）
+    # 如果 Agent 返回了"没有找到相关信息"，标记为拒答
+    # （不强制转人工，由 reply_node 决定是否建议转人工）
     refusal_indicators = [
-        "抱歉", "找不到", "未找到", "没有相关信息",
-        "找不到相关文档", "无法回答", "我不知道",
-        "知识库中不存在", "建议转人工",
+        "抱歉",
+        "找不到",
+        "未找到",
+        "没有相关信息",
+        "找不到相关文档",
+        "无法回答",
+        "我不知道",
+        "知识库中不存在",
+        "建议转人工",
     ]
     is_refusal = any(ind in output for ind in refusal_indicators)
 
     # ===== 幻觉防护 2: 检索完整性检查 =====
-    retrieved_docs = _extract_retrieved_docs(result.get("intermediate_steps", []))
-
-    # 🔧 引用修复（资源工具）：tool_docs 已在 run_with_trace 后提前提取，
-    # 这里把它并回 retrieved_docs，让「引用可溯源」对最亮眼的云资源查询演示生效
-    # （否则 citations 恒为空）。tool_docs 为空时不影响原 KB 检索路径。
-    if tool_docs:
-        retrieved_docs = (retrieved_docs or []) + tool_docs
+    # Phase5 §2.5：预检索/探测结果 + Agent 中间步骤文档 + 资源工具文档，
+    # 在唯一合并点做内容级去重（sha1 全文指纹 + doc_id|page 辅键，同键留高分）。
+    agent_retrieved_docs = _extract_retrieved_docs(result.get("intermediate_steps", []))
+    retrieved_docs = dedup_docs(
+        list(pre_retrieved_docs) + (agent_retrieved_docs or []) + tool_docs
+    )
 
     # ----------------------------------------------------------------------
-    # 🔧 气泡修复：search_knowledge_base 工具把结构化 docs 格式化成字符串
-    # 喂给模型 → _extract_retrieved_docs 永远拿不到 list → retrieved_docs=[] →
-    # routes.py 的 _build_citations 拿不到料、前端「引用知识片段」气泡永远不显。
-    # 当结果空时，用原始查询主动补一次结构化检索，绕开工具格式化这一步，
-    # 把真实的 Document 列表回填到 retrieved_docs，**仅修改 rag_node 这一处**。
-    if not retrieved_docs and retriever is not None:
+    # 尾部引用补检（既有安全网）：Agent 跑完仍无文档时，用原始查询补一次
+    # 结构化检索回填真实 Document 列表（search_knowledge_base 工具把 docs
+    # 格式化成字符串喂模型，中间步骤里没有结构化 Document）。
+    # never 模式已在上方提前 return，不会破坏其「0 检索」契约；
+    # smart 的 A 段规则短路（闲聊/纯操作指令）契约是「0 检索、引用空」，
+    # 尾部补检同样必须跳过；探测未命中（score_reject）按 §2.2.2 保留兜底。
+    # 本次调用计入同一软上限计数（Phase5 §2.5）。
+    if (
+        not retrieved_docs
+        and retriever is not None
+        and retrieval_decided_by != REASON_RULE
+    ):
         try:
-            user_id_fb = user_id or state.get("user_id", "")
-            # 同主检索：空 tenant 兜底 default，真租户保留
-            tenant_id_fb = state.get("tenant_id") or "default"
-            access_lv = state.get("user_access_levels", None)
             fallback_docs = retriever.search(
                 content,
                 top_k=3,
-                user_id=user_id_fb,
-                tenant_id=tenant_id_fb,
-                user_access_levels=access_lv,
+                user_id=effective_user,
+                tenant_id=effective_tenant,
+                user_access_levels=effective_access,
             )
+            retrieval_count += 1
+            warn_if_over_budget(retrieval_count, query=content, source="tail_backfill")
             if fallback_docs:
-                # 给每个 doc 打分（search 返回的 Document 没 score），取 1/(rank+1) 作为
-                # 伪相似度。**只塞 metadata**：langchain Document 是 pydantic BaseModel，
-                # 不允许在实例上设未声明字段（doc.score = 0.5 会 ValidationError）。
-                # 路由层 _build_citations 已经从 metadata["rrf_score"] 兜底读，所以分数
-                # 会传到前端气泡。
+                # 给每个 doc 打 1/(rank+1) 伪相似度（search 返回的 Document 没 score）。
+                # 只塞 metadata：langchain Document 是 pydantic BaseModel，
+                # 不允许在实例上设未声明字段。路由层 _build_citations 从
+                # metadata["rrf_score"] 兜底读，分数会传到前端气泡。
                 for idx, doc in enumerate(fallback_docs):
                     fake_score = round(1.0 / (idx + 1), 4)
                     try:
                         doc.metadata["rrf_score"] = fake_score
-                        doc.metadata["score"] = fake_score  # 双存一份兼容可能读 score 的代码
+                        doc.metadata["score"] = (
+                            fake_score  # 双存一份兼容读 score 的代码
+                        )
                     except Exception:
-                        pass
+                        logger.debug("fallback doc metadata 盖戳失败", exc_info=True)
                 retrieved_docs = fallback_docs
                 logger.info(
-                    "rag_node 引用补检：tenant=%s 命中 %d 条", tenant_id_fb, len(retrieved_docs),
+                    "rag_node 引用补检：tenant=%s 命中 %d 条",
+                    effective_tenant,
+                    len(retrieved_docs),
                 )
         except Exception as _fb_err:
             logger.debug("rag_node 引用补检失败，跳过：%s", _fb_err)
     # ----------------------------------------------------------------------
-    quality_score: Optional[float] = None
+
+    # Phase5 可观测性三要素收口（进返回 state 与结构化日志，§2.4）
+    logger.info(
+        "[kb_call_mode=%s] decided_by=%s retrieval_count=%d docs=%d tenant=%s",
+        mode,
+        retrieval_decided_by,
+        retrieval_count,
+        len(retrieved_docs),
+        effective_tenant,
+    )
+    quality_score: float | None = None
     if retrieved_docs:
-        total_tokens = sum(len(doc.page_content if hasattr(doc, "page_content") else str(doc))
-                          for doc in retrieved_docs)
+        total_tokens = sum(
+            len(doc.page_content if hasattr(doc, "page_content") else str(doc))
+            for doc in retrieved_docs
+        )
         if total_tokens < settings.retrieval_min_tokens:
-            logger.warning("Low retrieval token count: %d (threshold: %d)",
-                           total_tokens, settings.retrieval_min_tokens)
+            logger.warning(
+                "Low retrieval token count: %d (threshold: %d)",
+                total_tokens,
+                settings.retrieval_min_tokens,
+            )
             # 检索结果太短，标记低置信度
             quality_score = 0.2
 
@@ -842,14 +1352,22 @@ def rag_node(
                 if quality_score is None:
                     quality_score = h_result["score"]
                 if not h_result["is_clean"]:
-                    logger.warning("Potential hallucination detected: %s",
-                                   h_result["hallucinated"][:5])
+                    logger.warning(
+                        "Potential hallucination detected: %s",
+                        h_result["hallucinated"][:5],
+                    )
                     # 上报真实计数到 EvaluationTracker，供 /metrics/risk 暴露
                     try:
                         from src.evaluation.tracker import get_evaluation_tracker
-                        get_evaluation_tracker().record_safety_event("hallucination_detected")
+
+                        get_evaluation_tracker().record_safety_event(
+                            "hallucination_detected"
+                        )
                     except Exception:
-                        logger.debug("Failed to record hallucination_detected event", exc_info=True)
+                        logger.debug(
+                            "Failed to record hallucination_detected event",
+                            exc_info=True,
+                        )
         except Exception:
             logger.debug("Hallucination check skipped", exc_info=True)
 
@@ -860,6 +1378,12 @@ def rag_node(
         "retrieved_docs": retrieved_docs,
         "tool_sourced": bool(tool_docs),
         "answer_status": "refused" if is_refusal else "answered",
+        # Phase5 可观测性三要素（§2.4）：模式、判据来源、实际检索次数
+        "kb_call_mode": mode,
+        "retrieval_decided_by": retrieval_decided_by,
+        "retrieval_count": retrieval_count,
+        # 答案合成路径：react_agent（高置信直答旁路见 _direct_synthesize_with_docs）
+        "answer_path": "react_agent",
     }
 
 
@@ -867,7 +1391,8 @@ def rag_node(
 # Node 5: human_node — 人工转接
 # ======================================================================
 
-def human_node(state: AgentState) -> Dict[str, Any]:
+
+def human_node(state: AgentState) -> dict[str, Any]:
     """人工转接节点（HITL）：使用 interrupt() 暂停工作流，等待人工客服介入
 
     工作流在此节点暂停，把完整上下文推送给人工客服。
@@ -910,11 +1435,13 @@ def human_node(state: AgentState) -> Dict[str, Any]:
     }
 
     # 暂停工作流，等待人工恢复
-    human_input = interrupt({
-        "type": "human_handoff",
-        "context": handoff_context,
-        "question": "请提供人工回复，或编辑 AI 的建议回复后提交",
-    })
+    human_input = interrupt(
+        {
+            "type": "human_handoff",
+            "context": handoff_context,
+            "question": "请提供人工回复，或编辑 AI 的建议回复后提交",
+        }
+    )
 
     # 工作流恢复后，从 human_input 取回人工回复
     human_response = (human_input or {}).get("response", "")
@@ -948,7 +1475,7 @@ def _generate_handoff_reason(user_message: str) -> str:
     """生成简洁的转接原因"""
     if not user_message:
         return "用户请求转人工"
-    
+
     # 检测常见的转人工原因
     if any(kw in user_message for kw in ["转人工", "人工客服", "找人工", "人工"]):
         return "用户主动要求人工客服"
@@ -958,7 +1485,7 @@ def _generate_handoff_reason(user_message: str) -> str:
         return "用户申请退款"
     if any(kw in user_message for kw in ["注销", "销户", "删除账户"]):
         return "用户申请注销账户"
-    
+
     # 默认：取前 20 个字
     if len(user_message) > 20:
         return user_message[:20] + "..."
@@ -969,7 +1496,8 @@ def _generate_handoff_reason(user_message: str) -> str:
 # Node 6: reflect_node — Agent 自我反思
 # ======================================================================
 
-def reflect_node(state: AgentState) -> Dict[str, Any]:
+
+def reflect_node(state: AgentState) -> dict[str, Any]:
     """Reflection 节点：Agent 自我反思后修正回复
 
     在 reply_node 之前执行，让 Agent 检查自己的推理链是否完整。
@@ -986,11 +1514,16 @@ def reflect_node(state: AgentState) -> Dict[str, Any]:
     if state.get("tool_sourced"):
         return {"has_reflected": True}
 
+    # 高置信直答（rag_node 资料事实单次合成）同理：答案严格来自检索资料，
+    # 二次 LLM 审核在 CPU 上多花一次数分钟调用且可能把好答案改坏，直接放行。
+    if state.get("answer_path") == "direct_synthesis":
+        return {"has_reflected": True}
+
     final_response = state.get("final_response", "")
     if not final_response:
         return {}
 
-    reflect_llm = ChatOpenAI(
+    reflect_llm = make_chat_model(
         model=settings.llm_complex_model,
         api_key=settings.openai_api_key,
         base_url=settings.openai_api_base,
@@ -1001,7 +1534,8 @@ def reflect_node(state: AgentState) -> Dict[str, Any]:
         "你是一个客服质量审核员。请检查以下客服回复是否准确、完整。\n\n"
         "【审核规则】\n"
         "1. 如果回复内容准确、清晰、有用，直接输出 'PASS'\n"
-        "2. 如果回复有问题需要修改，直接输出修改后的完整回复文本，不要加任何解释、说明或审查结论\n"
+        "2. 如果回复有问题需要修改，直接输出修改后的完整回复文本，"
+        "不要加任何解释、说明或审查结论\n"
         "3. 不要输出'审查结论'、'事实准确性'、'问题分析'等任何审核过程文字\n"
         "4. 只输出最终给用户看的回复内容\n\n"
         f"【客服回复】\n{final_response}\n\n"
@@ -1015,10 +1549,15 @@ def reflect_node(state: AgentState) -> Dict[str, Any]:
         try:
             meta = getattr(result, "response_metadata", None) or {}
             token_usage = meta.get("token_usage") or meta.get("usage") or {}
-            prompt = token_usage.get("prompt_tokens") or token_usage.get("input_tokens", 0)
-            completion = token_usage.get("completion_tokens") or token_usage.get("output_tokens", 0)
+            prompt = token_usage.get("prompt_tokens") or token_usage.get(
+                "input_tokens", 0
+            )
+            completion = token_usage.get("completion_tokens") or token_usage.get(
+                "output_tokens", 0
+            )
             if prompt or completion:
                 from src.api.metrics import record_llm_tokens
+
                 record_llm_tokens(
                     model=settings.llm_complex_model,
                     prompt_tokens=int(prompt),
@@ -1026,8 +1565,11 @@ def reflect_node(state: AgentState) -> Dict[str, Any]:
                     tenant_id=state.get("tenant_id", "default"),
                 )
         except Exception:
-            pass
-    except Exception:
+            logger.debug("reflect token 用量埋点失败", exc_info=True)
+    except Exception as e:
+        # 协作式取消透传；普通 LLM 失败按原策略跳过审核
+        if isinstance(e, WorkflowCancelled):
+            raise
         return {"has_reflected": True}
 
     if reflection_output and reflection_output.upper() != "PASS":
@@ -1043,7 +1585,8 @@ def reflect_node(state: AgentState) -> Dict[str, Any]:
 # Node 7: reply_node — 最终回复组装 + 记忆持久化 + 质量评估
 # ======================================================================
 
-def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
+
+def reply_node(state: AgentState, memory_manager=None) -> dict[str, Any]:
     """回复节点：组装最终回复，完成记忆持久化和质量评估
 
     职责：
@@ -1086,7 +1629,7 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
                 "quality_score": None,
                 "failed_attempts": state.get("failed_attempts", 0),
             }
-    
+
     if faq_match and not final_response:
         final_response = faq_match
     elif not final_response:
@@ -1110,7 +1653,7 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
             if rewritten:
                 final_response = (
                     f"抱歉，关于「{rewritten}」我暂时还答不上来。"
-                    f"您可以换个方式描述，或者试试问我同步、定价、账户相关的问题～"
+                    f"您可以补充设备型号、故障代码或具体现象后再问一次～"
                 )
             else:
                 final_response = (
@@ -1120,9 +1663,10 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         else:
             final_response = (
                 "抱歉，这个问题我暂时还答不上来。"
-                "您可以试着问我关于CloudSync的使用问题，比如同步、定价、账户等～"
+                "您可以换个方式描述设备型号、故障代码或具体现象，"
+                "比如「F02故障代码怎么处理」～"
             )
-        
+
         return {
             "final_response": final_response,
             "needs_human": False,
@@ -1143,7 +1687,8 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
         else:
             final_response = (
                 "抱歉，这个问题我暂时还答不上来。"
-                "您可以试着问我关于CloudSync的使用问题，比如同步、定价、账户等～"
+                "您可以换个方式描述设备型号、故障代码或具体现象，"
+                "比如「F02故障代码怎么处理」～"
             )
         return {
             "final_response": final_response,
@@ -1158,28 +1703,33 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
     # "ecs.g7.large" 这类 "数字.字符" 会被下方正则误当成编号点吞掉重排，
     # 产生 "1. large" 畸形。tool_sourced 时直接跳过精简，保留原样。
     import re
+
     if len(final_response) > 100 and not state.get("tool_sourced"):
         # 尝试提取编号列表
-        points = re.findall(r'\d+\.\s*([^\n]+)', final_response)
+        points = re.findall(r"\d+\.\s*([^\n]+)", final_response)
         if points:
             top3 = points[:3]
-            final_response = "\n".join(f"{i+1}. {p.strip()}" for i, p in enumerate(top3))
+            final_response = "\n".join(
+                f"{i + 1}. {p.strip()}" for i, p in enumerate(top3)
+            )
         else:
             # 没有编号，截取前两句
-            sentences = re.split(r'([。！？])', final_response)
+            sentences = re.split(r"([。！？])", final_response)
             if len(sentences) >= 4:
-                final_response = sentences[0] + sentences[1] + sentences[2] + sentences[3]
+                final_response = (
+                    sentences[0] + sentences[1] + sentences[2] + sentences[3]
+                )
             elif len(sentences) >= 2:
                 final_response = sentences[0] + sentences[1]
             else:
                 final_response = final_response[:80] + "..."
-    
+
     # ===== 拒答式回复检测：如果 AI 说自己做不了，也算作一次失败 =====
-    # （比如"我是 CloudSync 客服，不唱歌"、"不支持这个功能"等）
+    # （比如"我是设备客服，不唱歌"、"不支持这个功能"等）
     # 检测到后增加 failed_attempts，连续 2 次显示转人工按钮
     suggest_human = state.get("suggest_human", False)
     failed_attempts = state.get("failed_attempts", 0)
-    
+
     if not needs_human and not suggest_human and _is_refusal_response(final_response):
         failed_attempts += 1
         if failed_attempts >= 2:
@@ -1187,7 +1737,7 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
             # 第 2 次拒答时，回复稍微调整一下
             final_response = (
                 "抱歉，这个问题我暂时帮不上忙。\n"
-                "您可以试着问我关于 CloudSync 的使用问题，"
+                "您可以补充设备型号、故障代码或具体现象后再问，"
                 "或者点击下方按钮转接人工客服～"
             )
 
@@ -1216,6 +1766,9 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
             from src.evaluation.metrics import DialogueJudge, should_sample
 
             if should_sample(user_id):
+                # 评测 Judge 走离线 ChatOpenAI（无取消包装），进入前显式检查，
+                # 避免断线/硬超时后白跑一次评测 LLM
+                check_cancelled()
                 judge = DialogueJudge()
 
                 # 获取对话摘要作为评估上下文
@@ -1225,7 +1778,7 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
                         ctx = memory_manager.get_context_for_evaluation(session_id)
                         conv_summary = ctx.get("summary", "")
                     except Exception:
-                        pass
+                        logger.debug("评估上下文摘要读取失败", exc_info=True)
 
                 score = judge.evaluate(
                     user_message=last_message,
@@ -1246,9 +1799,9 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
 
                 if score.get("needs_human_review"):
                     logger.info(
-                        "LLM-as-Judge flagged for human review: overall=%.1f, "
-                        "flags=%s",
-                        score["overall"], score.get("flags", []),
+                        "LLM-as-Judge flagged for human review: overall=%.1f, flags=%s",
+                        score["overall"],
+                        score.get("flags", []),
                     )
         except Exception:
             logger.debug("Online evaluation skipped", exc_info=True)
@@ -1281,15 +1834,15 @@ def reply_node(state: AgentState, memory_manager=None) -> Dict[str, Any]:
 # Helpers
 # ======================================================================
 
+
 def _extract_history_manual(messages: list) -> list:
     """从 messages 列表中手动提取对话历史（MemoryManager 不可用时的降级方案）"""
     history = []
     for msg in messages[:-1]:
         if isinstance(msg, HumanMessage):
             history.append((msg.content, ""))
-        elif isinstance(msg, AIMessage):
-            if history:
-                history[-1] = (history[-1][0], msg.content)
+        elif isinstance(msg, AIMessage) and history:
+            history[-1] = (history[-1][0], msg.content)
     return history
 
 
@@ -1333,16 +1886,17 @@ def _extract_tool_citation_docs(messages: list) -> list:
                 content = str(content)
             if not content.strip():
                 continue
-            docs.append(Document(
-                page_content=content[:1200],
-                metadata={
-                    "source": f"tool/{m.name}",
-                    "doc_id": f"tool-{m.name}-{m.tool_call_id}",
-                    "title": f"云资源查询结果 · {m.name}",
-                    "kb_id": "cloud-resource",
-                    "score": 1.0,
-                    "rrf_score": 1.0,
-                },
-            ))
+            docs.append(
+                Document(
+                    page_content=content[:1200],
+                    metadata={
+                        "source": f"tool/{m.name}",
+                        "doc_id": f"tool-{m.name}-{m.tool_call_id}",
+                        "title": f"云资源查询结果 · {m.name}",
+                        "kb_id": "cloud-resource",
+                        "score": 1.0,
+                        "rrf_score": 1.0,
+                    },
+                )
+            )
     return docs
-

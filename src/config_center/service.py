@@ -23,7 +23,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Union
 
 from src.config import Settings, settings
@@ -219,7 +219,7 @@ class ConfigCenter:
         for cb in list(self._observers):
             try:
                 cb(self._version, changes)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001, PERF203 - 订阅者逐个隔离
                 logger.warning("配置变更订阅者执行失败: %s", e)
 
     # ---- 读取 ----
@@ -338,7 +338,7 @@ class ConfigCenter:
             changed = old_value != new_value
             if changed:
                 setattr(settings, field_name, new_value)
-                now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+                now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
                 self._modified[field_name] = {"at": now, "by": operator or "unknown"}
                 self._version += 1
                 self._last_change_at = now
@@ -397,7 +397,7 @@ class ConfigCenter:
                 new_value = coerce(field_name, raw_value)
                 validate(field_name, new_value)
                 prepared[field_name] = (old_value, new_value)
-            except ConfigError as e:
+            except ConfigError as e:  # noqa: PERF203 - 逐字段收集校验错误
                 errors.append({"field": field_name, "reason": str(e)})
 
         if errors:
@@ -412,7 +412,7 @@ class ConfigCenter:
                 if old_value == new_value:
                     continue
                 setattr(settings, field_name, new_value)
-                now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+                now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
                 self._modified[field_name] = {"at": now, "by": operator or "unknown"}
                 self._version += 1
                 self._last_change_at = now
@@ -474,7 +474,7 @@ class ConfigCenter:
                 if old_value == default_value:
                     continue
                 setattr(settings, field_name, default_value)
-                now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+                now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
                 self._modified[field_name] = {"at": now, "by": operator or "unknown"}
                 self._version += 1
                 self._last_change_at = now

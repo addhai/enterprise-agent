@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 # 敏感判定统一由 schema 提供（按 _ 切词的整词匹配），避免多处实现漂移。
@@ -80,7 +80,7 @@ def record_change(
             operator_ip=operator_ip or "",
             hot_applied=hot_applied,
             source=source,
-            created_at=datetime.now(UTC).replace(tzinfo=None),
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         with db_session() as session:
             session.add(entry)

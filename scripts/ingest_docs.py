@@ -14,16 +14,17 @@ from pathlib import Path
 # 添加项目根目录到 sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.rag.loader import DocumentLoader
-from src.rag.chunker import HybridChunker
-from src.rag.vector_store import VectorStoreManager
 from src.config import settings
+from src.rag.chunker import HybridChunker
+from src.rag.loader import DocumentLoader
+from src.rag.vector_store import VectorStoreManager
 
 
 def main():
     print("=" * 50)
-    print("CloudSync Knowledge Base Ingestion (v0.3)")
+    print("Knowledge Base Ingestion (v0.3)")
     print("=" * 50)
+    print("注意：本脚本只增不删。需要全量重建（含删除已归档语料）请用 rebuild_index.py")
 
     docs_dir = Path(__file__).parent.parent / "data" / "docs"
 
@@ -35,13 +36,13 @@ def main():
 
     # 打印元数据统计
     if documents:
-        sources = set(d.metadata.get("source", "?") for d in documents)
-        categories = set(d.metadata.get("category", "?") for d in documents)
+        sources = {d.metadata.get("source", "?") for d in documents}
+        categories = {d.metadata.get("category", "?") for d in documents}
         print(f"  Sources: {sources}")
         print(f"  Categories: {categories}")
 
     # ---- 2. 切块 ----
-    print(f"\n[2/5] Chunking documents...")
+    print("\n[2/5] Chunking documents...")
     chunker = HybridChunker(
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
@@ -53,14 +54,14 @@ def main():
     print(f"  Sentence chunks: {len(sentence_chunks)}")
 
     # ---- 3. 入库（标准粒度） ----
-    print(f"\n[3/5] Adding standard chunks to Chroma...")
+    print("\n[3/5] Adding standard chunks to Chroma...")
     vector_store = VectorStoreManager()
     vector_store.add_documents(standard_chunks)
     count = vector_store.store._collection.count()
     print(f"  Collection: {count} documents")
 
     # ---- 4. 入库（句子粒度，独立 collection） ----
-    print(f"\n[4/5] Adding sentence chunks to Chroma (sentence index)...")
+    print("\n[4/5] Adding sentence chunks to Chroma (sentence index)...")
     sentence_store = VectorStoreManager(
         collection_name=f"{settings.chroma_collection_name}_sentences",
     )
@@ -69,12 +70,12 @@ def main():
     print(f"  Sentence collection: {s_count} documents")
 
     # ---- 5. 测试检索 ----
-    print(f"\n[5/5] Testing search...")
+    print("\n[5/5] Testing search...")
     test_queries = [
-        "How do I reset my API key?",
-        "What are the pricing plans?",
-        "How to configure SSO with Okta?",
-        "Why am I getting a 403 error?",
+        "F02 故障代码怎么处理？",
+        "红外测温仪怎么做快门校正？",
+        "T100 温度单位如何切换？",
+        "设备多久校准一次？",
     ]
     for q in test_queries:
         results = vector_store.search(q, top_k=1)

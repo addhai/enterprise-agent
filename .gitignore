@@ -88,6 +88,7 @@ playwright-report/
 # 覆盖率二进制数据
 .coverage
 # 测试临时目录
+.smoke_tmp/
 .pytest_tmp/
 .tmp_pt_*/
 .ruff_cache/

@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessage
 
@@ -44,7 +44,7 @@ class OpenAILLMClient:
 
     def __init__(
         self,
-        tools: List[Any],
+        tools: list[Any],
         system_prompt: str,
         *,
         model: str,
@@ -54,8 +54,9 @@ class OpenAILLMClient:
         max_tokens: int = 1024,
         enable_thinking: bool = False,
     ) -> None:
-        from langchain_openai import ChatOpenAI
         from langchain.agents import create_agent
+
+        from src.agent.cancellable_llm import make_chat_model
 
         llm_kwargs: dict[str, Any] = {
             "model": model,
@@ -67,7 +68,7 @@ class OpenAILLMClient:
         if enable_thinking:
             llm_kwargs["model_kwargs"] = {"extra_body": {"enable_thinking": True}}
 
-        self.llm = ChatOpenAI(**llm_kwargs)
+        self.llm = make_chat_model(**llm_kwargs)
         self.agent = create_agent(self.llm, tools=tools, system_prompt=system_prompt)
 
     def invoke(self, input: dict) -> dict:
@@ -85,10 +86,10 @@ class FakeLLMClient:
 
     def __init__(
         self,
-        messages: Optional[List[BaseMessage]] = None,
+        messages: list[BaseMessage] | None = None,
         *,
         content: str = "这是一个确定性的假回复。",
-        raise_on_invoke: Optional[Exception] = None,
+        raise_on_invoke: Exception | None = None,
     ) -> None:
         # 允许直接传字符串，也允许传完整消息列表
         if messages is not None:
@@ -101,5 +102,5 @@ class FakeLLMClient:
         if self._raise is not None:
             raise self._raise
         # 透传输入里的历史消息，再追加预设的"最终回复"，模拟真实 agent 结构
-        history: List[BaseMessage] = list(input.get("messages", []))
+        history: list[BaseMessage] = list(input.get("messages", []))
         return {"messages": history + self._messages}

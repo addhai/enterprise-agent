@@ -3,8 +3,8 @@
 .gitignore
 venv
 node_modules
-static
-chroma_data
+# 2026-10-05 修正：static/ 与 chroma_data/ 是生产镜像的必烤资产
+# （Dockerfile 有对应 COPY，运维手册记载随镜像分发），不能排除。
 logs
 *.db
 .env

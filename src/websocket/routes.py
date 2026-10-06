@@ -13,44 +13,48 @@
         发送: agent_send_reply, agent_login, agent_logout
         接收: new_transfer, session_update, copilot_suggestion
 """
+
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 import uuid
-import asyncio
-from typing import Optional
+from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Path
+from fastapi import APIRouter, Path, WebSocket, WebSocketDisconnect
 
+from src.api.jwt_utils import (
+    JWTExpired as _WS_JWTExpired,
+)
+from src.api.jwt_utils import (
+    JWTInvalid as _WS_JWTInvalid,
+)
+
+# JWT 校验（无状态 HS256，与 REST 鉴权同一套 secret，支持多副本部署）
+from src.api.jwt_utils import (
+    decode_token as _ws_decode_token,
+)
+from src.config import settings as _ws_settings
+from src.db.engine import _decode_pg_error
+from src.websocket.dispatcher import get_dispatcher
 from src.websocket.protocol import (
-    build_error,
-    build_handoff_context,
-    build_session_update,
-    build_streaming_chunk,
-    build_transfer_notice,
-    build_typing_indicator,
     TYPE_AGENT_CHAT_MESSAGE,
     TYPE_AGENT_SEND_REPLY,
     TYPE_CLIENT_CHAT,
     TYPE_CLIENT_HEARTBEAT,
+    build_error,
+    build_handoff_context,
+    build_streaming_chunk,
+    build_transfer_notice,
+    build_typing_indicator,
 )
 from src.websocket.session_manager import (
     SessionMode,
     WebSocketSessionManager,
     get_session_manager,
 )
-from src.websocket.dispatcher import get_dispatcher
-from src.db.engine import _decode_pg_error
-
-# JWT 校验（无状态 HS256，与 REST 鉴权同一套 secret，支持多副本部署）
-from src.api.jwt_utils import (
-    decode_token as _ws_decode_token,
-    JWTExpired as _WS_JWTExpired,
-    JWTInvalid as _WS_JWTInvalid,
-)
-from src.config import settings as _ws_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -59,9 +63,11 @@ router = APIRouter()
 def _resolve_ws_identity(websocket, session_id: str):
     """解析 WS 连接身份，返回 (user_id, tenant_id, user_plan, role, is_authed)。
 
-    Token 来源：URL query ``?token=``（浏览器 WebSocket 无法设 Authorization 头，用 query 最稳）。
+    Token 来源：URL query ``?token=``
+    （浏览器 WebSocket 无法设 Authorization 头，用 query 最稳）。
     行为：
-        - 携带有效 JWT：解码得到 sub(user_id)，再查库取真实 tenant_id / role。
+        - 携带有效 JWT：解码得到 sub(user_id)，
+          再查库取真实 tenant_id / role。
           租户与身份以服务端解析为准，客户端无法伪造（防越权串租户）。
         - 匿名（无有效 token）：按「连接粒度」隔离租户（``anon-<session_id>``），
           保证不同匿名会话的数据互不串台；匿名默认禁止查询云资源（resource.py 已拦截）。
@@ -75,6 +81,7 @@ def _resolve_ws_identity(websocket, session_id: str):
     if token:
         try:
             from src.db.repositories import user_get_by_id
+
             payload = _ws_decode_token(token, _ws_settings.jwt_secret)
             uid = payload.get("sub")
             if uid:
@@ -98,6 +105,7 @@ def _resolve_ws_identity(websocket, session_id: str):
 # 用户端 WebSocket
 # ====================================================================
 
+
 @router.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     """用户客户端 WebSocket 端点
@@ -111,7 +119,9 @@ async def websocket_chat(websocket: WebSocket):
     """
     session_id = str(uuid.uuid4())
     # 解析 WS 身份：携带有效 JWT 则按 token 派生真实租户；否则按连接粒度隔离租户
-    _auth_user_id, _auth_tenant_id, _auth_plan, _auth_role, _is_authed = _resolve_ws_identity(websocket, session_id)
+    _auth_user_id, _auth_tenant_id, _auth_plan, _auth_role, _is_authed = (
+        _resolve_ws_identity(websocket, session_id)
+    )
     user_id = _auth_user_id
     tenant_id = _auth_tenant_id
     user_plan = _auth_plan
@@ -120,14 +130,15 @@ async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
     logger.info("WebSocket connected: session=%s", session_id)
 
-    # 活跃连接数 +1 —— Grafana「Active WebSocket Connections」面板依赖此 gauge。
+    # 活跃连接数 +1，Grafana「Active WebSocket Connections」面板依赖此 gauge。
     # 与下方 finally 中的 gauge_dec 严格配对，保证异常断开也能正确递减。
     try:
-        from src.api.metrics import SERVICE_NAME as _METRICS_SVC, gauge_inc
+        from src.api.metrics import SERVICE_NAME as _METRICS_SVC
+        from src.api.metrics import gauge_inc
 
         gauge_inc("ws_active_connections", 1, {"service": _METRICS_SVC})
     except Exception:  # pragma: no cover - 指标不应影响连接
-        pass
+        logger.debug("ws_active_connections gauge_inc failed", exc_info=True)
 
     # 创建会话
     session_mgr = get_session_manager()
@@ -141,12 +152,31 @@ async def websocket_chat(websocket: WebSocket):
     session_mgr.get_session(session_id)._websocket_ref = websocket
 
     # 推送会话就绪通知
-    await websocket.send_json({
-        "type": "session_ready",
-        "session_id": session_id,
-        "message": "连接成功",
-        "timestamp": time.time(),
-    })
+    await websocket.send_json(
+        {
+            "type": "session_ready",
+            "session_id": session_id,
+            "message": "连接成功",
+            "timestamp": time.time(),
+        }
+    )
+
+    # 当前连接上正在跑的对话任务。处理改为后台任务后，接收循环才能在图执行
+    # 期间继续读套接字，及时发现客户端断开（否则 88 分钟空跑都无人知晓）。
+    # 同一连接同一时刻只允许一轮，第二条消息直接回忙等提示，保持串行语义。
+    active_handler: asyncio.Task | None = None
+    active_handler_sid: str | None = None
+
+    def _clear_active_handler(done_task: asyncio.Task) -> None:
+        nonlocal active_handler, active_handler_sid
+        if active_handler is done_task:
+            active_handler = None
+            active_handler_sid = None
+        # 任务内异常若不取出会在 GC 时打 "Task exception was never retrieved"
+        if not done_task.cancelled():
+            exc = done_task.exception()
+            if exc is not None:
+                logger.warning("对话处理任务异常结束: %r", exc)
 
     try:
         while True:
@@ -155,35 +185,44 @@ async def websocket_chat(websocket: WebSocket):
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
-                await websocket.send_json(build_error(
-                    session_id, "INVALID_JSON", "消息格式错误",
-                ))
+                await websocket.send_json(
+                    build_error(
+                        session_id,
+                        "INVALID_JSON",
+                        "消息格式错误",
+                    )
+                )
                 continue
 
             msg_type = msg.get("type", "")
 
             # --- 心跳 ---
             if msg_type == TYPE_CLIENT_HEARTBEAT:
-                await websocket.send_json({
-                    "type": "heartbeat_ack",
-                    "timestamp": time.time(),
-                })
+                await websocket.send_json(
+                    {
+                        "type": "heartbeat_ack",
+                        "timestamp": time.time(),
+                    }
+                )
                 continue
 
-            # --- resume_session 握手（前端连接后第一条消息，用于跨连接/重启续接历史）---
+            # --- resume_session 握手（前端连接后第一条消息，
+            # 用于跨连接/重启续接历史）---
             if msg_type == "resume_session":
                 incoming_session = msg.get("session_id")
                 incoming_plan = msg.get("user_plan", "free")
 
                 if not incoming_session:
                     # 客户端没带 session_id → 复用本连接已建会话；告知前端
-                    await websocket.send_json({
-                        "type": "session_resumed",
-                        "session_id": session_id,
-                        "restored_count": 0,
-                        "message": "未携带 session_id，沿用当前会话",
-                        "timestamp": time.time(),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "session_resumed",
+                            "session_id": session_id,
+                            "restored_count": 0,
+                            "message": "未携带 session_id，沿用当前会话",
+                            "timestamp": time.time(),
+                        }
+                    )
                     continue
 
                 existing = session_mgr.get_session(incoming_session)
@@ -196,14 +235,16 @@ async def websocket_chat(websocket: WebSocket):
                     tenant_id = _auth_tenant_id
                     user_plan = _auth_plan
                     restored_count = len(getattr(existing, "conversation_history", []))
-                    await websocket.send_json({
-                        "type": "session_resumed",
-                        "session_id": session_id,
-                        "restored_count": restored_count,
-                        "source": "memory",
-                        "message": "会话已从内存续接",
-                        "timestamp": time.time(),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "session_resumed",
+                            "session_id": session_id,
+                            "restored_count": restored_count,
+                            "source": "memory",
+                            "message": "会话已从内存续接",
+                            "timestamp": time.time(),
+                        }
+                    )
                 else:
                     # 内存无此会话（如服务重启）→ 以该 id 重建，并从 DB 恢复历史；
                     # 租户/身份以服务端解析为准
@@ -224,26 +265,36 @@ async def websocket_chat(websocket: WebSocket):
                         restored_count = 0
                         try:
                             from src.db.repositories import message_list
-                            restored = await asyncio.to_thread(message_list, session_id, 200)
+
+                            restored = await asyncio.to_thread(
+                                message_list, session_id, 200
+                            )
                             if restored:
                                 new_state.conversation_history = [
-                                    {"role": r["role"], "content": r["content"]} for r in restored
+                                    {"role": r["role"], "content": r["content"]}
+                                    for r in restored
                                 ]
                                 restored_count = len(restored)
                                 logger.info(
                                     "[resume_session] 从DB恢复 %d 条历史: session=%s",
-                                    restored_count, session_id,
+                                    restored_count,
+                                    session_id,
                                 )
                         except Exception as e:
-                            logger.warning("[resume_session] 恢复历史失败（非致命）: %s", _decode_pg_error(e))
-                        await websocket.send_json({
-                            "type": "session_resumed",
-                            "session_id": session_id,
-                            "restored_count": restored_count,
-                            "source": "database",
-                            "message": "会话已重建并从历史恢复",
-                            "timestamp": time.time(),
-                        })
+                            logger.warning(
+                                "[resume_session] 恢复历史失败（非致命）: %s",
+                                _decode_pg_error(e),
+                            )
+                        await websocket.send_json(
+                            {
+                                "type": "session_resumed",
+                                "session_id": session_id,
+                                "restored_count": restored_count,
+                                "source": "database",
+                                "message": "会话已重建并从历史恢复",
+                                "timestamp": time.time(),
+                            }
+                        )
                 continue
 
             # --- 用户主动请求转人工 ---
@@ -255,18 +306,26 @@ async def websocket_chat(websocket: WebSocket):
                 current_state = session_mgr.get_session(target_session_id)
                 if current_state:
                     # 幂等检查：如果已经在转接队列中或已转接，直接返回提示
-                    if current_state.mode in (SessionMode.WAITING_HUMAN, SessionMode.HUMAN_CHAT, SessionMode.ESCALATED):
-                        await websocket.send_json({
-                            "type": "info",
-                            "session_id": target_session_id,
-                            "text": "您已在转接队列中，请耐心等待",
-                            "timestamp": time.time(),
-                        })
+                    if current_state.mode in (
+                        SessionMode.WAITING_HUMAN,
+                        SessionMode.HUMAN_CHAT,
+                        SessionMode.ESCALATED,
+                    ):
+                        await websocket.send_json(
+                            {
+                                "type": "info",
+                                "session_id": target_session_id,
+                                "text": "您已在转接队列中，请耐心等待",
+                                "timestamp": time.time(),
+                            }
+                        )
                         continue
 
                     if current_state.mode != SessionMode.HUMAN_CHAT:
                         # 更新会话状态
-                        session_mgr.update_mode(target_session_id, SessionMode.WAITING_HUMAN)
+                        session_mgr.update_mode(
+                            target_session_id, SessionMode.WAITING_HUMAN
+                        )
 
                         # 构建转接通知
                         transfer_notice = build_transfer_notice(
@@ -281,8 +340,10 @@ async def websocket_chat(websocket: WebSocket):
                             session_id=target_session_id,
                             summary=f"用户主动请求转人工: {reason}",
                             conversation=[
-                                {"role": m.get("role", "user"),
-                                 "content": m.get("content", "")[:500]}
+                                {
+                                    "role": m.get("role", "user"),
+                                    "content": m.get("content", "")[:500],
+                                }
                                 for m in messages_state
                             ],
                             user_profile={"user_id": user_id, "plan": user_plan},
@@ -292,16 +353,25 @@ async def websocket_chat(websocket: WebSocket):
 
                         # 触发转接分发
                         dispatcher = get_dispatcher()
-                        from langchain_core.messages import HumanMessage, AIMessage
+                        from langchain_core.messages import AIMessage, HumanMessage
+
                         msg_objects = []
                         for m in messages_state:
                             if m.get("role") == "user":
-                                msg_objects.append(HumanMessage(content=m.get("content", "")))
+                                msg_objects.append(
+                                    HumanMessage(content=m.get("content", ""))
+                                )
                             else:
-                                msg_objects.append(AIMessage(content=m.get("content", "")))
+                                msg_objects.append(
+                                    AIMessage(content=m.get("content", ""))
+                                )
                         await dispatcher.handle_escalation(
                             target_session_id,
-                            {"needs_human": True, "intent": "user_requested", "messages": msg_objects},
+                            {
+                                "needs_human": True,
+                                "intent": "user_requested",
+                                "messages": msg_objects,
+                            },
                             msg_objects,
                         )
                 continue
@@ -317,12 +387,17 @@ async def websocket_chat(websocket: WebSocket):
                     continue
                 # 输入长度限制（防止内存攻击）
                 if len(user_text) > 2000:
-                    await websocket.send_json(build_error(
-                        session_id, "MESSAGE_TOO_LONG", "消息过长，最多 2000 字符",
-                    ))
+                    await websocket.send_json(
+                        build_error(
+                            session_id,
+                            "MESSAGE_TOO_LONG",
+                            "消息过长，最多 2000 字符",
+                        )
+                    )
                     continue
 
-                # 提取可选参数（仅 session_id / user_plan 用于续接；租户与身份由服务端按 token 解析，不接受客户端伪造）
+                # 提取可选参数（仅 session_id / user_plan 用于续接；
+                # 租户与身份由服务端按 token 解析，不接受客户端伪造）
                 incoming_session = msg.get("session_id")
                 incoming_plan = msg.get("user_plan", "free")
 
@@ -372,26 +447,30 @@ async def websocket_chat(websocket: WebSocket):
                     # 保存 WebSocket 引用（关键！）
                     session_mgr.get_session(session_id)._websocket_ref = websocket
                     # 推送新的 session_id
-                    await websocket.send_json({
-                        "type": "session_ready",
-                        "session_id": session_id,
-                        "message": "新会话已创建",
-                        "timestamp": time.time(),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "session_ready",
+                            "session_id": session_id,
+                            "message": "新会话已创建",
+                            "timestamp": time.time(),
+                        }
+                    )
 
                 # 检查会话状态
                 current_state = session_mgr.get_session(session_id)
                 if current_state:
                     # 等待人工转接中：用户发消息，提示请稍候
                     if current_state.mode == SessionMode.WAITING_HUMAN:
-                        await websocket.send_json({
-                            "type": "info",
-                            "session_id": session_id,
-                            "text": "🔄 正在为您转接人工客服，请稍候...",
-                            "timestamp": time.time(),
-                        })
+                        await websocket.send_json(
+                            {
+                                "type": "info",
+                                "session_id": session_id,
+                                "text": "🔄 正在为您转接人工客服，请稍候...",
+                                "timestamp": time.time(),
+                            }
+                        )
                         continue
-                    
+
                     # 人工对话模式：用户发的消息转发给坐席
                     if current_state.mode == SessionMode.HUMAN_CHAT:
                         dispatcher = get_dispatcher()
@@ -399,60 +478,91 @@ async def websocket_chat(websocket: WebSocket):
                         if transfer_id:
                             record = dispatcher.get_transfer_record(transfer_id)
                             if record and record.assigned_agent:
-                                await websocket.send_json({
-                                    "type": "message_received",
-                                    "status": "forwarded_to_agent",
-                                    "session_id": session_id,
-                                    "timestamp": time.time(),
-                                })
+                                await websocket.send_json(
+                                    {
+                                        "type": "message_received",
+                                        "status": "forwarded_to_agent",
+                                        "session_id": session_id,
+                                        "timestamp": time.time(),
+                                    }
+                                )
                                 agent_ws = session_mgr.get_agent(record.assigned_agent)
                                 if agent_ws:
-                                    await agent_ws.send_json({
-                                        "type": TYPE_AGENT_CHAT_MESSAGE,
-                                        "session_id": session_id,
-                                        "user_message": user_text,
-                                        "timestamp": time.time(),
-                                    })
+                                    await agent_ws.send_json(
+                                        {
+                                            "type": TYPE_AGENT_CHAT_MESSAGE,
+                                            "session_id": session_id,
+                                            "user_message": user_text,
+                                            "timestamp": time.time(),
+                                        }
+                                    )
                                 continue
 
-                # 处理 AI 对话
-                await _handle_ai_chat(
-                    websocket, session_id, user_text, user_id,
-                    tenant_id, user_plan, session_mgr,
-                    image_base64=image_base64,
-                    audio_base64=audio_base64,
-                )
+                # 处理 AI 对话（后台任务执行，接收循环保持读取以检测断开）
+                if active_handler is not None and not active_handler.done():
+                    await websocket.send_json(
+                        build_error(
+                            session_id,
+                            "BUSY",
+                            "上一条消息还在处理中，请稍候再发送。",
+                        )
+                    )
+                else:
+                    active_handler = asyncio.create_task(
+                        _handle_ai_chat(
+                            websocket,
+                            session_id,
+                            user_text,
+                            user_id,
+                            tenant_id,
+                            user_plan,
+                            session_mgr,
+                            image_base64=image_base64,
+                            audio_base64=audio_base64,
+                        )
+                    )
+                    active_handler_sid = session_id
+                    active_handler.add_done_callback(_clear_active_handler)
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected: session=%s", session_id)
+        _cancel_active_handler(active_handler, active_handler_sid or session_id)
         session_mgr.remove_session(session_id)
     except Exception as e:
         logger.exception("WebSocket error: session=%s", session_id)
+        _cancel_active_handler(active_handler, active_handler_sid or session_id)
         try:
-            await websocket.send_json(build_error(
-                session_id, "INTERNAL_ERROR", str(e)[:200],
-            ))
+            await websocket.send_json(
+                build_error(
+                    session_id,
+                    "INTERNAL_ERROR",
+                    str(e)[:200],
+                )
+            )
         except Exception:
-            pass
+            logger.debug("send INTERNAL_ERROR frame failed", exc_info=True)
         session_mgr.remove_session(session_id)
     finally:
-        # 活跃连接数 -1 —— 与 accept 后的 gauge_inc 配对，
+        # 任何退出路径都不能漏掉在跑的图（取消信号幂等，重复调用安全）
+        _cancel_active_handler(active_handler, active_handler_sid or session_id)
+        # 活跃连接数 -1，与 accept 后的 gauge_inc 配对，
         # 放在 finally 保证正常断开 / 异常退出都会递减，避免 gauge 只增不减。
         try:
-            from src.api.metrics import SERVICE_NAME as _METRICS_SVC, gauge_dec
+            from src.api.metrics import SERVICE_NAME as _METRICS_SVC
+            from src.api.metrics import gauge_dec
 
             gauge_dec("ws_active_connections", 1, {"service": _METRICS_SVC})
         except Exception:  # pragma: no cover - 指标不应影响清理
-            pass
+            logger.debug("ws_active_connections gauge_dec failed", exc_info=True)
 
 
-def _build_citations(retrieved_docs) -> List[Dict[str, Any]]:
+def _build_citations(retrieved_docs) -> list[dict[str, Any]]:
     """把 graph 返回的检索文档规整成前端可展示的引用卡片。
 
     检索结果里每个 doc 是 langchain Document（有 page_content 与 metadata），
     metadata 可能含 source / doc_id / kb_id / title 等字段。null / 异常都安全降级。
     """
-    citations: List[Dict[str, Any]] = []
+    citations: list[dict[str, Any]] = []
     for d in retrieved_docs or []:
         if not d:
             continue
@@ -464,28 +574,79 @@ def _build_citations(retrieved_docs) -> List[Dict[str, Any]]:
         title = meta.get("title") or meta.get("source") or doc_id or "未知文档"
         kb_id = meta.get("kb_id") or ""
         content = getattr(d, "page_content", None) or ""
-        if isinstance(content, str):
-            content = content[:500]
-        else:
-            content = str(content)[:500]
+        content = content[:500] if isinstance(content, str) else str(content)[:500]
         try:
-            # 优先 doc.score（langchain Document 的 pydantic 字段），回退到 metadata.score / metadata.rrf_score
+            # 优先 doc.score（langchain Document 的 pydantic 字段），
+            # 回退到 metadata.score / metadata.rrf_score
             score = float(
                 getattr(d, "score", 0)
-                or (isinstance(meta, dict) and (meta.get("score") or meta.get("rrf_score") or 0))
+                or (
+                    isinstance(meta, dict)
+                    and (meta.get("score") or meta.get("rrf_score") or 0)
+                )
                 or 0
             )
         except (TypeError, ValueError):
             score = 0.0
-        citations.append({
-            "title": title,
-            "content": content,
-            "score": round(score, 4),
-            "source": source,
-            "doc_id": doc_id,
-            "kb_id": kb_id,
-        })
+        citations.append(
+            {
+                "title": title,
+                "content": content,
+                "score": round(score, 4),
+                "source": source,
+                "doc_id": doc_id,
+                "kb_id": kb_id,
+            }
+        )
     return citations
+
+
+def _invoke_graph(app, state, thread_config, session_id: str, gen: int, outcome: dict):
+    """在线程池线程中同步执行 langgraph，并在结束时释放取消注册条目。
+
+    释放必须放在工作线程侧（而不是 async 侧的上下文管理器 finally）：
+    async 任务可能先被 cancel，若此时删掉条目，在途 LLM 返回后的取消检查
+    会查不到信号而让图继续空转。
+
+    取消异常不向上抛：async 侧可能已随断开被 cancel，executor future 上的
+    异常无人取回会产生噪音告警。原因写入 outcome 供仍存活的 async 侧处理
+    （如硬超时时给用户发提示）。
+    """
+    from src.graph.cancellation import WorkflowCancelled, release_run
+
+    started = time.time()
+    try:
+        return app.invoke(state, thread_config)
+    except WorkflowCancelled as exc:
+        outcome["cancelled_reason"] = exc.reason
+        # 日志必须打在工作线程侧：断线路径里 async 任务已被 cancel，
+        # to_thread 返回后的 async 侧日志没有机会执行。
+        logger.info(
+            "工作流已取消: session=%s reason=%s 耗时=%.1fs",
+            session_id,
+            exc.reason,
+            time.time() - started,
+        )
+        return None
+    finally:
+        release_run(session_id, gen)
+
+
+def _cancel_active_handler(task: asyncio.Task | None, session_id: str) -> None:
+    """连接断开/异常退出时停掉在跑的对话。
+
+    两件事缺一不可：
+    1. request_cancel：线程池里的同步 langgraph 收不到 asyncio cancel，
+       只能靠事件在 LLM 调用边界协作式收卷；
+    2. task.cancel：停掉 async 侧的等待与后续推送，释放事件循环。
+    """
+    from src.graph.cancellation import request_cancel
+
+    if not session_id:
+        return
+    request_cancel(session_id, reason="client_disconnect")
+    if task is not None and not task.done():
+        task.cancel()
 
 
 async def _handle_ai_chat(
@@ -500,31 +661,45 @@ async def _handle_ai_chat(
     audio_base64: str = "",
 ):
     """处理用户消息 → 触发 AI 回复 → 流式推送"""
-    from src.api.routes import AgentState
-    from langchain_core.messages import HumanMessage, AIMessage
+    from langchain_core.messages import AIMessage, HumanMessage
+
     from src.api.dependencies import get_workflow
+    from src.api.routes import AgentState
 
     start_time = time.time()
 
     # ---- Phase 3: 持久化用户输入，并确保会话行存在（重启后可恢复上下文）----
     try:
         from src.db.repositories import conversation_ensure, message_save
-        await asyncio.to_thread(conversation_ensure, session_id, tenant_id, user_id, "web")
+
         await asyncio.to_thread(
-            message_save, session_id, tenant_id, user_id, "user", message,
+            conversation_ensure, session_id, tenant_id, user_id, "web"
+        )
+        await asyncio.to_thread(
+            message_save,
+            session_id,
+            tenant_id,
+            user_id,
+            "user",
+            message,
             metadata={"has_image": bool(image_base64), "has_audio": bool(audio_base64)},
         )
     except Exception as e:
         logger.warning("[Persistence] 用户消息落库失败（非致命）: %s", e)
 
     # 1. 发送"正在思考"
-    await websocket.send_json(build_typing_indicator(
-        session_id, is_typing=True, status="正在理解您的问题...",
-    ))
+    await websocket.send_json(
+        build_typing_indicator(
+            session_id,
+            is_typing=True,
+            status="正在理解您的问题...",
+        )
+    )
 
     try:
         # 构建多模态消息内容（通过视觉引擎/语音引擎处理）
         from src.websocket.multimodal import process_multimodal_message
+
         display_text, multimodal_content = process_multimodal_message(
             message,
             image_base64=image_base64,
@@ -533,12 +708,20 @@ async def _handle_ai_chat(
 
         # 先展示图片/语音识别结果给用户看
         if display_text != message and (image_base64 or audio_base64):
-            await websocket.send_json(build_streaming_chunk(
-                session_id, text=display_text, delta=display_text,
-            ))
-            await websocket.send_json(build_streaming_chunk(
-                session_id, text="", done=True,
-            ))
+            await websocket.send_json(
+                build_streaming_chunk(
+                    session_id,
+                    text=display_text,
+                    delta=display_text,
+                )
+            )
+            await websocket.send_json(
+                build_streaming_chunk(
+                    session_id,
+                    text="",
+                    done=True,
+                )
+            )
 
         # 2. 获取工作流
         app = get_workflow()
@@ -547,9 +730,12 @@ async def _handle_ai_chat(
         # 从会话状态中读取上一轮的失败次数和历史消息
         session_state = session_mgr.get_session(session_id)
         # Phase 3: 若内存会话无历史（如服务重启后重连），从 DB 恢复多轮上下文
-        if session_state is not None and not getattr(session_state, "conversation_history", []):
+        if session_state is not None and not getattr(
+            session_state, "conversation_history", []
+        ):
             try:
                 from src.db.repositories import message_list
+
                 restored = await asyncio.to_thread(message_list, session_id, 200)
                 if restored:
                     session_state.conversation_history = [
@@ -557,26 +743,31 @@ async def _handle_ai_chat(
                     ]
                     logger.info(
                         "[ContextMemory] 从DB恢复 %d 条历史: session=%s",
-                        len(restored), session_id,
+                        len(restored),
+                        session_id,
                     )
             except Exception as e:
                 logger.warning("恢复对话历史失败（非致命）: %s", e)
         prev_failed_attempts = 0
         history_messages = []
         if session_state:
-            prev_failed_attempts = getattr(session_state, 'failed_attempts', 0)
+            prev_failed_attempts = getattr(session_state, "failed_attempts", 0)
             # 从 conversation_history 读取历史消息并转换为 Message 对象
-            conv_history = getattr(session_state, 'conversation_history', [])
+            conv_history = getattr(session_state, "conversation_history", [])
             logger.info(
                 "[ContextMemory] session=%s: 读取到 %d 条历史消息",
-                session_id, len(conv_history)
+                session_id,
+                len(conv_history),
             )
             for i, msg_dict in enumerate(conv_history):
                 role = msg_dict.get("role", "user")
                 content = msg_dict.get("content", "")
                 logger.debug(
                     "[ContextMemory] session=%s 历史[%d]: role=%s, content=%s",
-                    session_id, i, role, content[:100]
+                    session_id,
+                    i,
+                    role,
+                    content[:100],
                 )
                 if role == "user":
                     history_messages.append(HumanMessage(content=content))
@@ -588,8 +779,11 @@ async def _handle_ai_chat(
         # 历史消息 + 当前消息
         all_messages = history_messages + [HumanMessage(content=multimodal_content)]
         logger.info(
-            "[ContextMemory] session=%s: 调用 app.invoke 前消息总数=%d (历史=%d + 当前=1)",
-            session_id, len(all_messages), len(history_messages)
+            "[ContextMemory] session=%s: 调用 app.invoke 前消息总数=%d"
+            " (历史=%d + 当前=1)",
+            session_id,
+            len(all_messages),
+            len(history_messages),
         )
 
         state = AgentState(
@@ -623,12 +817,48 @@ async def _handle_ai_chat(
 
         # 4. 执行工作流（异步 offload，避免阻塞事件循环）
         # 注意：asyncio 已在文件顶部 import，函数内不要再次 import，否则会让
-        # asyncio 被当成局部变量，导致上方 494/535 行的 asyncio.to_thread 报
-        # "cannot access local variable 'asyncio' where it is not associated with a value"
+        # asyncio 被当成局部变量，导致上方的 asyncio.to_thread 报
+        # "cannot access local variable 'asyncio' where it is not"
+        # "associated with a value"
+        #
+        # 协作式取消（2026-10-06）：workflow_run 把 (session_id, gen) 绑进
+        # contextvar，to_thread 复制进工作线程；客户端断开时接收循环调用
+        # request_cancel，图在下一次 LLM 调用边界收卷。硬超时兜底静默掉线。
+        from src.graph.cancellation import workflow_run
+
         thread_config = {"configurable": {"thread_id": session_id}}
-        result = await asyncio.to_thread(
-            app.invoke, state, thread_config,
-        )
+        workflow_outcome: dict = {}
+        with workflow_run(
+            session_id, float(_ws_settings.ws_workflow_hard_timeout)
+        ) as _run_gen:
+            result = await asyncio.to_thread(
+                _invoke_graph,
+                app,
+                state,
+                thread_config,
+                session_id,
+                _run_gen,
+                workflow_outcome,
+            )
+            _cancel_reason = workflow_outcome.get("cancelled_reason")
+            if _cancel_reason:
+                # 取消原因与耗时已在工作线程侧 _invoke_graph 记录日志
+                if _cancel_reason == "hard_timeout":
+                    # 连接仍在时给用户一个交代；连接已断则发送静默失败
+                    try:
+                        await websocket.send_json(
+                            build_error(
+                                session_id,
+                                "WORKFLOW_TIMEOUT",
+                                "本次处理耗时过长，请缩小问题范围或稍后再试。",
+                            )
+                        )
+                    except Exception:
+                        # 连接已断时发送必然失败，属预期静默路径
+                        logger.debug(
+                            "WORKFLOW_TIMEOUT frame send failed", exc_info=True
+                        )
+                return
 
         # ===== HITL 检测：检查工作流是否被 interrupt() 暂停 =====
         is_interrupted = False
@@ -637,7 +867,7 @@ async def _handle_ai_chat(
             state_snapshot = app.get_state(thread_config)
             if state_snapshot and state_snapshot.next:
                 is_interrupted = True
-                for task in (state_snapshot.tasks or []):
+                for task in state_snapshot.tasks or []:
                     if hasattr(task, "interrupts") and task.interrupts:
                         interrupt_value = task.interrupts[0].value
                         break
@@ -647,6 +877,7 @@ async def _handle_ai_chat(
         if is_interrupted:
             # 工作流被暂停 → 记录到 HITL 管理器，等待人工介入
             from src.graph.hitl_manager import get_hitl_manager
+
             hitl = get_hitl_manager()
             await hitl.add_pending(
                 thread_id=session_id,
@@ -657,19 +888,25 @@ async def _handle_ai_chat(
             logger.info("[HITL] 工作流暂停，等待人工介入: session=%s", session_id)
 
             # 推送"正在转接"消息给用户
-            await websocket.send_json(build_typing_indicator(session_id, is_typing=False))
-            await websocket.send_json(build_streaming_chunk(
-                session_id,
-                text="正在为您转接人工客服，请稍候...",
-                delta="正在为您转接人工客服，请稍候...",
-            ))
+            await websocket.send_json(
+                build_typing_indicator(session_id, is_typing=False)
+            )
+            await websocket.send_json(
+                build_streaming_chunk(
+                    session_id,
+                    text="正在为您转接人工客服，请稍候...",
+                    delta="正在为您转接人工客服，请稍候...",
+                )
+            )
             # 完成标记（带 HITL 元信息，前端可据此显示"等待人工"状态）
-            await websocket.send_json({
-                **build_streaming_chunk(session_id, text="", done=True),
-                "needs_human": True,
-                "awaiting_human": True,
-                "thread_id": session_id,
-            })
+            await websocket.send_json(
+                {
+                    **build_streaming_chunk(session_id, text="", done=True),
+                    "needs_human": True,
+                    "awaiting_human": True,
+                    "thread_id": session_id,
+                }
+            )
 
             # 更新会话状态为"等待人工"
             session_mgr.update_mode(session_id, SessionMode.WAITING_HUMAN)
@@ -679,13 +916,17 @@ async def _handle_ai_chat(
         result_messages = result.get("messages", [])
         logger.info(
             "[ContextMemory] session=%s: 调用 app.invoke 后结果消息数=%d",
-            session_id, len(result_messages)
+            session_id,
+            len(result_messages),
         )
 
         # 5. 发送思考完毕
-        await websocket.send_json(build_typing_indicator(
-            session_id, is_typing=False,
-        ))
+        await websocket.send_json(
+            build_typing_indicator(
+                session_id,
+                is_typing=False,
+            )
+        )
 
         # 6. 推送最终回复
         final_response = result.get("final_response", "")
@@ -706,69 +947,100 @@ async def _handle_ai_chat(
         if final_response:
             # 清理：彻底过滤掉 Agent 内部的 ReAct 格式标记
             import re
-            
+
             # 方法1：查找 Final Answer: 的位置，只保留其后的内容
-            final_answer_match = re.search(r'Final Answer:\s*', final_response, flags=re.IGNORECASE)
+            final_answer_match = re.search(
+                r"Final Answer:\s*", final_response, flags=re.IGNORECASE
+            )
             if final_answer_match:
-                cleaned = final_response[final_answer_match.end():]
+                cleaned = final_response[final_answer_match.end() :]
             else:
                 # 方法2：如果没有 Final Answer，查找最后一个内部标记之后的内容
-                # 匹配所有 ReAct 标记：Question:, Thought:, Action:, Action Input:, Observation:
-                react_markers = ['Question:', 'Thought:', 'Action:', 'Action Input:', 'Observation:', 'Final Answer:']
+                # 匹配所有 ReAct 标记：
+                # Question:, Thought:, Action:, Action Input:, Observation:
+                react_markers = [
+                    "Question:",
+                    "Thought:",
+                    "Action:",
+                    "Action Input:",
+                    "Observation:",
+                    "Final Answer:",
+                ]
                 last_pos = 0
                 for marker in react_markers:
-                    matches = list(re.finditer(re.escape(marker), final_response, flags=re.IGNORECASE))
+                    matches = list(
+                        re.finditer(
+                            re.escape(marker), final_response, flags=re.IGNORECASE
+                        )
+                    )
                     if matches:
                         last_match = matches[-1]
                         # 取标记后面的内容（跳过标记本身）
                         marker_end = last_match.end()
                         candidate = final_response[marker_end:].strip()
                         # 如果这段内容看起来是真正的回答（不以其他标记开头），则使用它
-                        if candidate and not any(candidate.startswith(m) for m in react_markers):
+                        if candidate and not any(
+                            candidate.startswith(m) for m in react_markers
+                        ):
                             cleaned = candidate
                             last_pos = marker_end
                             break
                 else:
                     # 方法3：直接删除所有内部标记及其内容
-                    cleaned = re.sub(r'(Question:|Thought:|Action:|Action Input:|Observation:).*?(?=\n\n|\n|$)', '', final_response, flags=re.DOTALL | re.IGNORECASE)
-            
+                    cleaned = re.sub(
+                        r"(Question:|Thought:|Action:|Action Input:|Observation:)"
+                        r".*?(?=\n\n|\n|$)",
+                        "",
+                        final_response,
+                        flags=re.DOTALL | re.IGNORECASE,
+                    )
+
             cleaned = cleaned.strip()
-            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
             if cleaned:
                 final_response = cleaned
 
             # 流式推送：按句号/换行分段，每段推送一次（豆包风格）
             # 先按段落拆分，再按句号拆分
             suggest_human = result.get("suggest_human", False)
-            paragraphs = final_response.split('\n')
+            paragraphs = final_response.split("\n")
             all_chunks = []
             for para in paragraphs:
                 if not para.strip():
                     continue
                 # 按句号/感叹号/问号分段
-                parts = re.split(r'([。！？])', para)
+                parts = re.split(r"([。！？])", para)
                 buf = ""
                 for p in parts:
                     buf += p
-                    if re.match(r'[。！？]$', p):
+                    if re.match(r"[。！？]$", p):
                         all_chunks.append(buf.strip())
                         buf = ""
                 if buf.strip():
                     all_chunks.append(buf.strip())
-            
+
             # 发送所有分段，最后一段带上 suggest_human
             for i, chunk in enumerate(all_chunks):
-                is_last = (i == len(all_chunks) - 1)
-                await websocket.send_json(build_streaming_chunk(
-                    session_id, text=chunk, delta=chunk,
-                    suggest_human=suggest_human if is_last else False,
-                ))
+                is_last = i == len(all_chunks) - 1
+                await websocket.send_json(
+                    build_streaming_chunk(
+                        session_id,
+                        text=chunk,
+                        delta=chunk,
+                        suggest_human=suggest_human if is_last else False,
+                    )
+                )
 
             # 完成标记（附带本回答引用的知识片段，供前端做「引用知识片段」气泡）
-            await websocket.send_json(build_streaming_chunk(
-                session_id, text="", done=True, suggest_human=suggest_human,
-                citations=citations,
-            ))
+            await websocket.send_json(
+                build_streaming_chunk(
+                    session_id,
+                    text="",
+                    done=True,
+                    suggest_human=suggest_human,
+                    citations=citations,
+                )
+            )
 
         # 6.5 保存对话历史到会话状态
         if session_state and final_response:
@@ -782,20 +1054,41 @@ async def _handle_ai_chat(
             # Phase 3: 持久化 AI 回复（与内存历史并行落库）
             try:
                 from src.db.repositories import message_save
+
                 await asyncio.to_thread(
-                    message_save, session_id, tenant_id, user_id, "assistant",
-                    final_response, intent=intent or "",
-                    metadata={"quality_score": quality_score, "citations": citations},
+                    message_save,
+                    session_id,
+                    tenant_id,
+                    user_id,
+                    "assistant",
+                    final_response,
+                    intent=intent or "",
+                    metadata={
+                        "quality_score": quality_score,
+                        "citations": citations,
+                        # Phase5 检索判据可观测性三要素（可选字段，不改 WS 协议）
+                        "kb_call_mode": result.get("kb_call_mode"),
+                        "retrieval_decided_by": result.get("retrieval_decided_by"),
+                        "retrieval_count": result.get("retrieval_count"),
+                        # 答案合成路径
+                        # （direct_synthesis/react_agent/direct_no_retrieval）
+                        "answer_path": result.get("answer_path"),
+                    },
                 )
             except Exception as e:
                 logger.warning("[Persistence] AI回复落库失败（非致命）: %s", e)
             logger.info(
-                "[ContextMemory] session=%s: 保存对话历史，当前总消息数=%d, turn_count=%d",
-                session_id, len(session_state.conversation_history), session_state.turn_count
+                "[ContextMemory] session=%s: 保存对话历史，"
+                "当前总消息数=%d, turn_count=%d",
+                session_id,
+                len(session_state.conversation_history),
+                session_state.turn_count,
             )
             logger.debug(
                 "[ContextMemory] session=%s: 新增 user_msg=%s, ai_msg=%s",
-                session_id, message[:100], final_response[:100]
+                session_id,
+                message[:100],
+                final_response[:100],
             )
 
         # 7. 如果需要转人工
@@ -816,8 +1109,12 @@ async def _handle_ai_chat(
                 session_id=session_id,
                 summary=f"AI 无法处理: {final_response[:200]}",
                 conversation=[
-                    {"role": "user" if isinstance(m, HumanMessage) else "assistant",
-                     "content": (m.content if hasattr(m, "content") else str(m))[:500]}
+                    {
+                        "role": "user" if isinstance(m, HumanMessage) else "assistant",
+                        "content": (m.content if hasattr(m, "content") else str(m))[
+                            :500
+                        ],
+                    }
                     for m in messages
                 ],
                 user_profile={"user_id": user_id, "plan": user_plan},
@@ -833,30 +1130,42 @@ async def _handle_ai_chat(
             # 发送系统通知给人工客服
             try:
                 from src.api.notifications import add_handoff_notification
-                add_handoff_notification(session_id, user_id, reason=f"AI 无法处理（intent={intent}）")
+
+                add_handoff_notification(
+                    session_id, user_id, reason=f"AI 无法处理（intent={intent}）"
+                )
             except Exception as e:
                 logger.warning("Failed to send handoff notification: %s", e)
 
         # 8. 如果有权限过滤
         access_filtered = result.get("access_filtered", 0)
         if access_filtered > 0:
-            await websocket.send_json({
-                "type": "info",
-                "session_id": session_id,
-                "text": f"[注：本次检索有 {access_filtered} 条结果因权限不足被过滤]",
-                "timestamp": time.time(),
-            })
+            await websocket.send_json(
+                {
+                    "type": "info",
+                    "session_id": session_id,
+                    "text": (
+                        f"[注：本次检索有 {access_filtered} 条结果因权限不足被过滤]"
+                    ),
+                    "timestamp": time.time(),
+                }
+            )
 
         # 9. 记录业务指标
         try:
             from src.evaluation.tracker import get_evaluation_tracker
+
             tracker = get_evaluation_tracker()
             end_time = time.time()
-            latency_ms = (end_time - (start_time if 'start_time' in locals() else end_time)) * 1000
+            latency_ms = (
+                end_time - (start_time if "start_time" in locals() else end_time)
+            ) * 1000
             quality_score = result.get("quality_score")
             intent = result.get("intent", "unknown")
             turn_count = result.get("turn_count", 1)
-            resolved = not needs_human and quality_score is not None and quality_score > 0.3
+            resolved = (
+                not needs_human and quality_score is not None and quality_score > 0.3
+            )
             tracker.record_chat(
                 session_id=session_id,
                 intent=intent,
@@ -877,9 +1186,13 @@ async def _handle_ai_chat(
 
     except Exception as e:
         logger.exception("Error processing chat: session=%s", session_id)
-        await websocket.send_json(build_error(
-            session_id, "CHAT_ERROR", str(e)[:200],
-        ))
+        await websocket.send_json(
+            build_error(
+                session_id,
+                "CHAT_ERROR",
+                str(e)[:200],
+            )
+        )
         # 出错也尝试转人工
         try:
             dispatcher = get_dispatcher()
@@ -889,12 +1202,13 @@ async def _handle_ai_chat(
                 [],
             )
         except Exception:
-            pass
+            logger.debug("dispatcher escalation notify failed", exc_info=True)
 
 
 # ====================================================================
 # 人工坐席 WebSocket
 # ====================================================================
+
 
 @router.websocket("/ws/agent/{agent_id}")
 async def websocket_agent(websocket: WebSocket, agent_id: str = Path(...)):
@@ -934,12 +1248,14 @@ async def websocket_agent(websocket: WebSocket, agent_id: str = Path(...)):
                 dispatcher = get_dispatcher()
                 success = await dispatcher.agent_reply(agent_id, session_id, reply_text)
 
-                await websocket.send_json({
-                    "type": "agent_reply_ack",
-                    "session_id": session_id,
-                    "sent": success,
-                    "timestamp": time.time(),
-                })
+                await websocket.send_json(
+                    {
+                        "type": "agent_reply_ack",
+                        "session_id": session_id,
+                        "sent": success,
+                        "timestamp": time.time(),
+                    }
+                )
 
             # --- 坐席登出 ---
             elif msg_type == "agent_logout":
@@ -947,10 +1263,12 @@ async def websocket_agent(websocket: WebSocket, agent_id: str = Path(...)):
 
             # --- 心跳 ---
             elif msg_type == TYPE_CLIENT_HEARTBEAT:
-                await websocket.send_json({
-                    "type": "heartbeat_ack",
-                    "timestamp": time.time(),
-                })
+                await websocket.send_json(
+                    {
+                        "type": "heartbeat_ack",
+                        "timestamp": time.time(),
+                    }
+                )
 
     except WebSocketDisconnect:
         logger.info("Agent disconnected: %s", agent_id)

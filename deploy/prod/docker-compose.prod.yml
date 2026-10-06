@@ -47,6 +47,12 @@ services:
         http_proxy: ${BUILD_HTTP_PROXY:-}
         https_proxy: ${BUILD_HTTP_PROXY:-}
     restart: unless-stopped
+    # 启动脚本（2026-10-05 外置，见 scripts/start-app.sh）：
+    #   镜像自身 CMD 只启动 uvicorn，不会拉起 ollama。脚本负责挂接 WSL GPU 驱动、
+    #   后台启动 ollama 并做就绪探针、最后前台 exec uvicorn。
+    # 必须用脚本路径调用（不含任何 $），Docker Compose v5.5.1 的插值规则下，
+    # 内联 shell 变量（$$）已无法被还原成字面 $，会导致 LD_LIBRARY_PATH 拼接损坏。
+    command: ["/app/scripts/start-app.sh"]
     ports:
       - "${HOST_PORT:-8000}:8000"
     environment:
@@ -84,11 +90,13 @@ services:
       - EVAL_LLM_JUDGE_ENABLED=false
       - EVAL_ONLINE_SAMPLING_RATE=0.0
       - AGENT_PROBE_ENABLED=${AGENT_PROBE_ENABLED}
-      # ⚠️ 以下两项在 .env.production 中**当前尚未设置**（2026-10-04 实测 0 处命中），
-      #    线上跑的是 config.py 的默认值 always。补配置时必须同时写这里，
-      #    只写 .env 不注入 compose 是无效的（Phase4b 已踩过同类坑）。
-      # - KB_CALL_MODE=${KB_CALL_MODE:-always}
-      # - RERANK_MODEL=${RERANK_MODEL:-}
+      # Phase5 语义收口（2026-10-05 显式注入）：kb_call_mode 生产口径 always。
+      # rerank 三项一并固化，不再依赖镜像内烤入的 .env（当时实测容器 env 0 处命中）。
+      # 只写 .env.production 不注入这里是无效的，Phase4b 已踩过同类坑。
+      - KB_CALL_MODE=${KB_CALL_MODE:-always}
+      - RERANK_ENABLED=${RERANK_ENABLED:-true}
+      - RERANK_PROVIDER=${RERANK_PROVIDER:-local_bge}
+      - RERANK_MODEL=${RERANK_MODEL:-/app/models/bge-reranker-base}
     volumes:
       - agent_chroma:/app/chroma_data
       - agent_logs:/app/logs
@@ -127,10 +135,13 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
-        devices:
-          - driver: nvidia
-            count: all
-            capabilities: [gpu]
+          # GPU 请求必须挂在 reservations.devices 下（Compose 规范位置）。
+          # 2026-10-05 修正：重建损坏文件时被错放到 resources.devices，
+          # 新版 compose（v5.5.1）严格校验直接拒绝整个文件。
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # =========================================================================
   # PostgreSQL（业务结构化数据：租户、会话、审计、配置中心）
@@ -168,12 +179,14 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # 达到上限时淘汰最近最少使用的键（allkeys-lru）。
+    # 不设策略会用 noeviction，写满后所有缓存写入直接报错。
+    # 2026-10-05 教训：YAML 折叠块（>）内的 # 不是注释，会被折进命令行原样
+    # 传给 redis-server，容器启动直接 FATAL CONFIG FILE ERROR。注释只能写在块外。
     command: >
       redis-server
       --appendonly yes
       --maxmemory 256mb
-      # 达到上限时淘汰最近最少使用的键。
-      # 不设策略会用 noeviction，写满后所有缓存写入直接报错。
       --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data

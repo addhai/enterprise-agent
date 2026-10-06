@@ -1,77 +1,53 @@
-from typing import Callable, List, Optional
-import logging
-import re
-import time
 import asyncio
 import inspect
+import logging
+import time
+from collections.abc import Callable
+
 from langchain_core.tools import tool
+
 from src.rag.retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
 
 
 # 简单的内存 FAQ 存储（用于 search_faq 工具）
+# 收口原则（2026-10-06）：这里只放与具体产品事实无关的会话类/账号类通用应答。
+# 设备故障、参数、校准、型号等事实性问题一律走知识库检索（search_knowledge_base），
+# 答案来自入库文档并带引用，不得在代码里硬编码，避免与知识库口径漂移。
 _FAQ_STORE = [
     {
         "keywords": ["你好", "您好", "hello", "hi", "嗨", "在吗", "在不"],
-        "answer": "你好！我是智能客服小助手，有什么可以帮您的？",
+        "answer": (
+            "你好！我是设备技术支持小助手，"
+            "可以帮您处理设备使用、故障排查与保养校准问题。"
+        ),
     },
     {
         "keywords": ["谢谢", "感谢", "thank you", "thanks", "多谢"],
-        "answer": "不客气！如果还有其他问题，随时问我哦～",
+        "answer": "不客气！如果设备使用中还有其他问题，随时问我哦～",
     },
     {
         "keywords": ["再见", "拜拜", "bye", "goodbye", "88"],
-        "answer": "再见！祝您生活愉快，有问题随时回来找我～",
+        "answer": "再见！祝您设备使用顺利，有问题随时回来找我～",
     },
     {
-        "keywords": ["reset password", "forgot password", "密码重置", "忘记密码", "重置密码"],
-        "answer": "重置密码：登录页面点击「忘记密码」，输入邮箱，查收重置链接（有效期30分钟）。",
-    },
-    {
-        "keywords": ["change plan", "upgrade", "降级", "升级", "变更套餐", "切换方案"],
-        "answer": "变更方案：进入「设置」>「账单」>「变更方案」。升级立即生效，降级在账单周期结束时生效。",
-    },
-    {
-        "keywords": ["cancel subscription", "取消订阅", "退订"],
-        "answer": "取消订阅：进入「设置」>「账单」>「取消订阅」。取消后仍可使用至账单周期结束。",
-    },
-    {
-        "keywords": ["api key", "apikey", "API密钥", "生成密钥"],
-        "answer": "获取 API Key：进入「控制台」>「开发者设置」>「API Keys」>「生成新密钥」。请立即复制，密钥只显示一次。",
-    },
-    {
-        "keywords": ["403 error", "403", "权限拒绝", "拒绝访问"],
-        "answer": "403 错误表示访问被拒绝。常见原因：1) API Key 无效或已过期 2) 域名未加入白名单 3) CORS 配置缺失。",
-    },
-    {
-        "keywords": ["sso", "单点登录", "Okta", "Azure AD", "Google Workspace"],
-        "answer": "CloudSync 支持 SSO 单点登录，包括 Okta、Azure AD、Google Workspace 和自定义 SAML 2.0。进入「设置」>「SSO」配置。",
-    },
-    {
-        "keywords": ["encryption", "加密", "数据安全", "TLS", "AES"],
-        "answer": "CloudSync 对数据进行端到端加密：传输中使用 TLS 1.3，存储时使用 AES-256。企业版支持客户托管加密密钥。",
-    },
-    {
-        "keywords": ["two factor", "2fa", "双因素认证", "二次验证"],
-        "answer": "启用双因素认证：进入「设置」>「安全」>「双因素认证」。选择认证器应用或短信，输入验证码确认。",
-    },
-    {
-        "keywords": ["sync not working", "同步失败", "同步不工作", "同步问题"],
-        "answer": "同步问题排查：1) 检查连接的服务提供商是否已认证 2) 确认有可用存储空间 3) 文件没有被其他进程锁定。",
-    },
-    {
-        "keywords": ["pricing", "定价", "价格", "套餐"],
-        "answer": "定价方案：免费版（5GB，2个提供商）、专业版（15元/月，100GB，5个提供商）、企业版（50元/用户/月，无限）。",
-    },
-    {
-        "keywords": ["支持哪些LLM", "大模型", "模型", "llm", "LLM", "Qwen", "千问", "模型支持"],
-        "answer": "目前支持阿里云千问系列模型，包括：qwen-plus（主力对话模型）、qwen-max（复杂推理）、qwen-vl-plus（图片识别）、text-embedding-v4（向量嵌入）。语音识别使用 whisper-large-v3 模型。后续将接入更多大模型供应商。",
+        "keywords": [
+            "reset password",
+            "forgot password",
+            "密码重置",
+            "忘记密码",
+            "重置密码",
+        ],
+        "answer": (
+            "重置密码：登录页面点击「忘记密码」，输入邮箱，"
+            "查收重置链接（有效期30分钟）。"
+        ),
     },
 ]
 
 
-def _faq_search(query: str) -> Optional[str]:
+def _faq_search(query: str) -> str | None:
     """简单的 FAQ 关键词匹配（支持中英文）"""
     query_lower = query.lower()
     for item in _FAQ_STORE:
@@ -84,6 +60,7 @@ def _faq_search(query: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # 工具调用重试与并行执行
 # ---------------------------------------------------------------------------
+
 
 def retry_tool(max_retries: int = 3, delay: float = 0.5, backoff: float = 2.0):
     """工具调用重试装饰器 — 网络异常时自动重试
@@ -106,13 +83,18 @@ def retry_tool(max_retries: int = 3, delay: float = 0.5, backoff: float = 2.0):
             for attempt in range(1, max_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except Exception as e:
+                except Exception as e:  # noqa: PERF203 - 重试循环必须逐项捕获
                     last_error = e
                     error_str = str(e).lower()
-                    if any(x in error_str for x in ["timeout", "connection", "503", "504"]):
+                    if any(
+                        x in error_str for x in ["timeout", "connection", "503", "504"]
+                    ):
                         logger.warning(
                             "Tool %s failed (attempt %d/%d): %s",
-                            func.__name__, attempt, max_retries, e,
+                            func.__name__,
+                            attempt,
+                            max_retries,
+                            e,
                         )
                         if attempt < max_retries:
                             time.sleep(current_delay)
@@ -120,7 +102,12 @@ def retry_tool(max_retries: int = 3, delay: float = 0.5, backoff: float = 2.0):
                     else:
                         logger.error("Tool %s failed (no retry): %s", func.__name__, e)
                         raise
-            logger.error("Tool %s failed after %d retries: %s", func.__name__, max_retries, last_error)
+            logger.error(
+                "Tool %s failed after %d retries: %s",
+                func.__name__,
+                max_retries,
+                last_error,
+            )
             raise last_error
 
         return wrapper
@@ -133,7 +120,7 @@ def retry_async(
     delay: float = 0.5,
     backoff: float = 2.0,
 ):
-    """异步版工具调用重试装饰器 —— 与 `retry_tool` 对称，但用 `await` + `asyncio.sleep`。
+    """异步版工具调用重试装饰器，与 `retry_tool` 对称，用 `await` + `asyncio.sleep`。
 
     关键差异（资深开发把关）：
         - 异步路径**绝不**使用同步 `time.sleep`（会阻塞事件循环，拖垮整个服务）。
@@ -151,26 +138,38 @@ def retry_async(
             raise TypeError(f"retry_async 只能装饰 async 函数：{func.__name__}")
 
         async def wrapper(*args, **kwargs):
-            last_error: Optional[BaseException] = None
+            last_error: BaseException | None = None
             current_delay = delay
             for attempt in range(1, max_retries + 1):
                 try:
                     return await func(*args, **kwargs)
-                except Exception as e:  # noqa: BLE001 - 统一判断是否可重试
+                except Exception as e:  # noqa: BLE001, PERF203 - 重试循环逐项捕获
                     last_error = e
                     error_str = str(e).lower()
-                    if any(x in error_str for x in ["timeout", "connection", "503", "504"]):
+                    if any(
+                        x in error_str for x in ["timeout", "connection", "503", "504"]
+                    ):
                         logger.warning(
                             "Async tool %s failed (attempt %d/%d): %s",
-                            func.__name__, attempt, max_retries, e,
+                            func.__name__,
+                            attempt,
+                            max_retries,
+                            e,
                         )
                         if attempt < max_retries:
                             await asyncio.sleep(current_delay)
                             current_delay *= backoff
                     else:
-                        logger.error("Async tool %s failed (no retry): %s", func.__name__, e)
+                        logger.error(
+                            "Async tool %s failed (no retry): %s", func.__name__, e
+                        )
                         raise
-            logger.error("Async tool %s failed after %d retries: %s", func.__name__, max_retries, last_error)
+            logger.error(
+                "Async tool %s failed after %d retries: %s",
+                func.__name__,
+                max_retries,
+                last_error,
+            )
             raise last_error
 
         return wrapper
@@ -178,7 +177,11 @@ def retry_async(
     return decorator
 
 
-async def parallel_tool_call(tool_calls: List[dict], timeout: float = 30.0) -> List[dict]:
+async def parallel_tool_call(
+    # timeout 是对外稳定参数名，非 asyncio.timeout 遮蔽
+    tool_calls: list[dict],
+    timeout: float = 30.0,  # noqa: ASYNC109
+) -> list[dict]:
     """并行执行多个工具调用（同步/异步工具均支持）
 
     Args:
@@ -215,7 +218,7 @@ async def parallel_tool_call(tool_calls: List[dict], timeout: float = 30.0) -> L
     for task in done:
         try:
             results.append(task.result())
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # noqa: PERF203 - 逐任务隔离异常
             results.append({"success": False, "error": "timeout"})
     return results
 
@@ -223,6 +226,7 @@ async def parallel_tool_call(tool_calls: List[dict], timeout: float = 30.0) -> L
 # ---------------------------------------------------------------------------
 # 权限缓存
 # ---------------------------------------------------------------------------
+
 
 class PermissionCache:
     """权限快照缓存 — 既快又不脏
@@ -251,7 +255,7 @@ class PermissionCache:
         self._cache: dict = {}
         self._default_ttl = default_ttl
 
-    def get(self, user_id: str, tenant_id: str) -> Optional[dict]:
+    def get(self, user_id: str, tenant_id: str) -> dict | None:
         """获取缓存的权限快照"""
         key = f"{user_id}:{tenant_id}"
         entry = self._cache.get(key)
@@ -290,7 +294,7 @@ class PermissionCache:
                     self._cache[key]["expired"] = True
             logger.info("Permission cache invalidated for user: %s", user_id)
 
-    def refresh(self, user_id: str, tenant_id: str) -> Optional[dict]:
+    def refresh(self, user_id: str, tenant_id: str) -> dict | None:
         """强制刷新 — 敏感操作前调用"""
         key = f"{user_id}:{tenant_id}"
         if key in self._cache:
@@ -301,21 +305,21 @@ class PermissionCache:
         """清空缓存"""
         self._cache.clear()
 
-    def get_snapshot(self, user_id: str, tenant_id: str) -> Optional[dict]:
+    def get_snapshot(self, user_id: str, tenant_id: str) -> dict | None:
         """获取缓存中的权限快照（不含版本信息）"""
         entry = self.get(user_id, tenant_id)
         if entry:
             return entry.get("snapshot")
         return None
 
-    def get_entry(self, user_id: str, tenant_id: str) -> Optional[dict]:
+    def get_entry(self, user_id: str, tenant_id: str) -> dict | None:
         """获取缓存条目（含版本和过期状态）"""
         key = f"{user_id}:{tenant_id}"
         return self._cache.get(key)
 
 
 # 全局权限缓存单例（跨请求共享）
-_global_permission_cache: Optional[PermissionCache] = None
+_global_permission_cache: PermissionCache | None = None
 
 
 def get_permission_cache() -> PermissionCache:
@@ -330,12 +334,15 @@ def invalidate_user_permissions(user_id: str, tenant_id: str = ""):
     """权限变更回调 — 当用户角色/计划/权限变更时调用"""
     cache = get_permission_cache()
     cache.invalidate(user_id, tenant_id)
-    logger.info("Permission invalidation pushed: user=%s, tenant=%s", user_id, tenant_id)
+    logger.info(
+        "Permission invalidation pushed: user=%s, tenant=%s", user_id, tenant_id
+    )
 
 
 # ---------------------------------------------------------------------------
 # 统一鉴权中间件
 # ---------------------------------------------------------------------------
+
 
 class PermissionChecker:
     """统一鉴权中间件 — 所有工具执行前必须通过此检查
@@ -367,24 +374,25 @@ class PermissionChecker:
         self,
         user_id: str,
         tenant_id: str,
-        roles: Optional[List[str]] = None,
-        access_levels: Optional[List[str]] = None,
+        roles: list[str] | None = None,
+        access_levels: list[str] | None = None,
         plan: str = "free",
-        permission_cache: Optional[PermissionCache] = None,
-        authority_source: Optional[Callable] = None,
+        permission_cache: PermissionCache | None = None,
+        authority_source: Callable | None = None,
     ):
         self.user_id = user_id
         self.tenant_id = tenant_id
         self.roles = roles or []
         self.access_levels = access_levels or ["public"]
         self.plan = plan
-        self._audit_log: List[str] = []
+        self._audit_log: list[str] = []
         self._cache = permission_cache or PermissionCache()
         self._authority_source = authority_source  # 权威数据源回调
 
         # 写入缓存
         self._cache.put(
-            user_id, tenant_id,
+            user_id,
+            tenant_id,
             snapshot={
                 "roles": self.roles,
                 "plan": self.plan,
@@ -393,7 +401,7 @@ class PermissionChecker:
             version=0,
         )
 
-    def check(self, tool_name: str, resource_scope: Optional[str] = None) -> bool:
+    def check(self, tool_name: str, resource_scope: str | None = None) -> bool:
         """检查用户是否有权限调用此工具
 
         缓存策略：
@@ -437,7 +445,9 @@ class PermissionChecker:
 
             required_roles = restricted_tools[tool_name]
             if not any(r in self.roles for r in required_roles):
-                self._audit("TOOL_DENIED", tool_name, f"missing roles: {required_roles}")
+                self._audit(
+                    "TOOL_DENIED", tool_name, f"missing roles: {required_roles}"
+                )
                 return False
 
         # 规则 4: 资源级权限
@@ -446,7 +456,7 @@ class PermissionChecker:
 
         return True
 
-    def _refresh_authority(self) -> Optional[dict]:
+    def _refresh_authority(self) -> dict | None:
         """从权威数据源刷新权限信息
 
         调用权限变更回调，返回最新的权限快照。
@@ -459,13 +469,15 @@ class PermissionChecker:
             if fresh:
                 # 更新缓存
                 self._cache.put(
-                    self.user_id, self.tenant_id,
+                    self.user_id,
+                    self.tenant_id,
                     snapshot=fresh,
                     version=fresh.get("version", 0),
                 )
                 logger.info(
                     "Authority refreshed for %s:%s, version=%s",
-                    self.user_id, self.tenant_id,
+                    self.user_id,
+                    self.tenant_id,
                     fresh.get("version", 0),
                 )
             return fresh
@@ -473,9 +485,7 @@ class PermissionChecker:
             logger.warning("Authority refresh failed: %s", e)
             return None
 
-    def validate_params(
-        self, tool_name: str, params: dict
-    ) -> tuple[bool, str]:
+    def validate_params(self, tool_name: str, params: dict) -> tuple[bool, str]:
         """参数级校验：LLM 传入的参数是否超出用户权限范围
 
         核心逻辑：
@@ -513,19 +523,22 @@ class PermissionChecker:
 
         # 规则 3: 用户 ID — 不能操作其他用户的资源
         requested_user = params.get("user_id", "")
-        if requested_user and requested_user != self.user_id:
-            # 管理员可以操作其他用户
-            if "admin" not in self.roles:
-                reason = (
-                    f"参数越权：当前用户 {self.user_id}，"
-                    f"不允许操作用户 {requested_user} 的资源"
-                )
-                self._audit("USER_VIOLATION", tool_name, reason)
-                return False, reason
+        # 管理员可以操作其他用户
+        if (
+            requested_user
+            and requested_user != self.user_id
+            and "admin" not in self.roles
+        ):
+            reason = (
+                f"参数越权：当前用户 {self.user_id}，"
+                f"不允许操作用户 {requested_user} 的资源"
+            )
+            self._audit("USER_VIOLATION", tool_name, reason)
+            return False, reason
 
         return True, ""
 
-    def _get_allowed_upgrade_paths(self) -> List[str]:
+    def _get_allowed_upgrade_paths(self) -> list[str]:
         """获取当前计划允许升级到的目标计划"""
         upgrade_paths = {
             "free": ["pro"],
@@ -562,6 +575,7 @@ class PermissionChecker:
 # 权限版本感知 & 多工具任务检查点
 # ---------------------------------------------------------------------------
 
+
 class PermissionVersionTracker:
     """权限版本感知检查点 — 多工具任务中途权限变更检测
 
@@ -584,12 +598,12 @@ class PermissionVersionTracker:
         result2 = tool2(...)
     """
 
-    def __init__(self, cache: Optional[PermissionCache] = None):
+    def __init__(self, cache: PermissionCache | None = None):
         self._cache = cache or get_permission_cache()
-        self._session_version: Optional[int] = None
-        self._session_key: Optional[str] = None
-        self._actions: List[dict] = []  # 已执行动作记录
-        self._compensation_log: List[dict] = []  # 补偿记录
+        self._session_version: int | None = None
+        self._session_key: str | None = None
+        self._actions: list[dict] = []  # 已执行动作记录
+        self._compensation_log: list[dict] = []  # 补偿记录
 
     def begin_session(self, user_id: str, tenant_id: str, initial_version: int = 0):
         """开始一个新任务会话，记录初始权限版本"""
@@ -601,22 +615,29 @@ class PermissionVersionTracker:
         # 初始化缓存条目（如果还没有）
         uid, tid = user_id, tenant_id
         if not self._cache.get_entry(uid, tid):
-            self._cache.put(uid, tid, {
-                "roles": [],
-                "plan": "free",
-                "access_levels": ["public"],
-            }, version=initial_version)
+            self._cache.put(
+                uid,
+                tid,
+                {
+                    "roles": [],
+                    "plan": "free",
+                    "access_levels": ["public"],
+                },
+                version=initial_version,
+            )
 
         logger.info(
             "Permission session started: user=%s, tenant=%s, version=%s",
-            user_id, tenant_id, initial_version,
+            user_id,
+            tenant_id,
+            initial_version,
         )
 
     def checkpoint(
         self,
         step_name: str,
         tool_name: str,
-        authority_source: Optional[Callable] = None,
+        authority_source: Callable | None = None,
     ) -> dict:
         """在每个关键步骤前检查权限版本
 
@@ -637,32 +658,27 @@ class PermissionVersionTracker:
         # 获取当前权限版本
         uid, tid = self._session_key.split(":", 1)
         current_entry = self._cache.get(uid, tid)
-        if current_entry is None:
-            # 缓存未命中 → 强制刷新权威数据源
-            if authority_source:
-                fresh = authority_source(uid, tid)
-                if fresh:
-                    version = fresh.get("version", 0)
-                    snapshot = {
-                        "roles": fresh.get("roles", []),
-                        "plan": fresh.get("plan", "free"),
-                        "access_levels": fresh.get("access_levels", ["public"]),
-                    }
-                    self._cache.put(uid, tid, snapshot, version)
-                    current_entry = self._cache.get_entry(uid, tid)
+        # 缓存未命中时强制刷新权威数据源
+        if current_entry is None and authority_source:
+            fresh = authority_source(uid, tid)
+            if fresh:
+                version = fresh.get("version", 0)
+                snapshot = {
+                    "roles": fresh.get("roles", []),
+                    "plan": fresh.get("plan", "free"),
+                    "access_levels": fresh.get("access_levels", ["public"]),
+                }
+                self._cache.put(uid, tid, snapshot, version)
+                current_entry = self._cache.get_entry(uid, tid)
 
         if current_entry is None:
             # 缓存完全不可用 → 视为版本变化（权限可能已被撤销）
-            reason = (
-                f"权限缓存不可用，步骤 '{step_name}' 已暂停。"
-                f"请重新验证用户权限。"
-            )
+            reason = f"权限缓存不可用，步骤 '{step_name}' 已暂停。请重新验证用户权限。"
             logger.warning("Permission cache unavailable: %s", reason)
             compensation = {
                 "strategy": "manual_review",
                 "actions_to_undo": [
-                    {"step": a["step"], "tool": a["tool"]}
-                    for a in self._actions
+                    {"step": a["step"], "tool": a["tool"]} for a in self._actions
                 ],
                 "reason": "权限缓存不可用，需人工审核",
             }
@@ -679,7 +695,10 @@ class PermissionVersionTracker:
         current_version = current_entry.get("version", 0)
 
         # 检查版本是否变化
-        if self._session_version is not None and current_version > self._session_version:
+        if (
+            self._session_version is not None
+            and current_version > self._session_version
+        ):
             # 版本变化 → 中断任务
             reason = (
                 f"权限版本从 {self._session_version} 变更为 {current_version}，"
@@ -688,7 +707,9 @@ class PermissionVersionTracker:
             logger.warning("Permission version changed: %s", reason)
 
             # 记录已执行动作的补偿状态
-            compensation = self._compute_compensation(step_name, tool_name, current_version)
+            compensation = self._compute_compensation(
+                step_name, tool_name, current_version
+            )
             self._compensation_log.append(compensation)
 
             raise PermissionVersionChanged(
@@ -701,12 +722,14 @@ class PermissionVersionTracker:
             )
 
         # 记录当前步骤
-        self._actions.append({
-            "step": step_name,
-            "tool": tool_name,
-            "version_at_check": current_version,
-            "timestamp": time.time(),
-        })
+        self._actions.append(
+            {
+                "step": step_name,
+                "tool": tool_name,
+                "version_at_check": current_version,
+                "timestamp": time.time(),
+            }
+        )
 
         # 更新会话版本（取最大值，防止回退）
         if self._session_version is None or current_version > self._session_version:
@@ -731,11 +754,12 @@ class PermissionVersionTracker:
         """
         # 策略 1: 如果中断前只执行了只读操作 → 重试即可
         readonly_actions = [
-            a for a in self._actions
+            a
+            for a in self._actions
             if a["tool"] in ("search_knowledge_base", "search_faq")
         ]
 
-        if readonly_actions and not self._actions[len(readonly_actions):]:
+        if readonly_actions and not self._actions[len(readonly_actions) :]:
             # 只执行了只读操作 → 可以安全重试
             return {
                 "strategy": "retry",
@@ -745,7 +769,8 @@ class PermissionVersionTracker:
 
         # 策略 2: 如果执行了写操作 → 需要回滚
         write_actions = [
-            a for a in self._actions
+            a
+            for a in self._actions
             if a["tool"] not in ("search_knowledge_base", "search_faq")
         ]
 
@@ -753,8 +778,7 @@ class PermissionVersionTracker:
             return {
                 "strategy": "rollback",
                 "actions_to_undo": [
-                    {"step": a["step"], "tool": a["tool"]}
-                    for a in write_actions
+                    {"step": a["step"], "tool": a["tool"]} for a in write_actions
                 ],
                 "reason": f"执行了 {len(write_actions)} 个写操作，需要回滚",
             }
@@ -785,7 +809,7 @@ class PermissionVersionChanged(Exception):
         tool_name: str,
         old_version: int,
         new_version: int,
-        actions_executed: List[dict],
+        actions_executed: list[dict],
         compensation: dict,
     ):
         self.step_name = step_name
@@ -804,14 +828,15 @@ class PermissionVersionChanged(Exception):
 # 工具创建
 # ---------------------------------------------------------------------------
 
+
 def create_tools(
     retriever: HybridRetriever = None,
     user_id: str = "",
     tenant_id: str = "",
-    user_access_levels: Optional[List[str]] = None,
-    roles: Optional[List[str]] = None,
+    user_access_levels: list[str] | None = None,
+    roles: list[str] | None = None,
     plan: str = "free",
-    authority_source: Optional[Callable] = None,
+    authority_source: Callable | None = None,
     include_ticket: bool = False,
     include_resource: bool = False,
 ):
@@ -848,10 +873,10 @@ def create_tools(
 
     @tool
     def search_knowledge_base(query: str) -> str:
-        """搜索产品知识库获取技术文档和配置指南。
+        """搜索设备产品知识库，获取故障代码、操作步骤、参数规格、校准保养等技术文档。
 
-        当用户询问关于 API、SSO、配置、错误排查等需要产品文档的问题时使用。
-        输入应是一个简洁的搜索查询，如 "SSO Okta 配置" 或 "403 错误排查"。
+        当用户询问设备故障、错误代码、使用方法、配置校准、规格参数等需要产品文档的问题时使用。
+        输入应是一个简洁的搜索查询，如 "F02 快门卡滞" 或 "测温不准 校准"。
 
         Args:
             query: 搜索关键词（使用技术术语，不是完整句子）
@@ -930,10 +955,11 @@ def create_tools(
     def search_faq(query: str) -> str:
         """FAQ 搜索常见问题库获取精确匹配的答案。
 
-        当用户询问简单事实性问题（如密码重置、套餐变更、取消订阅等）时优先使用。
+        仅覆盖问候、密码重置等与设备事实无关的通用问题；
+        故障代码、参数、操作步骤等设备问题请改用 search_knowledge_base。
 
         Args:
-            query: 问题的关键词，如 "reset password" 或 "change plan"
+            query: 问题的关键词，如 "reset password" 或 "重置密码"
         """
         # 权限检查
         if not checker.check("search_faq"):
@@ -963,21 +989,29 @@ def create_tools(
 
         # 参数校验：reason 不能包含危险指令
         dangerous_patterns = [
-            "ignore all", "forget all", "system prompt",
-            "忽略所有", "忘记所有", "系统提示",
+            "ignore all",
+            "forget all",
+            "system prompt",
+            "忽略所有",
+            "忘记所有",
+            "系统提示",
         ]
         reason_lower = reason.lower()
         if any(p in reason_lower for p in dangerous_patterns):
             checker._audit("PROMPT_INJECTION", "escalate_to_human", reason)
             return "[安全拦截] 检测到可疑输入，已拒绝处理。"
 
-        return f"[Escalated to Human] 已为您转接人工客服。转接原因：{reason}。请稍候，客服专员将很快为您服务。"
+        return (
+            f"[Escalated to Human] 已为您转接人工客服。转接原因：{reason}。"
+            "请稍候，客服专员将很快为您服务。"
+        )
 
     tools = [search_knowledge_base, search_faq, escalate_to_human]
 
     # 专家 Agent 委托工具（A2A）— 性能诊断 + 安全审计
     try:
         from src.protocols.a2a_server import create_expert_delegation_tools
+
         expert_tools = create_expert_delegation_tools()
         tools.extend(expert_tools)
     except (ImportError, NameError) as e:
@@ -985,9 +1019,9 @@ def create_tools(
 
     # 外部 MCP 消费工具 — 客服 Agent 作为 Client 调用外部 MCP Server（GitHub/Slack）
     try:
-        from src.protocols.mcp_client import create_mcp_client, call_external_mcp_tool
         from src.config import settings
         from src.mcp_tools.common import format_result
+        from src.protocols.mcp_client import call_external_mcp_tool
 
         @tool
         def call_external_github_tool(tool_name: str, arguments: str = "") -> str:
@@ -997,13 +1031,19 @@ def create_tools(
             外部 MCP Server URL 在配置中设置（mcp_client_github_url）。
 
             Args:
-                tool_name: 外部工具名称，如 github_get_repo, github_list_issues, github_create_issue
-                arguments: 工具参数（JSON 字符串），如 {"owner": "cloudsync", "repo": "core"}
+                tool_name: 外部工具名称，如 github_get_repo、
+                    github_list_issues、github_create_issue
+                arguments: 工具参数（JSON 字符串），
+                    如 {"owner": "octocat", "repo": "hello-world"}
             """
             if not settings.mcp_client_github_url:
-                return format_result("配置错误", "外部 GitHub MCP URL 未配置，请设置 mcp_client_github_url")
+                return format_result(
+                    "配置错误",
+                    "外部 GitHub MCP URL 未配置，请设置 mcp_client_github_url",
+                )
 
             import json
+
             try:
                 args = json.loads(arguments) if arguments else {}
             except json.JSONDecodeError:
@@ -1028,13 +1068,18 @@ def create_tools(
             外部 MCP Server URL 在配置中设置（mcp_client_slack_url）。
 
             Args:
-                tool_name: 外部工具名称，如 slack_send_message, slack_list_channels, slack_search_messages
-                arguments: 工具参数（JSON 字符串），如 {"channel": "#general", "text": "Hello"}
+                tool_name: 外部工具名称，如 slack_send_message、
+                    slack_list_channels、slack_search_messages
+                arguments: 工具参数（JSON 字符串），
+                    如 {"channel": "#general", "text": "Hello"}
             """
             if not settings.mcp_client_slack_url:
-                return format_result("配置错误", "外部 Slack MCP URL 未配置，请设置 mcp_client_slack_url")
+                return format_result(
+                    "配置错误", "外部 Slack MCP URL 未配置，请设置 mcp_client_slack_url"
+                )
 
             import json
+
             try:
                 args = json.loads(arguments) if arguments else {}
             except json.JSONDecodeError:
@@ -1056,7 +1101,8 @@ def create_tools(
         logger.warning("External MCP client tools not available: %s", e)
 
     # 工单管理工具（接入 src.ticket.tools.create_ticket_tools）
-    # 默认关闭，由对话 Agent（CustomerServiceAgent）显式开启，避免 MCP Server 路径重复注册
+    # 默认关闭，由对话 Agent（CustomerServiceAgent）显式开启，
+    # 避免 MCP Server 路径重复注册
     if include_ticket:
         try:
             from src.ticket.tools import create_ticket_tools
@@ -1072,7 +1118,8 @@ def create_tools(
         except (ImportError, NameError) as e:
             logger.warning("Ticket tools not available: %s", e)
 
-    # 云资源查询工具（只读，样本数据；接入 src.mcp_tools.resource.create_resource_tools）
+    # 云资源查询工具（只读，样本数据；
+    # 接入 src.mcp_tools.resource.create_resource_tools）
     if include_resource:
         try:
             from src.mcp_tools.resource import create_resource_tools
