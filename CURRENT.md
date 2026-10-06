@@ -3,7 +3,7 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-07（CI 双红灯修复 + Q3 页码断链四层修复代码完成，CI 复跑中；生产页码生效待授权重建索引。正式路线见 `docs/增量演进计划-2026Q4.md`）
+> 最后更新：2026-10-07 深夜（Q3 页码已生产验证通过：索引重建 169/1010 块 PDF 全部带 page，WS 引用显示第 5/6 页，post smoke 6/6 PASS；镜像 9cbef989，8 容器全绿。正式路线见 `docs/增量演进计划-2026Q4.md`）
 > 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
 
 ---
@@ -48,7 +48,25 @@
 
 ---
 
-## 2026-10-07 交付：CI 双红灯 + Q3 页码断链（代码完成，生产待授权）
+## 2026-10-07 深夜交付：Q3 页码生产上线（smoke + 索引重建 + app 重建，全部实测）
+
+**smoke 套件入库** `scripts/smoke/`：`run_smoke.py` 六级检查（S1 探针 / S2 依赖明细 / S3 登录 / S4 WS 建连 / S5 F02 已知答案题关键词 / S6 引用四字段与 `--require-page` 硬断言），输出控制台判定 + JSON 报告；`sample_docker_stats.py` 按秒级采样 docker stats 写 CSV。三次实测报告在 `scripts/smoke/reports/`。
+
+**重建前基线（旧镜像 082f214/旧索引）**：S1/S3/S4 PASS，S2 WARN（旧镜像无 /health/detail，404 符合预期），S5 F02 正确 **180.1s**，S6 FAIL（5 条引用无 page 字段），正好留作断链现场证据。
+
+**事故与修复（CRLF）**：首次 force-recreate 后容器 exit 255 重启循环，`exec /app/scripts/start-app.sh: no such file or directory`。根因是工作区 `scripts/*.sh` 被转成 CRLF（git 索引 i/lf、工作区 w/crlf），shebang 变 `#!/bin/sh\r`。已把 5 个 sh 归一为 LF，`.gitattributes` 新增 `*.sh text eol=lf`（含 Dockerfile.* 、*.bash）防复发；重建镜像后容器 16s 内 healthy。
+
+**备份（红线动作前完成）**：镜像 tag `enterprise-agent-app-ollama:backup-pre-page-20261007`（=082f214）；Chroma 卷新备份 `.smoke_tmp/backups/chroma_pre_page_rebuild_20261007.tar.gz` 12.5MB（10-06 的 3MB 旧包仍在）。
+
+**两轮索引重建**：首轮 169/1010 块落库后实测发现 `_page_offset` 内部键泄漏进 Chroma、且 2 个 PDF 标准块缺 page。根因是章节内容完全落在单页（章末页）时文本无 PAGE-BREAK，走了原样透传分支。`expand_pdf_pages()` 修复为偏移键存在即盖 `offset+1` 并在所有分支弹出该键，新增 2 个单测（offset 单页、offset=0 首页）。第二轮重建后实测：标准 169（PDF 18/18 带页）、句子 1010（PDF 54/54 带页）、md 0 块误盖、泄漏键 0；页码范围 T90 维修手册 1-7、T100 校准手册 1-6。块数较旧索引 164/1014 的变化全部来自 PDF 页边界成为硬切分点。
+
+**资源监控（10s 间隔，各 100 采样）**：embedding 重建期 prod-app-1 CPU 均值 135%/151%、峰值约 203%（打满 2 核限额，正常），内存约 2.1GiB；冷态 7b 问答期峰值 7.49GiB / 8GiB（93.6%），未触 OOM，容器全程 healthy。两轮重建各约 10 分钟（embedding 约 9 分钟）。
+
+**重建后验收**：新镜像 `enterprise-agent-app-ollama:latest`（sha256 9cbef989…），只重建 app，postgres/redis 9 小时未动。`/api/v1/health/detail` 四项全 ok。post smoke 冷态首问 **220.5s**（含模型冷加载）、热态 **198.3s**，与重建前 180.1s 同档；F02 答案正确，5 条引用中 2 条 PDF 引用稳定带 **第 5、6 页**，前端徽标渲染已在构建产物中。回滚：镜像用 backup tag，卷用 tar 包恢复。
+
+---
+
+## 2026-10-07 交付：CI 双红灯 + Q3 页码断链（代码已合入 a056bfe，CI run 37511886163 五 job 全绿）
 
 **CI-1 幽灵入口**：根目录 `main.py`（原型，gitignore :148）从未入库，`tests/test_ops/test_health.py:60` 却 `import main`，本地全绿、Linux CI 4 用例 ModuleNotFoundError。修复：`src/api/routes.py` 新增 `GET /api/v1/health/detail`（HTTP 恒 200，body.status=ok/degraded，含 database/vector_store/ollama/models 明细与 elapsed_ms；ollama 地址经 `_ollama_base_url()` 从 env 反推，超时 2s 预算），`/api/v1/health` 保持轻量探针不探依赖，测试 4 用例改写打正式端点；把 main.py 改名隐藏后跑 tests/test_ops 25 项全过（模拟 CI 环境），已还原。
 

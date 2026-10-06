@@ -90,6 +90,8 @@ playwright-report/
 # 测试临时目录
 .smoke_tmp/
 .pytest_tmp/
+# smoke 实跑产物（JSON 报告含会话 ID，仅本地留证，脚本运行时自动建目录）
+scripts/smoke/reports/
 .tmp_pt_*/
 .ruff_cache/
 pytest_tmp/

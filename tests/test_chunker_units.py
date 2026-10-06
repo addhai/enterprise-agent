@@ -138,6 +138,28 @@ class TestPdfPageStamping:
         # 内部偏移键不得透传到检索层
         assert all("_page_offset" not in d.metadata for d in out)
 
+    def test_single_page_chapter_without_marker(self):
+        # 章节内容完全落在单页（章末页）：文本无 PAGE-BREAK，
+        # 但偏移键在，必须盖 offset+1 且弹出内部键
+        doc = Document(
+            page_content="本章只有这一页的短内容。",
+            metadata={"source": "t.pdf", "_page_offset": 5},
+        )
+        out = expand_pdf_pages([doc])
+        assert len(out) == 1
+        assert out[0].metadata["page"] == 6
+        assert "_page_offset" not in out[0].metadata
+
+    def test_first_page_chapter_offset_zero(self):
+        # 章节在首页且单页：offset=0 也要盖 page=1
+        doc = Document(
+            page_content="首页短章节。",
+            metadata={"source": "t.pdf", "_page_offset": 0},
+        )
+        out = expand_pdf_pages([doc])
+        assert out[0].metadata["page"] == 1
+        assert "_page_offset" not in out[0].metadata
+
     def test_split_standard_stamps_page(self):
         c = HybridChunker(chunk_size=200, chunk_overlap=0)
         doc = Document(

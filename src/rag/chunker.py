@@ -41,12 +41,31 @@ def expand_pdf_pages(documents: list[Document]) -> list[Document]:
     expanded: list[Document] = []
     for doc in documents:
         text = doc.page_content
-        if PAGE_BREAK not in text:
-            expanded.append(doc)
-            continue
-        # 章节切片时记录的物理页偏移（见 outline.py），无偏移则从 1 起
+        # 章节切片时记录的物理页偏移（见 outline.py）。该键是内部协议，
+        # 无论走哪个分支都必须弹出，绝不允许进入 Chroma metadata。
         meta = dict(doc.metadata)
+        offset_present = "_page_offset" in meta
         page_offset = int(meta.pop("_page_offset", 0) or 0)
+
+        if PAGE_BREAK not in text:
+            # 章节内容完全落在单个物理页内时（章末页最常见），章节文本
+            # 不含 PAGE-BREAK，但偏移键存在，页码就是首页页本身。
+            if offset_present:
+                expanded.append(
+                    Document(
+                        page_content=text,
+                        metadata={**meta, "page": page_offset + 1},
+                    )
+                )
+            else:
+                # 非 PDF 文档：meta 未变化时直接复用原对象
+                expanded.append(
+                    doc
+                    if len(meta) == len(doc.metadata)
+                    else Document(page_content=text, metadata=meta)
+                )
+            continue
+
         for idx, page_text in enumerate(text.split(PAGE_BREAK), start=1):
             if not page_text.strip():
                 continue

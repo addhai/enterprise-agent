@@ -34,3 +34,10 @@ fixtures/kb_test/*.pdf  binary
 *.zip  binary
 *.gz   binary
 *.whl  binary
+
+# Shell 脚本进 Linux 容器执行，必须 LF。CRLF 会让 shebang 变成
+# 「#!/bin/sh\r」导致容器 exec 报 no such file or directory
+# （2026-10-07 重建 app 时实测踩中，容器 exit 255 重启循环）。
+*.sh           text eol=lf
+*.bash         text eol=lf
+Dockerfile.*   text eol=lf
