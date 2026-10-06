@@ -14,23 +14,57 @@
        - 同时生成两种粒度
        - 检索走小粒度，生成用大上下文
 """
+
 from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional, Tuple
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
+
+# pdf_loader 在页与页之间插入的硬边界标记
+PAGE_BREAK = "\n---PAGE-BREAK---"
+
+
+def expand_pdf_pages(documents: list[Document]) -> list[Document]:
+    """把含 PAGE-BREAK 的 PDF 文档按物理页展开为多个 Document 并盖 page 戳。
+
+    切块器把页边标记当硬切分边界，但切完从不回写页码，导致检索命中后
+    无法告诉用户「答案在手册第几页」（2026-10-07 生产索引实测 164 块
+    page 全空）。page 取物理页序（从 1 开始）；页眉印刷页码与物理页序
+    的映射（doc.metadata["page_numbers"]）留待后续增强，现阶段物理页序
+    已是可靠溯源信息。非 PDF 或无标记文档原样返回。
+    """
+    expanded: list[Document] = []
+    for doc in documents:
+        text = doc.page_content
+        if PAGE_BREAK not in text:
+            expanded.append(doc)
+            continue
+        # 章节切片时记录的物理页偏移（见 outline.py），无偏移则从 1 起
+        meta = dict(doc.metadata)
+        page_offset = int(meta.pop("_page_offset", 0) or 0)
+        for idx, page_text in enumerate(text.split(PAGE_BREAK), start=1):
+            if not page_text.strip():
+                continue
+            expanded.append(
+                Document(
+                    page_content=page_text,
+                    metadata={**meta, "page": page_offset + idx},
+                )
+            )
+    return expanded
 
 
 # ---------------------------------------------------------------------------
 # 句子分割器
 # ---------------------------------------------------------------------------
 
-def _split_sentences(text: str) -> List[str]:
+
+def _split_sentences(text: str) -> list[str]:
     """分割中文/英文句子
 
     支持的分隔符：
@@ -43,7 +77,7 @@ def _split_sentences(text: str) -> List[str]:
 
     # 先按段落分割
     paragraphs = re.split(r"\n\s*\n", text)
-    sentences: List[str] = []
+    sentences: list[str] = []
 
     for para in paragraphs:
         para = para.strip()
@@ -64,6 +98,7 @@ def _split_sentences(text: str) -> List[str]:
 # ---------------------------------------------------------------------------
 # 句子窗口切块
 # ---------------------------------------------------------------------------
+
 
 class SentenceWindowSplitter:
     """Small2Big 切块：小粒度检索 + 大上下文生成
@@ -89,7 +124,7 @@ class SentenceWindowSplitter:
         self.context_window = context_window
         self.min_sentence_length = min_sentence_length
 
-    def split(self, documents: List[Document]) -> List[Document]:
+    def split(self, documents: list[Document]) -> list[Document]:
         """将文档切分为句子级块，每个块携带上下文
 
         Returns:
@@ -98,15 +133,14 @@ class SentenceWindowSplitter:
                 - _context_after: 后文句子列表
                 - _expanded_content: 合并后的完整上下文
         """
-        chunks: List[Document] = []
+        chunks: list[Document] = []
 
         for doc in documents:
             sentences = _split_sentences(doc.page_content)
 
             # 过滤太短的句子（可能是标题、列表项等）
             sentences = [
-                s for s in sentences
-                if len(s.strip()) >= self.min_sentence_length
+                s for s in sentences if len(s.strip()) >= self.min_sentence_length
             ]
 
             if not sentences:
@@ -117,7 +151,7 @@ class SentenceWindowSplitter:
                 start = max(0, i - self.context_window)
                 end = min(len(sentences), i + self.context_window + 1)
                 before = sentences[start:i]
-                after = sentences[i + 1:end]
+                after = sentences[i + 1 : end]
 
                 # 构建扩展内容
                 expanded_parts = before + [sentence] + after
@@ -137,7 +171,10 @@ class SentenceWindowSplitter:
                 # 存储上下文信息（检索时不暴露，生成时才用）
                 # Chroma 不接受空列表作为 metadata 值，转为 JSON 字符串
                 import json
-                chunk.metadata["_context_before"] = json.dumps(before, ensure_ascii=False)
+
+                chunk.metadata["_context_before"] = json.dumps(
+                    before, ensure_ascii=False
+                )
                 chunk.metadata["_context_after"] = json.dumps(after, ensure_ascii=False)
                 chunk.metadata["_expanded_content"] = expanded_content
 
@@ -145,7 +182,9 @@ class SentenceWindowSplitter:
 
         logger.info(
             "SentenceWindowSplitter: %d docs → %d sentence chunks (window=%d)",
-            len(documents), len(chunks), self.context_window,
+            len(documents),
+            len(chunks),
+            self.context_window,
         )
         return chunks
 
@@ -159,6 +198,7 @@ class SentenceWindowSplitter:
     def expand_context_from_json(self, chunk: Document) -> str:
         """从 JSON 序列化的 metadata 中恢复上下文（兼容新格式）"""
         import json
+
         expanded = chunk.metadata.get("_expanded_content", "")
         if expanded:
             return expanded
@@ -168,7 +208,9 @@ class SentenceWindowSplitter:
         after_str = chunk.metadata.get("_context_after", "[]")
 
         try:
-            before = json.loads(before_str) if isinstance(before_str, str) else before_str
+            before = (
+                json.loads(before_str) if isinstance(before_str, str) else before_str
+            )
             after = json.loads(after_str) if isinstance(after_str, str) else after_str
         except (json.JSONDecodeError, TypeError):
             before, after = [], []
@@ -185,6 +227,7 @@ class SentenceWindowSplitter:
 # ---------------------------------------------------------------------------
 # 混合切块器（标准 + 句子窗口）
 # ---------------------------------------------------------------------------
+
 
 class HybridChunker:
     """同时生成两种粒度的切块
@@ -206,13 +249,13 @@ class HybridChunker:
             chunk_overlap=chunk_overlap,
             # 页边标记作为硬切分边界，防止跨页切断句子
             separators=[
-                "\n## ",        # H2 标题
-                "\n### ",       # H3 标题
-                "\n#### ",      # H4 标题
+                "\n## ",  # H2 标题
+                "\n### ",  # H3 标题
+                "\n#### ",  # H4 标题
                 "\n---PAGE-BREAK---",  # 页边标记（PDF 专用）
-                "\n",           # 段落
-                " ",            # 空格
-                "",             # 字符
+                "\n",  # 段落
+                " ",  # 空格
+                "",  # 字符
             ],
             length_function=len,
         )
@@ -220,8 +263,9 @@ class HybridChunker:
             context_window=context_window,
         )
 
-    def split_standard(self, documents: List[Document],
-                       source_file: str | None = None) -> List[Document]:
+    def split_standard(
+        self, documents: list[Document], source_file: str | None = None
+    ) -> list[Document]:
         """标准粒度切块（适合技术文档长文段）
 
         Args:
@@ -230,7 +274,7 @@ class HybridChunker:
                 确定性 ID ``f"file:{source_file}:{i}"``，否则使用 LangChain
                 默认的 UUID。
         """
-        chunks = self.standard_splitter.split_documents(documents)
+        chunks = self.standard_splitter.split_documents(expand_pdf_pages(documents))
 
         if source_file is not None:
             for i, chunk in enumerate(chunks):
@@ -241,8 +285,9 @@ class HybridChunker:
 
         return chunks
 
-    def split_sentences(self, documents: List[Document],
-                        source_file: str | None = None) -> List[Document]:
+    def split_sentences(
+        self, documents: list[Document], source_file: str | None = None
+    ) -> list[Document]:
         """句子粒度切块（适合 FAQ/错误码精确匹配）
 
         Args:
@@ -250,21 +295,22 @@ class HybridChunker:
             source_file: 可选的源文件路径。若提供，为每个 chunk 分配
                 确定性 ID ``f"file:{source_file}:sentence:{i}"``。
         """
-        chunks = self.sentence_splitter.split(documents)
+        chunks = self.sentence_splitter.split(expand_pdf_pages(documents))
 
         if source_file is not None:
-            idx = 0
-            for doc in chunks:
+            for idx, doc in enumerate(chunks):
                 doc.id = f"file:{source_file}:sentence:{idx}"
                 doc.metadata["source_file"] = source_file
                 doc.metadata["chunk_index"] = idx
                 doc.metadata["chunk_type"] = "sentence"
-                idx += 1
 
         return chunks
 
-    def split_both(self, documents: List[Document],
-                   source_file: str | None = None) -> Tuple[List[Document], List[Document]]:
+    def split_both(
+        self,
+        documents: list[Document],
+        source_file: str | None = None,
+    ) -> tuple[list[Document], list[Document]]:
         """同时生成两种粒度
 
         Args:

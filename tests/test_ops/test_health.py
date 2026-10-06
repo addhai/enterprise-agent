@@ -1,6 +1,7 @@
 """P4-2 健康检查测试
 
-覆盖 3 个场景：全 ok、Ollama 不可达、向量库空。
+覆盖：轻量探针端点、依赖级健康明细（数据库/向量库/Ollama/模型）、
+Prometheus 指标端点。全部打生产应用 src.api.server。
 """
 
 import pytest
@@ -16,7 +17,7 @@ def client():
 
 
 class TestEnhancedHealth:
-    """增强健康检查测试（main.py /api/health）"""
+    """轻量健康探针测试（routes.py GET /api/v1/health）"""
 
     def test_health_returns_structure(self, client):
         """/api/v1/health 应返回含 status 和 service 的结构"""
@@ -28,12 +29,9 @@ class TestEnhancedHealth:
         assert "service" in data
 
     def test_health_has_checks_field(self, client):
-        """健康检查应含 checks 字段（main.py 增强版）"""
-        # 测试 routes.py 的 /api/v1/health（简化版，不含 checks）
-        # main.py 的 /api/health 才有 checks
+        """轻量探针至少返回 status + service（依赖明细在 /health/detail）"""
         resp = client.get("/api/v1/health")
         data = resp.json()
-        # routes.py 的 health 至少返回 status + service
         assert "status" in data
         assert "service" in data
 
@@ -51,19 +49,18 @@ class TestEnhancedHealth:
         assert isinstance(data["aliyun_demo_fallback"], bool)
 
 
-class TestMainHealthEndpoint:
-    """main.py /api/health 增强版测试"""
+class TestDependencyHealthDetail:
+    """依赖级健康明细（src.api.routes GET /api/v1/health/detail）
 
-    @pytest.fixture
-    def main_app_client(self):
-        """main.py 的独立 TestClient"""
-        import main as main_mod
+    历史背景：这套断言最早绑定根目录原型入口 main.py 的 /api/health，
+    而 main.py 被 .gitignore 排除、从未入库，导致 Linux CI 上
+    ModuleNotFoundError: No module named 'main' 连续红灯。增强检查已
+    迁入生产应用 src.api.server，测试随之改打真实入口。
+    """
 
-        return TestClient(main_mod.app)
-
-    def test_main_health_has_checks(self, main_app_client):
-        """main.py /api/health 应含 checks 字段"""
-        resp = main_app_client.get("/api/health")
+    def test_detail_health_has_checks(self, client):
+        """明细端点应含四项依赖检查与时间戳"""
+        resp = client.get("/api/v1/health/detail")
         assert resp.status_code == 200
         data = resp.json()
         assert "status" in data
@@ -74,28 +71,27 @@ class TestMainHealthEndpoint:
         assert "models" in data["checks"]
         assert "timestamp" in data
 
-    def test_main_health_ollama_unreachable(self, main_app_client):
-        """Ollama 不可达时 checks.ollama = unreachable, status = degraded"""
-        resp = main_app_client.get("/api/health")
+    def test_detail_health_ollama_unreachable(self, client):
+        """Ollama 不可达时 ollama=unreachable、models=none、status=degraded"""
+        resp = client.get("/api/v1/health/detail")
         data = resp.json()
-        # 测试环境无 Ollama，预期 unreachable
+        # 本机/CI 通常没有 Ollama，允许 ok 或 unreachable 两种环境
         assert data["checks"]["ollama"] in ("ok", "unreachable")
         if data["checks"]["ollama"] == "unreachable":
             assert data["status"] == "degraded"
             assert data["checks"]["models"] == "none"
 
-    def test_main_health_elapsed_ms(self, main_app_client):
-        """健康检查耗时应 < 5000ms"""
-        resp = main_app_client.get("/api/health")
+    def test_detail_health_elapsed_ms(self, client):
+        """明细检查耗时应 < 5000ms（Docker 探针 timeout 预算）"""
+        resp = client.get("/api/v1/health/detail")
         data = resp.json()
         assert "elapsed_ms" in data
         assert data["elapsed_ms"] < 5000
 
-    def test_main_health_database_ok(self, main_app_client):
-        """数据库检查应为 ok（内存 SQLite 由 conftest 初始化）"""
-        resp = main_app_client.get("/api/health")
+    def test_detail_health_database_state(self, client):
+        """数据库检查结果只能为 ok 或 down"""
+        resp = client.get("/api/v1/health/detail")
         data = resp.json()
-        # 数据库可能 ok 或 down（取决于 init_db 是否在 startup 中成功）
         assert data["checks"]["database"] in ("ok", "down")
 
 

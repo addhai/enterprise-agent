@@ -573,6 +573,13 @@ def _build_citations(retrieved_docs) -> list[dict[str, Any]]:
         doc_id = meta.get("doc_id") or ""
         title = meta.get("title") or meta.get("source") or doc_id or "未知文档"
         kb_id = meta.get("kb_id") or ""
+        # Q3 页码溯源：PDF chunk 由 chunker.expand_pdf_pages 盖物理页戳；
+        # md 等非 PDF 语料没有页码，统一输出 None 让前端隐藏徽标。
+        page = meta.get("page")
+        try:
+            page = int(page) if page is not None else None
+        except (TypeError, ValueError):
+            page = None
         content = getattr(d, "page_content", None) or ""
         content = content[:500] if isinstance(content, str) else str(content)[:500]
         try:
@@ -596,6 +603,7 @@ def _build_citations(retrieved_docs) -> list[dict[str, Any]]:
                 "source": source,
                 "doc_id": doc_id,
                 "kb_id": kb_id,
+                "page": page,
             }
         )
     return citations

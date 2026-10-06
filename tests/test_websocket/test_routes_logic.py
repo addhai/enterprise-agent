@@ -11,6 +11,7 @@
 
 不需要真实 LLM / 向量库 / 数据库：依赖项在测试内被 monkeypatch 成 Fake。
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -150,12 +151,8 @@ def _patch_chat_deps(monkeypatch, fake_app, fake_tracker, fake_dispatcher, fake_
     monkeypatch.setattr(
         "src.evaluation.tracker.get_evaluation_tracker", lambda: fake_tracker
     )
-    monkeypatch.setattr(
-        "src.websocket.routes.get_dispatcher", lambda: fake_dispatcher
-    )
-    monkeypatch.setattr(
-        "src.graph.hitl_manager.get_hitl_manager", lambda: fake_hitl
-    )
+    monkeypatch.setattr("src.websocket.routes.get_dispatcher", lambda: fake_dispatcher)
+    monkeypatch.setattr("src.graph.hitl_manager.get_hitl_manager", lambda: fake_hitl)
     monkeypatch.setattr(
         "src.api.notifications.add_handoff_notification", lambda *a, **k: None
     )
@@ -204,9 +201,7 @@ def test_build_citations_no_metadata():
 
 
 def test_build_citations_rrf_score_fallback():
-    docs = [
-        Document(page_content="y", metadata={"rrf_score": 0.42, "source": "s2"})
-    ]
+    docs = [Document(page_content="y", metadata={"rrf_score": 0.42, "source": "s2"})]
     cites = _build_citations(docs)
     assert abs(cites[0]["score"] - 0.42) < 1e-6
     assert cites[0]["source"] == "s2"
@@ -239,6 +234,28 @@ def test_build_citations_none_doc_and_non_dict_meta():
     assert len(cites) == 2
     assert cites[0]["title"] == "未知文档"
     assert cites[1]["title"] == "ok"
+
+
+def test_build_citations_page_passthrough():
+    # Q3：PDF chunk 的 page 戳原样透出（int），非 PDF 缺省为 None
+    docs = [
+        Document(page_content="a", metadata={"title": "手册", "page": 42}),
+        Document(page_content="b", metadata={"title": "md文档"}),
+    ]
+    cites = _build_citations(docs)
+    assert cites[0]["page"] == 42
+    assert cites[1]["page"] is None
+
+
+def test_build_citations_bad_page_coerces_none():
+    # page 脏值（字符串数字可转；无法转换时降级 None，不抛异常）
+    docs = [
+        Document(page_content="a", metadata={"page": "7"}),
+        Document(page_content="b", metadata={"page": "not-int"}),
+    ]
+    cites = _build_citations(docs)
+    assert cites[0]["page"] == 7
+    assert cites[1]["page"] is None
 
 
 # ===========================================================================
@@ -596,7 +613,13 @@ async def test_handle_ai_chat_multimodal_display(monkeypatch):
     )
     ws = FakeWebSocket()
     await _handle_ai_chat(
-        ws, sid, "看这张图", "u1", "t1", "free", mgr,
+        ws,
+        sid,
+        "看这张图",
+        "u1",
+        "t1",
+        "free",
+        mgr,
         image_base64="data:image/png;base64,AAAA",
     )
     # 先推送多模态识别结果展示块

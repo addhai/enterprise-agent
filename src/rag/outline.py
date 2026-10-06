@@ -8,13 +8,14 @@
     原始文本 → 提取标题列表(level, text) → 构建 OutlineTree
     → split_documents() → 按章节切分为多个 Document
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain_core.documents import Document as _Doc
@@ -40,10 +41,10 @@ class OutlineNode:
 
     text: str
     level: int
-    page: Optional[int] = None
-    children: List["OutlineNode"] = field(default_factory=list)
+    page: int | None = None
+    children: list[OutlineNode] = field(default_factory=list)
 
-    def add_child(self, node: "OutlineNode") -> None:
+    def add_child(self, node: OutlineNode) -> None:
         self.children.append(node)
 
     def to_dict(self) -> dict:
@@ -56,7 +57,7 @@ class OutlineNode:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "OutlineNode":
+    def from_dict(cls, data: dict) -> OutlineNode:
         """从字典反序列化"""
         node = cls(
             text=data["text"],
@@ -85,10 +86,10 @@ class OutlineTree:
     """
 
     def __init__(self) -> None:
-        self.root: Optional[OutlineNode] = None
-        self.headings: List[Tuple[int, str, Optional[int]]] = []  # (level, text, page)
+        self.root: OutlineNode | None = None
+        self.headings: list[tuple[int, str, int | None]] = []  # (level, text, page)
 
-    def build(self, headings: List[Tuple[int, str, Optional[int]]]) -> "OutlineTree":
+    def build(self, headings: list[tuple[int, str, int | None]]) -> OutlineTree:
         """从扁平标题列表构建大纲树
 
         算法：维护一个栈，当前标题压栈，子标题弹出父级直到找到合适层级。
@@ -101,8 +102,9 @@ class OutlineTree:
             self.root = None
             return self
 
-        self.root = OutlineNode(text=headings[0][1], level=headings[0][0], page=headings[0][2])
-        stack: List[OutlineNode] = [self.root]
+        first = headings[0]
+        self.root = OutlineNode(text=first[1], level=first[0], page=first[2])
+        stack: list[OutlineNode] = [self.root]
 
         for level, text, page in headings[1:]:
             node = OutlineNode(text=text, level=level, page=page)
@@ -117,7 +119,7 @@ class OutlineTree:
 
         return self
 
-    def flatten(self) -> List[Tuple[str, str, int]]:
+    def flatten(self) -> list[tuple[str, str, int]]:
         """返回扁平化的 [(chapter_path, heading_text, level), ...]
 
         chapter_path 是祖先标题拼接的路径，如 "1. 概述 / 2.1 认证方式"。
@@ -125,9 +127,9 @@ class OutlineTree:
         if not self.root:
             return []
 
-        result: List[Tuple[str, str, int]] = []
+        result: list[tuple[str, str, int]] = []
 
-        def _walk(node: OutlineNode, ancestors: List[str]) -> None:
+        def _walk(node: OutlineNode, ancestors: list[str]) -> None:
             path = " / ".join(ancestors + [node.text])
             result.append((path, node.text, node.level))
             for child in node.children:
@@ -149,7 +151,7 @@ class OutlineTree:
         base_meta: dict,
         source_file: str = "",
         store_outline_json: bool = False,
-    ) -> List["_Doc"]:
+    ) -> list[_Doc]:
         """按章节边界拆分文档为多个 Document
 
         每个 Document 的 metadata 包含：
@@ -177,29 +179,29 @@ class OutlineTree:
         if not self.root:
             # 无标题 → 整篇作为一个文档
             from langchain_core.documents import Document
+
             meta = {**base_meta, "source_file": source_file}
             return [Document(page_content=full_text.strip(), metadata=meta)]
 
         # 按标题定位章节边界
-        heading_pattern = re.compile(
-            r"^(#{1,6})\s+(.+)$", re.MULTILINE
-        )
+        heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
         matches = list(heading_pattern.finditer(full_text))
 
         if not matches:
             # 无匹配标题 → 整篇作为一个文档
             from langchain_core.documents import Document
+
             meta = {**base_meta, "source_file": source_file}
             return [Document(page_content=full_text.strip(), metadata=meta)]
 
         from langchain_core.documents import Document
 
         # 序列化大纲树（可选，避免不必要的 JSON 开销）
-        outline_json: Optional[str] = None
+        outline_json: str | None = None
         if store_outline_json:
             outline_json = json.dumps(self.root.to_dict(), ensure_ascii=False)
 
-        chapters: List["_Doc"] = []
+        chapters: list[_Doc] = []
         flat_headings = self.flatten()
 
         for i, match in enumerate(matches):
@@ -225,7 +227,7 @@ class OutlineTree:
                     end_pos = matches[j].start()
                     break
 
-            content = full_text[match.end():end_pos].strip()
+            content = full_text[match.end() : end_pos].strip()
 
             if not content:
                 continue
@@ -237,6 +239,13 @@ class OutlineTree:
                 "heading_level": heading_level,
                 "heading_text": heading_text,
             }
+            # PDF 章节：记录本章第一页相对文档首页的物理页偏移，
+            # 供 chunker.expand_pdf_pages 还原真实页码（章节文本只含
+            # 本章片段，否则每章页码都会从 1 重新计数）。
+            if "\n---PAGE-BREAK---" in full_text:
+                from src.rag.chunker import PAGE_BREAK
+
+                meta["_page_offset"] = full_text.count(PAGE_BREAK, 0, match.end())
             # 仅在开启时存储完整大纲 JSON
             if store_outline_json and outline_json is not None:
                 meta["outline"] = outline_json
@@ -245,7 +254,9 @@ class OutlineTree:
 
         logger.info(
             "OutlineTree.split: %d headings → %d chapters (store_outline_json=%s)",
-            len(matches), len(chapters), store_outline_json,
+            len(matches),
+            len(chapters),
+            store_outline_json,
         )
         return chapters
 
@@ -255,7 +266,7 @@ class OutlineTree:
 # ---------------------------------------------------------------------------
 
 
-def extract_markdown_headings(text: str) -> List[Tuple[int, str, Optional[int]]]:
+def extract_markdown_headings(text: str) -> list[tuple[int, str, int | None]]:
     """从 Markdown 文本中提取标题列表
 
     Args:
@@ -266,7 +277,7 @@ def extract_markdown_headings(text: str) -> List[Tuple[int, str, Optional[int]]]
         level: 1-6 对应 # 到 ######
     """
     pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
-    headings: List[Tuple[int, str, Optional[int]]] = []
+    headings: list[tuple[int, str, int | None]] = []
     for match in pattern.finditer(text):
         level = len(match.group(1))
         title = match.group(2).strip()
@@ -274,7 +285,7 @@ def extract_markdown_headings(text: str) -> List[Tuple[int, str, Optional[int]]]
     return headings
 
 
-def extract_html_headings(soup) -> List[Tuple[int, str, Optional[int]]]:
+def extract_html_headings(soup) -> list[tuple[int, str, int | None]]:
     """从 BeautifulSoup 的 soup 中提取 h1-h6 标题
 
     Args:
@@ -283,7 +294,7 @@ def extract_html_headings(soup) -> List[Tuple[int, str, Optional[int]]]:
     Returns:
         [(level, text, page), ...]
     """
-    headings: List[Tuple[int, str, Optional[int]]] = []
+    headings: list[tuple[int, str, int | None]] = []
     for level in range(1, 7):
         for tag in soup.find_all(f"h{level}"):
             text = tag.get_text(strip=True)
@@ -292,7 +303,7 @@ def extract_html_headings(soup) -> List[Tuple[int, str, Optional[int]]]:
     return headings
 
 
-def extract_docx_headings(paragraphs) -> List[Tuple[int, str, Optional[int]]]:
+def extract_docx_headings(paragraphs) -> list[tuple[int, str, int | None]]:
     """从 python-docx 的 paragraph 列表中提取 Heading 样式的标题
 
     Args:
@@ -301,7 +312,7 @@ def extract_docx_headings(paragraphs) -> List[Tuple[int, str, Optional[int]]]:
     Returns:
         [(level, text, page), ...]
     """
-    headings: List[Tuple[int, str, Optional[int]]] = []
+    headings: list[tuple[int, str, int | None]] = []
     for para in paragraphs:
         style_name = (para.style.name or "").lower()
         if "heading" in style_name:
@@ -315,7 +326,7 @@ def extract_docx_headings(paragraphs) -> List[Tuple[int, str, Optional[int]]]:
     return headings
 
 
-def extract_pdf_bookmarks(doc) -> List[Tuple[int, str, Optional[int]]]:
+def extract_pdf_bookmarks(doc) -> list[tuple[int, str, int | None]]:
     """从 PyMuPDF 文档中提取书签（outline）
 
     Args:
@@ -327,7 +338,7 @@ def extract_pdf_bookmarks(doc) -> List[Tuple[int, str, Optional[int]]]:
     """
     bookmarks = doc.get_toc()  # [(level, title, page, ...) ]
     # PyMuPDF 的 toc level: 1=H1, 2=H2, ... 6=H6
-    headings: List[Tuple[int, str, Optional[int]]] = []
+    headings: list[tuple[int, str, int | None]] = []
     for level, title, page in bookmarks:
         level = min(max(level, 1), 6)
         text = title.strip()
@@ -336,7 +347,7 @@ def extract_pdf_bookmarks(doc) -> List[Tuple[int, str, Optional[int]]]:
     return headings
 
 
-def extract_pdf_body_headings(text: str) -> List[Tuple[int, str, Optional[int]]]:
+def extract_pdf_body_headings(text: str) -> list[tuple[int, str, int | None]]:
     """从 PDF 正文文本中提取标题模式（书签缺失时的降级方案）
 
     支持的标题模式：
@@ -344,7 +355,7 @@ def extract_pdf_body_headings(text: str) -> List[Tuple[int, str, Optional[int]]]
         - 中文风格: 第一章、第一节
         - 数字编号: 1. Title, 1.1 Subtitle
     """
-    headings: List[Tuple[int, str, Optional[int]]] = []
+    headings: list[tuple[int, str, int | None]] = []
 
     # Markdown 风格
     for match in re.finditer(r"^(#{1,6})\s+(.+)$", text, re.MULTILINE):
@@ -355,8 +366,10 @@ def extract_pdf_body_headings(text: str) -> List[Tuple[int, str, Optional[int]]]
 
     # 中文章节风格: "第一章"、"第一节"、"第三部分"
     cn_pattern = r"^([一二三四五六七八九十]+)[章节篇部回]\s*(.+)$"
-    for match in re.finditer(cn_pattern, text, re.MULTILINE):
-        headings.append((1, f"{match.group(1)}{match.group(2)}", None))
+    headings.extend(
+        (1, f"{m.group(1)}{m.group(2)}", None)
+        for m in re.finditer(cn_pattern, text, re.MULTILINE)
+    )
 
     # 数字编号风格: "1. Title", "1.1 Subtitle"
     num_pattern = r"^(\d+(?:\.\d+)*)\.\s+(.+)$"

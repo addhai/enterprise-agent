@@ -756,6 +756,8 @@ interface ChatCitation {
   source: string
   doc_id?: string
   kb_id?: string
+  // PDF 语料 chunk 的物理页码（1 起），md 等非 PDF 来源为 null/undefined
+  page?: number | null
 }
 
 interface ChatMessage {
@@ -1188,6 +1190,9 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
                             <div key={i} className="chat-citation-item">
                               <div className="chat-citation-head">
                                 <span className="chat-citation-title">{c.title || '未知文档'}</span>
+                                {typeof c.page === 'number' && c.page > 0 && (
+                                  <span className="chat-citation-page">第 {c.page} 页</span>
+                                )}
                                 <span className="chat-citation-score">匹配度 {(c.score ?? 0).toFixed(3)}</span>
                               </div>
                               {c.content && <div className="chat-citation-content">{c.content}</div>}

@@ -443,7 +443,9 @@ def _check_dependencies() -> dict[str, Any]:
         # 让误配在自检阶段就暴露，而不是变成一个"看起来正常"的假绿灯。
         if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
             raise ValueError(f"openai_api_base 协议非法（需 http/https）：{url}")
-        with urllib.request.urlopen(url, timeout=3) as resp:  # noqa: S310 (协议已校验)
+        with urllib.request.urlopen(  # noqa: S310  # nosec B310 - 协议已校验
+            url, timeout=3
+        ) as resp:
             payload = _json.loads(resp.read().decode("utf-8", "replace"))
         models = [m.get("id") for m in payload.get("data", [])]
         checks["llm_backend"] = {

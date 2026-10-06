@@ -3,7 +3,7 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-06（语料归档+索引重建+RRF 权重排序修复已上线，镜像 082f2147dcd2；F02 WS 实测 198s 直答正确 5 citations，PG answer_path=direct_synthesis；本地串行全量 0 failed）
+> 最后更新：2026-10-07（CI 双红灯修复 + Q3 页码断链四层修复代码完成，CI 复跑中；生产页码生效待授权重建索引。正式路线见 `docs/增量演进计划-2026Q4.md`）
 > 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
 
 ---
@@ -45,6 +45,27 @@
 | F01代码是什么意思，要怎么处理 | 0.526378 | direct_synthesis | 139.2s | 「电池温度异常：关机降温30分钟，仍复现需更换电池」分点正确 |
 
 **上线后 WS 复测（2026-10-06 02:3x，正式镜像）**：F02 走完整生产链路（router + rag + reply + WS 流式），163.8s 返回「F02 表示快门卡滞：1.进入维护菜单执行两次快门校正 2.若无效检查镜头前端异物 3.严禁自行拆卸快门组件」，done 事件 5 条 citations；PG assistant 消息 metadata 为 `answer_path=direct_synthesis / always / always / count=1`；服务日志留痕「高置信直答命中，旁路 ReAct：decided_by=always docs=5」。
+
+---
+
+## 2026-10-07 交付：CI 双红灯 + Q3 页码断链（代码完成，生产待授权）
+
+**CI-1 幽灵入口**：根目录 `main.py`（原型，gitignore :148）从未入库，`tests/test_ops/test_health.py:60` 却 `import main`，本地全绿、Linux CI 4 用例 ModuleNotFoundError。修复：`src/api/routes.py` 新增 `GET /api/v1/health/detail`（HTTP 恒 200，body.status=ok/degraded，含 database/vector_store/ollama/models 明细与 elapsed_ms；ollama 地址经 `_ollama_base_url()` 从 env 反推，超时 2s 预算），`/api/v1/health` 保持轻量探针不探依赖，测试 4 用例改写打正式端点；把 main.py 改名隐藏后跑 tests/test_ops 25 项全过（模拟 CI 环境），已还原。
+
+**CI-2 bandit B310**：`config_center.py:446` 与 routes.py 新增 urlopen 全部双标注 `# noqa: S310` + `# nosec B310`（Request 构造行 ruff S310 也要标），本地 `bandit -c bandit.yaml -r src/ --severity-level medium` EXIT=0。
+
+**Q3 页码断链根因（生产卷实测 164 块 page 键 0 块）**：pdf_loader :104 用 `\n---PAGE-BREAK---` 拼页，但 chunker 切块后从不把页码写回 metadata。修复四层：
+
+| 文件 | 改动 |
+|---|---|
+| `src/rag/chunker.py` | 新增 `expand_pdf_pages()`，切块前按 PAGE-BREAK 展开物理页并盖 `metadata["page"]`（int 1 起），标准/句子两路径统一调用；无标记文档原样透传，不写 page 键（Chroma 丢 None）；还清整文件 ruff 存量债 |
+| `src/rag/outline.py` | PDF 章节切片写内部键 `_page_offset`（本章首页物理偏移），防每章页码从 1 重数；展开后该键弹出不外泄 |
+| `src/websocket/routes.py` | `_build_citations` 输出 `page`（安全 int 转型，脏值降级 null） |
+| `frontend/src/App.tsx` / `App.css` | ChatCitation 加 `page?: number\|null`；引用卡片渲染「第 N 页」徽标 `.chat-citation-page`，缺省不占位；static 产物已核验含该类名 |
+
+测试：test_chunker_units 新增 TestPdfPageStamping 6 用例，test_routes_logic 新增 page 透出 2 用例；test_rag 全量、Playwright E2E 6/6、oxlint 0 error、tsc+vite 通过。语义边界：当前为 PDF **物理页序**，印刷页码映射（page_numbers）排演进计划阶段 2。
+
+**待授权红线**：生产卷索引仍是旧数据，需授权后跑 `scripts/rebuild_index.py`（卷备份已有 chroma_pre_rebuild_20261006.tar.gz）并只重建 app 容器，page 才在线上生效。演进路线已落档 `docs/增量演进计划-2026Q4.md`（阶段 0 硬门禁 → 阶段 3 运营化）。
 
 ---
 
