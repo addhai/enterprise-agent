@@ -92,6 +92,8 @@ playwright-report/
 .pytest_tmp/
 # smoke 实跑产物（JSON 报告含会话 ID，仅本地留证，脚本运行时自动建目录）
 scripts/smoke/reports/
+# golden 金标题库实跑产物（检索/端到端评测报告，脚本运行时自动建目录）
+scripts/golden/reports/
 .tmp_pt_*/
 .ruff_cache/
 pytest_tmp/

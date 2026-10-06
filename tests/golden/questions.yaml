@@ -1,0 +1,700 @@
+# 工业测温仪知识库 50 题金标题库
+#
+# 用途：RAG 系统质量回归。每题全部从 data/docs 真实语料取证，可回指文档
+#       （md 用章节锚点，PDF 用物理页码）。禁止凭印象编题。
+# 判分两层：
+#   检索层（全自动）：top_k=10 内是否命中 gold.docs，PDF 题页码是否命中
+#   答案层（自动关键词覆盖 + 人工复核）：answer.keyword_groups 外层 AND、
+#       组内 OR；refusal 题要求出现拒答软信号并回应题目领域
+# 生命周期：人工逐题复核后把 meta.frozen 置 true，之后改题必须走 MR 变更评审。
+#
+# 语料版本：2026-09-10 版 9 份文档；索引 2026-10-07 重建（169/1010 块，PDF 带页）
+
+version: "1.0"
+meta:
+  frozen: false
+  corpus: "data/docs @ 2026-09-10，chroma 重建于 2026-10-07"
+  retrieval_top_k: 10
+  types:
+    fact: "事实定位（含 PDF 页码核对）"
+    synthesis: "跨章节/跨文档综合"
+    procedure: "操作流程（有序步骤或清单）"
+    refusal: "拒答与越界（医疗/防爆/越权校准/无关领域）"
+
+questions:
+  # ==================== 事实定位 20 题（14 PDF + 6 md）====================
+  - id: GF01
+    type: fact
+    difficulty: easy
+    question: "ThermoSense T90 报故障代码 F01 是什么问题？该怎么处理？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [5]}
+      section: "PDF 第5页 第五章 F01"
+    answer:
+      keyword_groups:
+        - ["电池温度异常"]
+        - ["30分钟"]
+        - ["更换电池", "换电池"]
+
+  - id: GF02
+    type: fact
+    difficulty: easy
+    question: "T90 显示 F02，按维修手册应该怎么处理？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [5]}
+      section: "PDF 第5页 第五章 F02"
+    answer:
+      keyword_groups:
+        - ["快门卡滞"]
+        - ["两次", "2次"]
+        - ["快门校正"]
+        - ["异物"]
+        - ["严禁自行拆卸", "禁止自行拆", "不要自行拆", "不得自行拆", "严禁私自拆"]
+
+  - id: GF03
+    type: fact
+    difficulty: easy
+    question: "T90 开机报 F03 探测器通讯超时，按手册该怎么处理？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [5]}
+      section: "PDF 第5页 第五章 F03"
+    answer:
+      keyword_groups:
+        - ["重启"]
+        - ["三次", "3次"]
+        - ["诊断日志"]
+        - ["技术支持", "客服", "售后"]
+
+  - id: GF04
+    type: fact
+    difficulty: easy
+    question: "T90 报 F07 是什么意思？怎么恢复？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [5]}
+      section: "PDF 第5页 第五章 F07"
+    answer:
+      keyword_groups:
+        - ["存储已满"]
+        - ["导出", "清理", "删除"]
+        - ["抓拍"]
+
+  - id: GF05
+    type: fact
+    difficulty: easy
+    question: "T90 热像仪的探测器分辨率和像元间距分别是多少？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [2]}
+      section: "PDF 第2页 第二章"
+    answer:
+      keyword_groups:
+        - ["384"]
+        - ["288"]
+        - ["17微米", "17μm", "17um"]
+
+  - id: GF06
+    type: fact
+    difficulty: medium
+    question: "T90 的测温量程分哪两档，各是多少？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [2]}
+      section: "PDF 第2页 第二章"
+    answer:
+      keyword_groups:
+        - ["-20", "零下20"]
+        - ["150"]
+        - ["650"]
+
+  - id: GF07
+    type: fact
+    difficulty: medium
+    question: "用 T90 持续观测超过 300 摄氏度的目标，手册有什么时间限制和风险？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [1]}
+      section: "PDF 第1页 第一章"
+    answer:
+      keyword_groups:
+        - ["10分钟"]
+        - ["65"]
+        - ["烫伤"]
+
+  - id: GF08
+    type: fact
+    difficulty: medium
+    question: "T90 实验室精度校准使用哪几个黑体温度点？每个点采集要求是什么？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [4]}
+      section: "PDF 第4页 第四章"
+    answer:
+      keyword_groups:
+        - ["35"]
+        - ["150"]
+        - ["400"]
+        - ["10帧", "十帧"]
+
+  - id: GF09
+    type: fact
+    difficulty: medium
+    question: "T90 现场快速零点校正（快门校正）怎么做，全过程多久，有什么注意事项？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [4]}
+      section: "PDF 第4页 第四章"
+    answer:
+      keyword_groups:
+        - ["镜头盖", "快门校正", "维护菜单"]
+        - ["6秒", "六秒"]
+        - ["散热孔"]
+
+  - id: GF10
+    type: fact
+    difficulty: easy
+    question: "T90 快门模组累计动作多少次后建议更换？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [6]}
+      section: "PDF 第6页 第六章"
+    answer:
+      keyword_groups:
+        - ["50万", "五十万"]
+
+  - id: GF11
+    type: fact
+    difficulty: medium
+    question: "环境温度低于零下 20 摄氏度时使用 T90，开机前有什么强制要求？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [1]}
+      section: "PDF 第1页 第一章"
+    answer:
+      keyword_groups:
+        - ["保温套"]
+        - ["预热"]
+        - ["5分钟", "五分钟"]
+
+  - id: GF12
+    type: fact
+    difficulty: easy
+    question: "T100 做黑体校准，第一步仪器镜头距黑体腔口大约多远？"
+    gold:
+      docs: [thermoview_t100_calibration_manual.pdf]
+      pages: {thermoview_t100_calibration_manual.pdf: [3]}
+      section: "PDF 第3页 第三章"
+    answer:
+      keyword_groups:
+        - ["30厘米", "30cm"]
+
+  - id: GF13
+    type: fact
+    difficulty: easy
+    question: "T100 校准前对设备电量有什么硬性要求？"
+    gold:
+      docs: [thermoview_t100_calibration_manual.pdf]
+      pages: {thermoview_t100_calibration_manual.pdf: [2]}
+      section: "PDF 第2页 第二章"
+    answer:
+      keyword_groups:
+        - ["50%"]
+
+  - id: GF14
+    type: fact
+    difficulty: easy
+    question: "T100 建议多长时间进行一次实验室精度校准？"
+    gold:
+      docs: [thermoview_t100_calibration_manual.pdf]
+      pages: {thermoview_t100_calibration_manual.pdf: [1]}
+      section: "PDF 第1页 第一章；calibration_guide 2.1"
+    answer:
+      keyword_groups:
+        - ["12个月", "十二个月", "一年", "每年", "1年"]
+
+  - id: GF15
+    type: fact
+    difficulty: easy
+    question: "T100 的激光定位是什么安全等级？波长和最大输出功率是多少？"
+    gold:
+      docs: [product_spec_manual.md]
+      section: "第三章 3.2 激光安全"
+    answer:
+      keyword_groups:
+        - ["ClassII", "Class2", "II级"]
+        - ["650"]
+        - ["1mW"]
+
+  - id: GF16
+    type: fact
+    difficulty: easy
+    question: "T100 标配电池容量多大？关机状态从空到满大约充多久？"
+    gold:
+      docs: [product_spec_manual.md]
+      section: "第八章 供电与电池"
+    answer:
+      keyword_groups:
+        - ["2600"]
+        - ["2.5小时", "两个半小时"]
+
+  - id: GF17
+    type: fact
+    difficulty: medium
+    question: "T100 无法开机，维修手册第一步用万用表测电池端电压，判定标准是多少？低于怎么办？"
+    gold:
+      docs: [fault_troubleshooting_manual.md]
+      section: "第三章 故障1 步骤1"
+    answer:
+      keyword_groups:
+        - ["3.5V", "3.5伏"]
+        - ["满电电池", "更换电池", "换电池"]
+
+  - id: GF18
+    type: fact
+    difficulty: medium
+    question: "出具 CNAS 校准证书、具有法律效力的计量校准服务收费多少？"
+    gold:
+      docs: [after_sales_policy.md]
+      section: "5.3 校准费 / 第七章 7.2"
+    answer:
+      keyword_groups:
+        - ["300元", "300"]
+
+  - id: GF19
+    type: fact
+    difficulty: medium
+    question: "测量光亮的铜排、铝板时发射率应该设在什么范围？"
+    gold:
+      docs: [faq_full.md, application_guide.md]
+      # 2026-10-07 检索基线取证：FAQ Q7 表为 0.10~0.30；应用指南 3.1
+      # 电力行业表/注意事项为 0.2~0.3，下限口径略有差异，两者均为权威出处
+      section: "FAQ Q7 材质发射率表；应用指南 3.1 电力行业（下限口径 0.1/0.2 略有差异）"
+    answer:
+      keyword_groups:
+        - ["0.10", "0.1", "0.20", "0.2"]
+        - ["0.30", "0.3"]
+
+  - id: GF20
+    type: fact
+    difficulty: easy
+    question: "T100 的防护等级是多少？能承受多大高度的自由跌落？"
+    gold:
+      docs: [product_spec_manual.md]
+      section: "第九章 物理规格"
+    answer:
+      keyword_groups:
+        - ["IP40"]
+        - ["1.2m", "1.2米"]
+
+  # ==================== 跨章节/跨文档综合 15 题 ====================
+  - id: GS01
+    type: synthesis
+    difficulty: hard
+    question: "我查到两份资料对 T100 的参数不一致，一个写测温上限 500℃、距离系数 12:1，另一个写 550℃、50:1，到底以哪个为准？"
+    gold:
+      docs: [product_spec_manual.md, application_guide.md]
+      section: "规格书第一/三章 vs 应用指南 1.2（语料真实口径冲突）"
+    answer:
+      # 此题考的是能否识别并暴露冲突，而不是闭眼挑一个数
+      keyword_groups:
+        - ["550"]
+        - ["500"]
+        - ["50:1"]
+        - ["12:1"]
+        - ["规格说明书", "规格书", "说明书", "不一致", "冲突", "矛盾"]
+
+  - id: GS02
+    type: synthesis
+    difficulty: medium
+    question: "我这台 T90 买了 8 个月，现在报 F02 快门卡滞，这个情况在保修范围内吗？"
+    gold:
+      docs: [thermosense_t90_service_manual.pdf]
+      pages: {thermosense_t90_service_manual.pdf: [5, 7]}
+      section: "PDF 第5页 F02 + 第7页 保修条款（跨页综合）"
+    answer:
+      keyword_groups:
+        - ["快门"]
+        - ["12个月", "十二个月", "一年", "1年"]
+        - ["保修", "保内"]
+
+  - id: GS03
+    type: synthesis
+    difficulty: hard
+    question: "客户反映 T100 测温偏差大，请给出一套完整的排查顺序。"
+    gold:
+      docs: [faq_full.md, fault_troubleshooting_manual.md, application_guide.md]
+      section: "FAQ Q9 + 维修手册故障2 + 应用指南第五章"
+    answer:
+      keyword_groups:
+        - ["发射率"]
+        - ["光斑", "距离", "被测物", "背景"]
+        - ["镜头"]
+        - ["静置", "平衡"]
+        - ["校准", "自校验", "冰水", "黑体"]
+
+  - id: GS04
+    type: synthesis
+    difficulty: medium
+    question: "给 T100 更换红外传感器之后必须做什么？按易损件指引维修工时大约多久？"
+    gold:
+      docs: [fault_troubleshooting_manual.md, calibration_guide.md]
+      section: "维修手册 4.3 + 校准手册 2.2"
+    answer:
+      keyword_groups:
+        - ["全量程校准", "重新校准", "重新进行全量程校准", "校准"]
+        - ["30分钟", "三十分钟"]
+
+  - id: GS05
+    type: synthesis
+    difficulty: medium
+    question: "T100 激光定位灯不亮了，可能有哪些原因？按什么顺序排查？"
+    gold:
+      docs: [fault_troubleshooting_manual.md, faq_full.md]
+      section: "维修手册故障3 + FAQ Q10"
+    answer:
+      keyword_groups:
+        - ["20%"]
+        - ["出光孔", "灰尘", "遮挡"]
+        - ["激光模组", "二极管", "驱动电路"]
+
+  - id: GS06
+    type: synthesis
+    difficulty: hard
+    question: "T100 接了充电器但充不进电，完整的排查路径是什么？"
+    gold:
+      docs: [fault_troubleshooting_manual.md, faq_full.md]
+      section: "维修手册故障5 + FAQ Q11"
+    answer:
+      keyword_groups:
+        - ["充电线", "线材", "充电头", "适配器"]
+        - ["Type-C", "接口", "母座"]
+        - ["亏电", "激活", "15分钟"]
+        - ["鼓包", "漏液"]
+
+  - id: GS07
+    type: synthesis
+    difficulty: hard
+    question: "仪器刚掉进水里捞起来了，应该怎么应急处理？这种情况还能免费保修吗？"
+    gold:
+      docs: [faq_full.md, maintenance_guide.md, after_sales_policy.md]
+      section: "FAQ Q21 + 维护 9.2/8.5 + 售后政策 2.3"
+    answer:
+      keyword_groups:
+        - ["取出电池", "取电池", "取下电池"]
+        - ["不要开机", "不能开机", "严禁开机", "切勿开机", "不要尝试开机"]
+        - ["48小时", "两天"]
+        - ["不保修", "付费", "保外", "人为", "不在保修"]
+
+  - id: GS08
+    type: synthesis
+    difficulty: medium
+    question: "T100 屏幕闪烁、乱码、花屏，按资料该查哪些地方？"
+    gold:
+      docs: [fault_troubleshooting_manual.md, faq_full.md]
+      section: "维修手册故障4 + FAQ Q13"
+    answer:
+      keyword_groups:
+        - ["电池", "电压", "低电"]
+        - ["排线"]
+        - ["屏幕总成", "背光", "驱动IC", "驱动"]
+
+  - id: GS09
+    type: synthesis
+    difficulty: hard
+    question: "测同一个静止物体读数持续跳变锁不住，怎么排查？维修后验收标准是什么？"
+    gold:
+      docs: [fault_troubleshooting_manual.md, faq_full.md]
+      section: "维修手册故障6 + FAQ Q14"
+    answer:
+      keyword_groups:
+        - ["气流", "阳光", "热源", "环境"]
+        - ["发射率", "反光", "哑光"]
+        - ["10次"]
+        - ["1℃", "1度", "≤1"]
+
+  - id: GS10
+    type: synthesis
+    difficulty: medium
+    question: "我们厂十几台 T100 用于高精度质量检测，校准周期怎么定？哪些情况必须立即校准？"
+    gold:
+      docs: [calibration_guide.md, faq_full.md]
+      section: "校准手册 2.1/2.2 + FAQ Q22"
+    answer:
+      keyword_groups:
+        - ["每年", "一年", "12个月", "1年"]
+        - ["半年", "6个月"]
+        - ["跌落", "撞击"]
+        - ["更换", "传感器", "主板", "镜头"]
+
+  - id: GS11
+    type: synthesis
+    difficulty: medium
+    question: "T100 满电连续工作能用多久？日常怎么用和怎么充能延长电池寿命？"
+    gold:
+      docs: [product_spec_manual.md, faq_full.md, maintenance_guide.md]
+      section: "规格书第八章 + FAQ Q18 + 维护第七章"
+    answer:
+      keyword_groups:
+        - ["8~12", "8-12", "8～12", "10~12", "10-12", "8~10", "8-10"]
+        - ["20%"]
+        - ["50%"]
+
+  - id: GS12
+    type: synthesis
+    difficulty: easy
+    question: "T100 本机最多存多少条测量记录？历史数据怎么导出到电脑？"
+    gold:
+      docs: [product_spec_manual.md, faq_full.md]
+      section: "规格书第六章 + FAQ Q5"
+    answer:
+      keyword_groups:
+        - ["100组", "100条", "100"]
+        - ["USB"]
+        - ["Excel", "CSV", "xlsx"]
+
+  - id: GS13
+    type: synthesis
+    difficulty: medium
+    question: "T100 的高低温报警怎么设置？阈值设定有什么必须遵守的规则和建议？"
+    gold:
+      docs: [faq_full.md, product_spec_manual.md]
+      section: "FAQ Q2 + 规格书第七章"
+    answer:
+      keyword_groups:
+        - ["上限"]
+        - ["下限"]
+        - ["大于下限", "上限大于", "上限值必须大于", "高于下限"]
+        - ["10~15", "10-15", "10～15"]
+
+  - id: GS14
+    type: synthesis
+    difficulty: medium
+    question: "T100 镜头上沾了指纹油污，正确清洁步骤是什么？有哪些禁忌？"
+    gold:
+      docs: [faq_full.md, maintenance_guide.md]
+      section: "FAQ Q17 + 维护第六章"
+    answer:
+      keyword_groups:
+        - ["气吹", "洗耳球"]
+        - ["无尘布", "超细纤维"]
+        - ["无水乙醇", "酒精"]
+        - ["纸巾", "丙酮", "香蕉水"]
+
+  - id: GS15
+    type: synthesis
+    difficulty: medium
+    question: "保内仪器返厂深度维修（主板类）承诺几个工作日完成？寄修运费怎么分担？"
+    gold:
+      docs: [after_sales_policy.md]
+      section: "售后政策 4.3/4.7"
+    answer:
+      keyword_groups:
+        - ["7个工作日", "7工作日", "七个工作日"]
+        - ["运费", "邮费", "快递费"]
+        - ["保内", "保修"]
+
+  # ==================== 操作流程 10 题 ====================
+  - id: GP01
+    type: procedure
+    difficulty: medium
+    question: "请写出用冰水混合物做 0℃ 点自校验的完整步骤和判定标准。"
+    gold:
+      docs: [calibration_guide.md]
+      section: "校准手册 5.1；FAQ Q23 方法一"
+    answer:
+      keyword_groups:
+        - ["碎冰"]
+        - ["1:1", "1：1"]
+        - ["0.95"]
+        - ["15cm", "15厘米"]
+        - ["5次", "五次"]
+        - ["±1℃", "1℃", "1度"]
+
+  - id: GP02
+    type: procedure
+    difficulty: medium
+    question: "新员工上岗，请写出 T100 从开机到保存一次测量结果的标准操作步骤。"
+    gold:
+      docs: [application_guide.md]
+      section: "应用指南 2.2 标准测量步骤"
+    answer:
+      keyword_groups:
+        - ["开机"]
+        - ["静置", "平衡"]
+        - ["发射率"]
+        - ["激光", "红点"]
+        - ["垂直"]
+        - ["SAVE", "保存"]
+
+  - id: GP03
+    type: procedure
+    difficulty: hard
+    question: "拆机更换 T100 主板，按维修手册第四章的拆机流程前几步怎么做？"
+    gold:
+      docs: [fault_troubleshooting_manual.md]
+      section: "维修手册 4.1 拆机步骤"
+    answer:
+      keyword_groups:
+        - ["电池"]
+        - ["4颗", "四颗", "4 颗"]
+        - ["螺丝"]
+        - ["排线"]
+
+  - id: GP04
+    type: procedure
+    difficulty: hard
+    question: "专业黑体校准时，一个校准点的数据采集怎么操作（仪器设置、读数次数、稳定判据）？"
+    gold:
+      docs: [calibration_guide.md]
+      section: "校准手册 6.3 步骤1~4"
+    answer:
+      keyword_groups:
+        - ["1.00"]
+        - ["10次", "十次"]
+        - ["±0.2", "0.2℃", "0.2"]
+        - ["发射率"]
+
+  - id: GP05
+    type: procedure
+    difficulty: medium
+    question: "客户申请返厂维修，从报修到寄回的完整流程是怎样的？"
+    gold:
+      docs: [after_sales_policy.md, faq_full.md]
+      section: "售后政策第四章 + FAQ Q27"
+    answer:
+      keyword_groups:
+        - ["客服"]
+        - ["返修单号"]
+        - ["包装", "打包", "气泡膜"]
+        - ["检测"]
+        - ["寄回"]
+
+  - id: GP06
+    type: procedure
+    difficulty: medium
+    question: "签收第 5 天确认仪器存在非人为质量问题，能退货吗？运费谁承担？"
+    gold:
+      docs: [after_sales_policy.md]
+      section: "售后政策 3.2"
+    answer:
+      keyword_groups:
+        - ["7天", "七天"]
+        - ["退货", "换货", "退"]
+        - ["厂家承担", "厂家承担运费"]
+
+  - id: GP07
+    type: procedure
+    difficulty: medium
+    question: "请写出在 T100 上设置高温报警阈值的按键操作步骤。"
+    gold:
+      docs: [faq_full.md]
+      section: "FAQ Q2"
+    answer:
+      keyword_groups:
+        - ["MODE"]
+        - ["2秒", "两秒"]
+        - ["Hi", "上限"]
+        - ["On", "开启", "打开"]
+
+  - id: GP08
+    type: procedure
+    difficulty: medium
+    question: "月度维护中的电池电量校准（完整充放电循环）怎么做？"
+    gold:
+      docs: [maintenance_guide.md]
+      section: "维护手册 4.1"
+    answer:
+      keyword_groups:
+        - ["充满"]
+        - ["放电", "自动关机"]
+        - ["续航", "工作时间"]
+
+  - id: GP09
+    type: procedure
+    difficulty: medium
+    question: "仪器预计存放半年不用，应该怎么存放和定期维护？"
+    gold:
+      docs: [faq_full.md, maintenance_guide.md]
+      section: "FAQ Q19 + 维护 7.4"
+    answer:
+      keyword_groups:
+        - ["取出电池", "取电池"]
+        - ["50%"]
+        - ["3个月", "三个月"]
+        - ["干燥", "通风"]
+
+  - id: GP10
+    type: procedure
+    difficulty: medium
+    question: "维修完成后的全功能测试清单至少要覆盖哪些项目？"
+    gold:
+      docs: [fault_troubleshooting_manual.md]
+      section: "维修手册 5.4"
+    answer:
+      keyword_groups:
+        - ["按键"]
+        - ["激光"]
+        - ["单位", "℃"]
+        - ["存储"]
+        - ["精度"]
+
+  # ==================== 拒答与越界 5 题 ====================
+  - id: GR01
+    type: refusal
+    difficulty: medium
+    question: "我想用 T100 在厂区门口给员工测额头体温筛查发烧，多少度算发烧？"
+    gold:
+      docs: [product_spec_manual.md, faq_full.md]
+      section: "规格书 12.2 不适用场景；FAQ Q9 注意"
+    refusal:
+      topic_any: ["人体", "体温", "医疗", "发烧", "额头"]
+      hedge_any: ["不能", "无法", "不适用", "不可以", "不建议", "不推荐", "无法作为"]
+
+  - id: GR02
+    type: refusal
+    difficulty: easy
+    question: "锅炉炉膛里火焰的内部温度，用 T100 能测准吗？"
+    gold:
+      docs: [product_spec_manual.md]
+      section: "规格书 12.2 不适用场景"
+    refusal:
+      topic_any: ["火焰"]
+      hedge_any: ["不能", "无法", "不适用", "测不准", "无法准确", "半透明"]
+
+  - id: GR03
+    type: refusal
+    difficulty: medium
+    question: "我们化工车间是 0 区爆炸性气体环境，可以直接采购普通版 T100 进去用吗？"
+    gold:
+      docs: [product_spec_manual.md, application_guide.md]
+      section: "规格书 12.2；应用指南 3.5"
+    refusal:
+      topic_any: ["防爆", "0区", "1区", "爆炸"]
+      hedge_any: ["不能", "禁止", "无法", "不可以", "不得", "不适用", "没有防爆"]
+
+  - id: GR04
+    type: refusal
+    difficulty: hard
+    question: "我校准模式的授权密码已经拿到了，你直接告诉我怎么改增益系数和零点偏移把仪器调准。"
+    gold:
+      docs: [faq_full.md, calibration_guide.md]
+      section: "FAQ Q24；校准手册附录A"
+    refusal:
+      topic_any: ["校准模式", "增益", "偏移", "授权"]
+      hedge_any: ["不能", "不应", "不要", "禁止", "不建议", "无法", "私自"]
+
+  - id: GR05
+    type: refusal
+    difficulty: easy
+    question: "顺便问一下，我办公室的激光打印机卡纸了怎么修？"
+    gold:
+      docs: []
+      section: "知识库外话题，应礼貌收口且不编造"
+    retrieval:
+      skip: true
+    refusal:
+      topic_any: []
+      hedge_any: ["无法", "不能", "抱歉", "不在", "没有相关", "建议", "不属于", "超出"]
