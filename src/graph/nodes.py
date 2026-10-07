@@ -1755,6 +1755,48 @@ def reflect_node(state: AgentState) -> dict[str, Any]:
     return {"has_reflected": True}
 
 
+def _simplify_reply(text: str, *, technical: bool, tool_sourced: bool = False) -> str:
+    """统一回复长度，保持聊天窗口可读。
+
+    通用回答压到 100 字左右、最多 3 个编号要点。技术意图（intent=technical）
+    的分步操作/多要点答案是用户的执行依据，压要点等于答错：金标题实测
+    19 题因 100 字/3 点截断丢失后半段步骤（6 点列表被切到 3 点、横线
+    列表被 80 字硬切出「M...」），技术意图放宽到 600 字、最多 6 要点。
+    工具来源文本已与引用气泡一一对应，全程原样保留。
+    """
+    if tool_sourced or not text:
+        return text
+
+    budget = 600 if technical else 100
+    keep = 6 if technical else 3
+
+    if len(text) <= budget:
+        return text
+
+    # 超字数后才收编号点：技术答最多 6 点、通用答最多 3 点
+    points = re.findall(r"\d+\.\s*([^\n]+)", text)
+    if points:
+        top = points[:keep]
+        return "\n".join(f"{i + 1}. {p.strip()}" for i, p in enumerate(top))
+
+    sentences = re.split(r"([。！？])", text)
+    if technical:
+        # 无编号的技术长答：按完整句子累积到 600 字，不做 80 字硬切
+        out = ""
+        for i in range(0, len(sentences) - 1, 2):
+            piece = sentences[i] + (sentences[i + 1] if i + 1 < len(sentences) else "")
+            if len(out) + len(piece) > 600:
+                break
+            out += piece
+        return out or text[:600]
+
+    if len(sentences) >= 4:
+        return sentences[0] + sentences[1] + sentences[2] + sentences[3]
+    if len(sentences) >= 2:
+        return sentences[0] + sentences[1]
+    return text[:80] + "..."
+
+
 # ======================================================================
 # Node 7: reply_node — 最终回复组装 + 记忆持久化 + 质量评估
 # ======================================================================
@@ -1897,31 +1939,15 @@ def reply_node(state: AgentState, memory_manager=None) -> dict[str, Any]:
             "failed_attempts": failed_attempts,
         }
 
-    # 统一精简：确保回复简洁，不超过3个要点，100字左右
-    # 工具来源的回复（云资源真实返回）已是结构化事实文本，且内部含
-    # "ecs.g7.large" 这类 "数字.字符" 会被下方正则误当成编号点吞掉重排，
-    # 产生 "1. large" 畸形。tool_sourced 时直接跳过精简，保留原样。
-    import re
-
-    if len(final_response) > 100 and not state.get("tool_sourced"):
-        # 尝试提取编号列表
-        points = re.findall(r"\d+\.\s*([^\n]+)", final_response)
-        if points:
-            top3 = points[:3]
-            final_response = "\n".join(
-                f"{i + 1}. {p.strip()}" for i, p in enumerate(top3)
-            )
-        else:
-            # 没有编号，截取前两句
-            sentences = re.split(r"([。！？])", final_response)
-            if len(sentences) >= 4:
-                final_response = (
-                    sentences[0] + sentences[1] + sentences[2] + sentences[3]
-                )
-            elif len(sentences) >= 2:
-                final_response = sentences[0] + sentences[1]
-            else:
-                final_response = final_response[:80] + "..."
+    # 统一精简：通用回答 100 字/3 要点；技术意图分步答案 600 字/6 要点，
+    # 避免把操作步骤后半段截没（金标题 19 题实测，详见 _simplify_reply）。
+    # 工具来源文本含 "ecs.g7.large" 这类数字点字符，重排会产生畸形，
+    # tool_sourced 在辅助函数内原样返回。
+    final_response = _simplify_reply(
+        final_response,
+        technical=intent == "technical",
+        tool_sourced=bool(state.get("tool_sourced")),
+    )
 
     # ===== 拒答式回复检测：如果 AI 说自己做不了，也算作一次失败 =====
     # （比如"我是设备客服，不唱歌"、"不支持这个功能"等）
