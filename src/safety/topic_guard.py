@@ -56,8 +56,9 @@ class TopicGuardResult:
 
 #: 人体医疗测温。注意「测锅炉外壁」合法，故火焰组词只收半透明气体本体，
 #: 不收「锅炉/炉膛」容器词；医疗组词收测温用途与部位，不收「人体工学」类。
+#: 「体温」不放进通用子串词表，单独走 _has_body_temperature_term 判定，
+#: 否则会误伤「黑体温度 / 物体温度 / 气体温度」等物理量（GF08 回归）。
 _MEDICAL_TERMS = (
-    "体温",
     "发烧",
     "发热",
     "退烧",
@@ -72,6 +73,9 @@ _MEDICAL_TERMS = (
     "医用",
     "筛查发热",
 )
+
+#: 「体温」前一字为这些字时是物理量子串，不算医疗语义。
+_PHYSICAL_TEMP_PREFIX = ("黑", "物", "气")
 
 _FLAME_TERMS = (
     "火焰",
@@ -189,6 +193,24 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term.casefold() in lowered for term in terms)
 
 
+def _has_body_temperature_term(text: str) -> bool:
+    """检测医疗语义「体温」，排除物理测温子串碰撞（GF08）。
+
+    「黑体温度 / 物体温度 / 气体温度」都含子串「体温」但属物理量。
+    逐个扫描「体温」出现位置：前一字为 黑/物/气（物理前缀）的跳过；
+    只要存在一个位于句首或前字非物理前缀的「体温」即判医疗。
+    这样「黑体温度能测体温吗」这类混排仍会被拦截。
+    """
+    idx = 0
+    while True:
+        i = text.find("体温", idx)
+        if i == -1:
+            return False
+        if i == 0 or text[i - 1] not in _PHYSICAL_TEMP_PREFIX:
+            return True
+        idx = i + 2
+
+
 def detect_topic(user_input: str) -> str:
     """识别用户输入命中的受保护话题，未命中返回 TOPIC_NONE。
 
@@ -201,7 +223,7 @@ def detect_topic(user_input: str) -> str:
 
     if _contains_any(text, _CAL_ENTRY_TERMS) and _contains_any(text, _CAL_PARAM_TERMS):
         return TOPIC_CALIBRATION_BYPASS
-    if _contains_any(text, _MEDICAL_TERMS):
+    if _contains_any(text, _MEDICAL_TERMS) or _has_body_temperature_term(text):
         return TOPIC_MEDICAL
     if _contains_any(text, _FLAME_TERMS):
         return TOPIC_FLAME

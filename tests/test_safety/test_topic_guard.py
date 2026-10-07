@@ -76,6 +76,29 @@ class TestDetectTopicNoFalsePositive:
         q = "专业黑体校准时，一个校准点的数据采集怎么操作？"
         assert detect_topic(q) == TOPIC_NONE
 
+    def test_blackbody_temperature_points_gf08(self):
+        # GF08 回归：「黑体温度点」含子串「体温」但属物理量，不得误拦
+        q = "T90 实验室精度校准使用哪几个黑体温度点？每个点采集要求是什么？"
+        assert detect_topic(q) == TOPIC_NONE
+
+    def test_object_and_gas_temperature_not_medical(self):
+        # 同型子串碰撞：物体温度 / 气体温度都含「体温」
+        assert detect_topic("怎么测运动物体温度") == TOPIC_NONE
+        assert detect_topic("烟气里的气体温度能直接测吗") == TOPIC_NONE
+        assert detect_topic("高温气体温度场怎么测") == TOPIC_NONE
+        # 连续「烟气温度」属半透明介质，仍按火焰话题拦截
+        assert detect_topic("烟气温度能测吗") == TOPIC_FLAME
+
+    def test_body_temperature_mixed_with_blackbody_still_blocks(self):
+        # 混排：物理「黑体温度」之外还出现真正医疗「体温」，必须拦截
+        assert detect_topic("黑体温度校准之外，能顺便测员工体温吗") == TOPIC_MEDICAL
+
+    def test_body_temperature_genuine_uses_still_block(self):
+        # 真正医疗用法（句首 / 前字非物理前缀）保持拦截
+        assert detect_topic("体温多少度算发烧") == TOPIC_MEDICAL
+        assert detect_topic("能给宝宝测体温吗") == TOPIC_MEDICAL
+        assert detect_topic("人体体温 37 度正常吗") == TOPIC_MEDICAL
+
     def test_zero_point_check_without_entry(self):
         # 只问零点检查、不提校准模式/密码，不按越权组合处理
         assert detect_topic("冰水混合物 0℃ 点自校验怎么做") == TOPIC_NONE
@@ -169,6 +192,15 @@ class TestEnforce:
         ans = "不能测量人体体温用于医疗诊断，本仪器为工业级。"
         r = enforce_topic_guard("能测体温吗", ans)
         assert r.blocked is False
+
+    def test_blackbody_question_passes_guard_gf08(self):
+        # GF08 端到端：黑体温度点校准问题不得被医疗护栏拦截改写
+        q = "T90 实验室精度校准使用哪几个黑体温度点？每个点采集要求是什么？"
+        ans = "使用 35℃、150℃、400℃ 三个黑体温度点，每点采集 10 帧。"
+        r = enforce_topic_guard(q, ans)
+        assert r.blocked is False
+        assert r.topic == TOPIC_NONE
+        assert r.response == ans
 
     def test_result_is_frozen_dataclass(self):
         r = enforce_topic_guard("测耳温", "37 度正常")
