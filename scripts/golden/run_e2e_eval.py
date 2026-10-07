@@ -33,6 +33,9 @@ import httpx
 import websockets
 import yaml
 
+# 题库 2026-10-08 起冻结：评测前强制校验内容锁，锁失配直接退出
+from bank_lock import ensure_frozen_or_exit
+
 WS_TIMEOUT_S = 600.0  # 与生产 600s 墙钟硬超时对齐
 READY_TIMEOUT_S = 15.0
 GAP_S = 5.0  # 题间间隔，避开在途问答 BUSY
@@ -201,6 +204,7 @@ async def run(args: argparse.Namespace) -> list[dict]:
     base_url = args.base_url.rstrip("/")
     ws_base = base_url.replace("http://", "ws://").replace("https://", "wss://")
     bank = yaml.safe_load(Path(args.questions).read_text(encoding="utf-8"))
+    ensure_frozen_or_exit(Path(args.questions))
     questions = bank["questions"]
 
     if args.ids:

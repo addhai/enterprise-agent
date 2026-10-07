@@ -6,13 +6,22 @@
 #   检索层（全自动）：top_k=10 内是否命中 gold.docs，PDF 题页码是否命中
 #   答案层（自动关键词覆盖 + 人工复核）：answer.keyword_groups 外层 AND、
 #       组内 OR；refusal 题要求出现拒答软信号并回应题目领域
-# 生命周期：人工逐题复核后把 meta.frozen 置 true，之后改题必须走 MR 变更评审。
+# 生命周期：2026-10-08 起已冻结（meta.frozen=true）。题库改任何一个字都会使
+#   questions.lock.json 的内容 hash 失配，pytest 守卫测试与 run_e2e_eval /
+#   run_retrieval_eval 运行时校验立即红灯。改题必须走 MR 评审，并在 MR 中执行
+#   `python scripts/golden/bank_lock.py --refresh` 重建锁文件，锁文件 diff 与
+#   题目 diff 同 MR 可见。
 #
 # 语料版本：2026-09-10 版 9 份文档；索引 2026-10-07 重建（169/1010 块，PDF 带页）
 
 version: "1.0"
 meta:
-  frozen: false
+  frozen: true
+  frozen_at: "2026-10-08"
+  frozen_by: "用户授权，M1 阶段 1 收口"
+  frozen_baseline: "scripts/golden/reports/e2e_20261007_184602（50 题 36 pass/14 fail，零 error/timeout/busy）"
+  question_count: 50
+  lock_file: "tests/golden/questions.lock.json"
   corpus: "data/docs @ 2026-09-10，chroma 重建于 2026-10-07"
   retrieval_top_k: 10
   types:

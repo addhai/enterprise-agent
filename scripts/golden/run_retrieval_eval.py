@@ -21,6 +21,9 @@ from pathlib import Path
 
 import yaml
 
+# 题库 2026-10-08 起冻结：检索基线评测前强制校验内容锁
+from bank_lock import ensure_frozen_or_exit
+
 CONTAINER_Q = "/tmp/golden_questions.json"  # noqa: S108 - 容器内固定中转路径
 CONTAINER_WORKER = "/tmp/golden_eval_retrieval.py"  # noqa: S108
 CONTAINER_REPORT = "/tmp/golden_report.json"  # noqa: S108
@@ -114,6 +117,7 @@ def main() -> int:
     args = ap.parse_args()
 
     bank = yaml.safe_load(Path(args.questions).read_text(encoding="utf-8"))
+    ensure_frozen_or_exit(Path(args.questions))
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
