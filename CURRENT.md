@@ -3,7 +3,7 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-08 凌晨（阶段 1 reply 截断修复上线并完成真机闭环：50 题 36/50 pass，较修复前 27/50 净增 9 题、零反向翻转，零 error/timeout/busy，拒答 5/5；b244ed6/547c06b/6908a37/5082577 已 push origin/master，CI run 37657800312 五 job 全 success；A 类 19 题真机回收 8 题，原「19 题全为确定性截断」归因经实测修正为 8 题截断 + 11 题 7B 生成要点不全；GF08 已固化镜像 b9c23aaa，本轮 _simplify_reply 已重建固化镜像 8835fc74b155（备份 tag backup-pre-simplify-20261008），干净容器 healthy 函数行为验证通过；题库 frozen 待人工冻结。正式路线见 `docs/增量演进计划-2026Q4.md`）
+> 最后更新：2026-10-08 凌晨（阶段 1 reply 截断修复上线并完成真机闭环：50 题 36/50 pass，较修复前 27/50 净增 9 题、零反向翻转，零 error/timeout/busy，拒答 5/5；b244ed6/547c06b/6908a37/5082577 已 push origin/master，CI run 37657800312 五 job 全 success；A 类 19 题真机回收 8 题，原「19 题全为确定性截断」归因经实测修正为 8 题截断 + 11 题 7B 生成要点不全；GF08 已固化镜像 b9c23aaa，本轮 _simplify_reply 已重建固化镜像 8835fc74b155（备份 tag backup-pre-simplify-20261008），干净容器 healthy 函数行为验证通过；50 题题库 2026-10-08 经用户授权整体冻结（frozen=true + questions.lock.json 内容锁 + pytest/eval 双守卫），阶段 1 三硬门全部关闭。正式路线见 `docs/增量演进计划-2026Q4.md`）
 > 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
 
 ---
@@ -102,7 +102,9 @@
 
 **镜像固化**：`_simplify_reply` 已重建镜像 **8835fc74b155**（b9c23aaa 备份 tag `backup-pre-simplify-20261008`），prod-app-1 干净重建后 healthy，容器内 nodes.py MD5 与本地一致、技术答 6 点/非技术 3 点实测通过，8 容器全绿。
 
-**M1 门禁**：基线更新为端到端 36/50、延迟 avg 188.6/p50 166.6/p95 362.8/max 575.4、拒答 5/5、零编造零异常；检索双 100%/MRR 0.9473 沿用。题库 `meta.frozen` 仍 false，待用户逐题人工冻结，为阶段 1 唯一剩余硬门；11 题生成质量与 2 题检索列入阶段 2。
+**题库冻结（2026-10-08 用户授权整体冻结，阶段 1 最后硬门关闭）**：50 题以 36/50 基线整体锁定（14 fail 分类与去向见上，随冻结一并留档；后续改判据走同一套 MR 流程）。四层防篡改：①`tests/golden/questions.yaml` meta 置 `frozen: true`，登记 frozen_at/baseline/题数；②新增 `tests/golden/questions.lock.json`，记 questions 段整体 SHA256 + 逐题 SHA256（canonical JSON，跨平台稳定），改一字即失配；③新增 `scripts/golden/bank_lock.py`（verify/refresh/ensure_frozen_or_exit）；④`tests/test_golden/test_bank_frozen.py` 6 例守卫（冻结声明、锁匹配、50 题与类型分布、证据完整性、改字/删题/解冻三类篡改必被抓、运行时 exit 2）进 pytest/CI；`run_e2e_eval.py` 与 `run_retrieval_eval.py` 加载题库后、任何网络动作前强制校验，实测篡改 GF01 被拦并精确定位。合法改题路径：MR 评审 + 同 MR 执行 `python scripts/golden/bank_lock.py --refresh`，题目 diff 与锁 diff 同时受审。
+
+**M1 门禁（三硬门全关）**：五项基线已入档（端到端 36/50、延迟 avg 188.6/p50 166.6/p95 362.8/max 575.4、拒答 5/5、零编造零异常、检索双 100%/MRR 0.9473）；失题按修复后结果完成重分类；题库已冻结并加内容锁。11 题生成质量与 2 题检索列入阶段 2。
 
 ---
 
@@ -219,7 +221,7 @@
 | 4 | WS 断开后工作流空跑：协作式取消已上线（镜像 9b73a735bb93），实测断开 38.8s 收卷、CPU 203%→0.11%、PG 不脏落库；F02 正常路径 124.9s 不回归 | 已完成 |
 | 5 | `data/docs/` 语料侧 13 个 SaaS 文档已归档并重建索引（镜像 082f2147dcd2）；A2A agents、sanitizer 白名单、helm/chatwoot 域名账号仍有 CloudSync 字样，维持边界不动 | 语料已完成，协议侧划边界 |
 | 6 | ollama 为 CPU-only 构建（无 CUDA 后端，`total_vram="0 B"`）；直答已把单题压到 2 分钟级，进一步提速需换 CUDA 构建；`static/` 仍是 09-17 产物；A2A 探针 connection failed 仅告警 | 成本/低优 |
-| 7 | 金标题库 reply 截断修复真机闭环：50 题 36/50 pass（详见 10-08 凌晨收口节），拒答 5/5、零安全失败，commit 已 push、CI 37657800312 五 job 全绿，修复已固化镜像 8835fc74b155、8 容器全绿。剩余：①14 fail = 11 题 7B 生成要点不全 + 2 题检索（GF15/GF20）+ 1 题判分维持（GF02），质量项列阶段 2；②题库 meta.frozen 待用户逐题冻结（阶段 1 唯一硬门） | 阶段 1 收尾中 |
+| 7 | 阶段 1 三硬门全关：50 题 36/50 pass（10-08 凌晨节），修复固化镜像 8835fc74b155；题库 2026-10-08 整体冻结，frozen=true + questions.lock.json 内容锁 + pytest/eval 双守卫，改题走 MR+refresh。阶段 2 靶子：11 题 7B 生成要点不全、2 题检索（GF15/GF20） | 阶段 1 完成 |
 
 ---
 
