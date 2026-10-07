@@ -3,7 +3,7 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-08 凌晨（阶段 1 reply 截断修复上线并完成真机闭环：50 题 36/50 pass，较修复前 27/50 净增 9 题、零反向翻转，零 error/timeout/busy，拒答 5/5；b244ed6/547c06b/6908a37/5082577 已 push origin/master，CI run 37657800312 五 job 全 success；A 类 19 题真机回收 8 题，原「19 题全为确定性截断」归因经实测修正为 8 题截断 + 11 题 7B 生成要点不全；GF08 已固化镜像 b9c23aaa，本轮 _simplify_reply 已重建固化镜像 8835fc74b155（备份 tag backup-pre-simplify-20261008），干净容器 healthy 函数行为验证通过；50 题题库 2026-10-08 经用户授权整体冻结（frozen=true + questions.lock.json 内容锁 + pytest/eval 双守卫），阶段 1 三硬门全部关闭。正式路线见 `docs/增量演进计划-2026Q4.md`）
+> 最后更新：2026-10-08 早（**阶段 2（M2 体验与容量）开门周落地**：两 commit `02caab0`（6.4 chapter_path 章节面包屑）+ `c6ece33`（覆盖率门禁 40→60、四 loader 补测与 5 处潜伏缺陷修复、匿名 WS 方向 B 引导登录）已 push origin/master，CI run **37700153925** 五 job 全 success；全量本地 CI 口径 16174 行覆盖 66.09%、0 failed。阶段 1 三硬门（50 题 36/50、题库内容锁、修复镜像 8835fc74b155）维持冻结，详见下「2026-10-08 M2 开门周」与 10-08 凌晨节。正式路线见 `docs/增量演进计划-2026Q4.md`）
 > 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
 
 ---
@@ -85,6 +85,22 @@
 **回归**：1529 passed / 17 skipped / 0 failed（203s）；ruff 0.9.0（target py310）check + format 全绿；`scripts/golden/reports/` 已入 .gitignore。
 
 **全量首跑结果 + GR01/GR05 修复（2026-10-07，详见 `docs/缺陷修复报告-GR01-GR05-金标题首跑-20261007.md`）**：50/50 全部有结果，17 pass / 33 fail，总延迟 avg 154.2s、p50 138.7s、p95 367.0s、max 412.3s。失题四桶：faq 无资料 LLM 裸答零引用编造 10 题（含 GR01/GF06/GF16 等）、情绪词单字「操」误伤「操作步骤」约 2s 强转人工 3 题（GP02/GP04/GP07）、RAG 路径越界/库外被诱导 3 题（GR02/GR04/GR05）、有引用但要点不全 17 题（含 GF02 判分偏严，属答案合成质量后续项）。修复：①新增 `src/safety/topic_guard.py` 纯函数话题硬护栏（医疗/火焰/防爆/越权校准，双条件「输入命中话题且输出无拒答词」，越权校准 A×B 组合），rag 前置零成本闸门 + reply 最终防线；②`faq_node` 删除 LLM 裸答，未命中确定性回落 RAG；③GR05 库外四信号合取收口（直答自认未覆盖 + ReAct 零检索 + 无拒答词 + top1 sim<0.50 且 query 实词 2-gram 语料命中<0.12），收口清空全部引用根治引用污染；④情绪词表收紧为明确脏话组合。真机 WS 复测 GR01-GR05 全 pass（GR03 从超时改善到 18.4s），GF01/GF19 无误伤，GF16 编造 10000mAh 纠正为真实 2600mAh。全量 pytest 绿（新增约 47 例），ruff 绿。遗留：GP04 安全缺陷已除但 7B 多要点程序题答案仍残缺（独立质量任务）；修复先 docker cp 热验证，后重建 `enterprise-agent-app-ollama:latest` 镜像固化。
+
+---
+
+## 2026-10-08 交付：阶段 2（M2）开门周（两 commit，CI 全绿）
+
+开门周按用户决策做三件事：6.4 chapter_path 移植、阶段 1 遗留质量账收口、匿名 WS 引导登录。两 commit 拆分为独立特性与质量收口：`02caab0`、`c6ece33`，CI run **37700153925**（HEAD c6ece33）Frontend Build / Tests+Coverage / Frontend E2E / Infra / SAST 五 job 全 success。
+
+**6.4 章节面包屑（02caab0）**：outline 切块（`src/rag/outline.py:238`、docx/md loader）已写 `metadata.chapter_path`，`src/websocket/routes.py` `_build_citations` 读出并透传（空白/脏值安全降级 None），前端 `App.tsx` 引用卡片在 head 下单行省略渲染 `.chat-citation-chapter`；老索引块与无章节语料缺省不占位。新增 2 个透传单测。数据源先经实测成立，特性分支落后 master 7 个 commit 故手工移植未 merge。
+
+**覆盖率门禁 40→60（c6ece33）**：权威基线取 CI artifact `coverage-report/coverage.xml` 根节点 line-rate=0.6653（10845/16302 行，旧注释「约 48%」已过时）；`pyproject.toml` 的 `--cov-fail-under` 与 `[tool.coverage.report] fail_under` 双改 60。补 html/text/docx/image 四个低覆盖 loader 共 **25 个离线确定性用例**，覆盖率 html 29%→100%、text 22%→96%、docx 14%→90%、image 18%→84%。本地按 CI 口径（`-m "not integration"`）实测 **66.09%（16174 行）**、exit 0。
+
+**补测暴露的 5 处潜伏缺陷（均在从未被执行触达的路径）**：①text_loader 给 langchain TextLoader 传其签名不存在的 `errors=` 参数，编码回退必抛 TypeError，改为内置 `open(errors="ignore")`；②docx_loader 缺 `import json`（outline JSON 分支必 NameError）；③docx 误引不存在的 `src.rag.config`，改 `src.config`；④tesseract/paddle 两 OCR 引擎装饰器写成未导入的 `@register_ocr`、⑤openai 视觉引擎写成 `@register_vision_engine`，模块 import 即 NameError，统一为 `VisionEngineRegistry.register_ocr/register_vision`，并加四引擎可导入回归锁定。
+
+**匿名 WS 方向 B「匿名引导登录」（c6ece33，产品已拍板）**：`routes.py` 在心跳分支后加统一身份守卫，匿名（`_is_authed=False`）发 `chat_message/human_escalation/resume_session` 统一回 `need_login` 帧（error_code=AUTH_REQUIRED），连接建立与心跳仍放行。前端聊天窗收 need_login 置登录态、输入区上方渲染 `.chat-login-gate` 引导条（点按钮打开既有 AuthModal），未登录发送走乐观拦截不发 WS；自动 resume 触发的 need_login 不弹可见系统消息。测试侧把原「匿名放行」2 例反转为 5 例守卫断言，并给 resume/LLM/取消等既有受影响用例统一补认证 fixture。
+
+**遗留待办**：真机 WS 验证 chapter_path 与 need_login 需生产容器/卷操作授权（章节面包屑需线上索引含 docx/md 章节块）；11 题 7B 生成质量仍并入 6.5/6.1，开门周未动生成链路。
 
 ---
 
@@ -216,12 +232,13 @@
 | # | 项 | 性质 |
 |---|---|---|
 | 1 | 直答阈值 0.35 经索引重建后 12 题分布重新验证（强 ≥0.467 / 弱 ≤0.300），维持不变；上线后按 PG 中 direct/react 占比与人工抽检继续观察；复杂多步排查题仍可能走 ReAct | 观察项 |
-| 2 | 匿名 WS 会话被租户隔离过滤成预检索 0 条（日志 `Permission filter: 5 → 0 tenant=anon-*`），直答旁路无资料可用必然回落，7B 易误调 query_resources 后兜底拒答；登录态正常。产品需决策匿名会话可见的文档范围，或前端强制登录 | 待决策（复测中发现，既有行为） |
+| 2 | 匿名 WS 方向 B「匿名引导登录」已落地（c6ece33）：匿名建连/心跳放行，chat/human_escalation/resume 统一回 need_login，前端登录引导条；原「匿名可见文档范围」争议随之收口为强制登录。仅差生产容器真机验证（需授权） | 代码已完成，待真机 |
 | 3 | config_center UTC 兼容已修复并上线（镜像 113a3526b60e，含静态守卫防复发）；其余 3.11+ 语法排查暂无 | 已完成 |
 | 4 | WS 断开后工作流空跑：协作式取消已上线（镜像 9b73a735bb93），实测断开 38.8s 收卷、CPU 203%→0.11%、PG 不脏落库；F02 正常路径 124.9s 不回归 | 已完成 |
 | 5 | `data/docs/` 语料侧 13 个 SaaS 文档已归档并重建索引（镜像 082f2147dcd2）；A2A agents、sanitizer 白名单、helm/chatwoot 域名账号仍有 CloudSync 字样，维持边界不动 | 语料已完成，协议侧划边界 |
 | 6 | ollama 为 CPU-only 构建（无 CUDA 后端，`total_vram="0 B"`）；直答已把单题压到 2 分钟级，进一步提速需换 CUDA 构建；`static/` 仍是 09-17 产物；A2A 探针 connection failed 仅告警 | 成本/低优 |
 | 7 | 阶段 1 三硬门全关：50 题 36/50 pass（10-08 凌晨节），修复固化镜像 8835fc74b155；题库 2026-10-08 整体冻结，frozen=true + questions.lock.json 内容锁 + pytest/eval 双守卫，改题走 MR+refresh。阶段 2 靶子：11 题 7B 生成要点不全、2 题检索（GF15/GF20） | 阶段 1 完成 |
+| 8 | M2 开门周（02caab0+c6ece33，CI 37700153925 全绿）：6.4 chapter_path、覆盖率门禁 60（实测 66.09%）、四 loader 25 例补测、5 处潜伏缺陷修复、匿名引导登录。后续 M2 主体：11 题生成质量（6.5/6.1）、2 题块级/表格检索（GF15/GF20）；真机验证 chapter_path/need_login 待授权 | M2 开门周完成 |
 
 ---
 
