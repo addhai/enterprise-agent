@@ -6,16 +6,27 @@
   - 内存无会话但 DB 有历史 → 重建会话并从 DB 恢复，返回 source=database
   - 未携带 session_id → 沿用本连接已建会话，restored_count=0
 """
+
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
-
 from src.api.server import app
 from src.db.repositories import conversation_ensure, message_save
 from src.websocket.session_manager import get_session_manager
+
+
+@pytest.fixture(autouse=True)
+def _authed_identity(monkeypatch):
+    # 本文件测 resume 握手本身，统一以已认证身份建连，绕过匿名 need_login 守卫
+    monkeypatch.setattr(
+        "src.websocket.routes._resolve_ws_identity",
+        lambda ws, sid: ("u1", "t1", "free", "agent", True),
+    )
 
 
 def _client():
@@ -24,10 +35,8 @@ def _client():
 
 def _cleanup_session(session_id: str):
     """清理内存会话，避免跨测试污染。"""
-    try:
+    with contextlib.suppress(Exception):
         get_session_manager().remove_session(session_id)
-    except Exception:
-        pass
 
 
 def test_resume_session_reuses_memory_session():
@@ -38,6 +47,7 @@ def test_resume_session_reuses_memory_session():
     # 先在内存里建一个会话，并塞入历史
     session_mgr = get_session_manager()
     from src.websocket.session_manager import SessionMode
+
     session_mgr.create_session(
         session_id=sid, user_id="u1", tenant_id="t1", mode=SessionMode.AI_CHAT
     )
@@ -53,11 +63,15 @@ def test_resume_session_reuses_memory_session():
             ready = ws.receive_json()
             assert ready["type"] == "session_ready"
 
-            ws.send_text(json.dumps({
-                "type": "resume_session",
-                "session_id": sid,
-                "user_id": "u1",
-            }))
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "resume_session",
+                        "session_id": sid,
+                        "user_id": "u1",
+                    }
+                )
+            )
             resumed = ws.receive_json()
             assert resumed["type"] == "session_resumed"
             assert resumed["session_id"] == sid
@@ -83,11 +97,15 @@ def test_resume_session_rebuilds_from_db_when_memory_misses():
             ready = ws.receive_json()
             assert ready["type"] == "session_ready"
 
-            ws.send_text(json.dumps({
-                "type": "resume_session",
-                "session_id": sid,
-                "user_id": "u1",
-            }))
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "resume_session",
+                        "session_id": sid,
+                        "user_id": "u1",
+                    }
+                )
+            )
             resumed = ws.receive_json()
             assert resumed["type"] == "session_resumed"
             assert resumed["session_id"] == sid
@@ -133,11 +151,15 @@ def test_resume_session_rebuilds_with_zero_history_when_db_empty():
             ready = ws.receive_json()
             assert ready["type"] == "session_ready"
 
-            ws.send_text(json.dumps({
-                "type": "resume_session",
-                "session_id": sid,
-                "user_id": "u-new",
-            }))
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "resume_session",
+                        "session_id": sid,
+                        "user_id": "u-new",
+                    }
+                )
+            )
             resumed = ws.receive_json()
             assert resumed["type"] == "session_resumed"
             assert resumed["session_id"] == sid

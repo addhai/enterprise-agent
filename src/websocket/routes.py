@@ -206,6 +206,25 @@ async def websocket_chat(websocket: WebSocket):
                 )
                 continue
 
+            # 匿名访问策略（产品方向：匿名引导登录，见 CURRENT 待办 #2 决议）：
+            # 无有效 JWT 的连接只放行心跳保活；问答、转人工、历史续接均需要身份，
+            # 统一回 need_login 帧引导前端跳登录，不进入任何业务/数据链路。
+            if not _is_authed and msg_type in (
+                TYPE_CLIENT_CHAT,
+                "human_escalation",
+                "resume_session",
+            ):
+                await websocket.send_json(
+                    {
+                        "type": "need_login",
+                        "session_id": session_id,
+                        "error_code": "AUTH_REQUIRED",
+                        "message": "当前为匿名会话，请登录后再向知识库提问",
+                        "timestamp": time.time(),
+                    }
+                )
+                continue
+
             # --- resume_session 握手（前端连接后第一条消息，
             # 用于跨连接/重启续接历史）---
             if msg_type == "resume_session":

@@ -23,6 +23,7 @@
     否则 skip 并明确指向真实 server 路径。工具执行的「确定性自动证据」以
     scripts/ws_capture.py（真实 server + 真实对话）为准。
 """
+
 from __future__ import annotations
 
 import json
@@ -30,11 +31,18 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-
 from src.api.server import app
-from src.config import settings
 from src.ticket.models import TicketListFilter
 from src.ticket.store import get_default_store
+
+
+@pytest.fixture(autouse=True)
+def _authed_identity(monkeypatch):
+    # 真实 LLM 问答也必须以已认证身份建连，匿名会被 need_login 守卫拦截
+    monkeypatch.setattr(
+        "src.websocket.routes._resolve_ws_identity",
+        lambda ws, sid: ("u1", "t1", "free", "agent", True),
+    )
 
 
 def _client() -> TestClient:
@@ -94,11 +102,15 @@ def test_realtime_chat_runs_without_unhandled_error():
         assert ready["type"] == "session_ready", ready
         sid = ready["session_id"]
 
-        ws.send_text(json.dumps({
-            "type": "chat_message",
-            "session_id": sid,
-            "message": "CloudSync 的 API 分页和版本控制是怎么实现的？",
-        }))
+        ws.send_text(
+            json.dumps(
+                {
+                    "type": "chat_message",
+                    "session_id": sid,
+                    "message": "CloudSync 的 API 分页和版本控制是怎么实现的？",
+                }
+            )
+        )
 
         got_content, got_error, text = _read_stream_until_done(ws)
 
@@ -123,14 +135,18 @@ def test_ticket_creation_intent_exercises_tool_and_persists():
         sid = ready["session_id"]
         tenant_id = f"anon-{sid}"  # 匿名连接租户
 
-        ws.send_text(json.dumps({
-            "type": "chat_message",
-            "session_id": sid,
-            "message": (
-                "帮我建一张关于 Dropbox 同步中断的工单，分类 account，"
-                f"优先级 high，幂等键 {idem_key}。"
-            ),
-        }))
+        ws.send_text(
+            json.dumps(
+                {
+                    "type": "chat_message",
+                    "session_id": sid,
+                    "message": (
+                        "帮我建一张关于 Dropbox 同步中断的工单，分类 account，"
+                        f"优先级 high，幂等键 {idem_key}。"
+                    ),
+                }
+            )
+        )
 
         got_content, got_error, text = _read_stream_until_done(ws)
 
@@ -152,6 +168,8 @@ def test_ticket_creation_intent_exercises_tool_and_persists():
 
     # 模型真调了工具 → 验证落库 tenant 与身份一致（防越权/串租户）
     assert len(matched) >= 1
-    assert matched[0].tenant_id == tenant_id, (
-        f"工单落库租户 {matched[0].tenant_id} 与会话租户 {tenant_id} 不一致（串租户风险）"
+    _tenant_msg = (
+        f"工单落库租户 {matched[0].tenant_id} 与会话租户 {tenant_id}"
+        " 不一致（串租户风险）"
     )
+    assert matched[0].tenant_id == tenant_id, _tenant_msg

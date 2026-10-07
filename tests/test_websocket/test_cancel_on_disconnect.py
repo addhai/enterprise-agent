@@ -55,6 +55,11 @@ def _patch_deps(monkeypatch, fake_app):
     )
     monkeypatch.setattr("src.api.metrics.gauge_inc", lambda *a, **k: None)
     monkeypatch.setattr("src.api.metrics.gauge_dec", lambda *a, **k: None)
+    # 测的是断开取消与硬超时，统一以已认证身份建连绕过匿名守卫
+    monkeypatch.setattr(
+        "src.websocket.routes._resolve_ws_identity",
+        lambda ws, sid: ("u-test", "t-test", "free", "agent", True),
+    )
 
 
 def test_disconnect_cancels_running_workflow(monkeypatch):

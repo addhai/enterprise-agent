@@ -47,15 +47,22 @@ class TextLoader(BaseLoader):
         except Exception as e:
             # 编码探测偶尔会猜错（例如把 GBK 判成 Latin-1），回退到 utf-8 再试一次，
             # 两次都失败才认为文件不可读。
+            # 注意 langchain_community.TextLoader 的构造签名只有
+            # (file_path, encoding, autodetect_encoding)，没有 errors 形参，
+            # 早期版本传 errors="ignore" 必抛 TypeError，回退从未生效。
+            # 这里直接用内置 open 以 utf-8 容错读，与原意图一致。
             logger.warning(
                 "TextLoader failed with encoding=%s: %s, retry utf-8", encoding, e
             )
             try:
-                loader = LcTextLoader(str(info.path), encoding="utf-8", errors="ignore")
-                docs = loader.load()
-            except Exception as e2:
+                with open(str(info.path), encoding="utf-8", errors="ignore") as fh:
+                    raw = fh.read()
+            except OSError as e2:
                 logger.warning("TextLoader retry failed for %s: %s", info.path, e2)
                 return []
+            from langchain_core.documents import Document
+
+            docs = [Document(page_content=raw, metadata={"source": str(info.path)})]
 
         if not docs:
             return []

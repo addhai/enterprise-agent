@@ -1,16 +1,16 @@
 """Tesseract OCR 引擎"""
+
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from src.rag.vision_engines.base import BaseOCREngine
 from src.rag.vision_engines import VisionEngineRegistry
+from src.rag.vision_engines.base import BaseOCREngine
 
 logger = logging.getLogger(__name__)
 
 
-@register_ocr("tesseract")
+@VisionEngineRegistry.register_ocr("tesseract")
 class TesseractOCREngine(BaseOCREngine):
     """Tesseract OCR 文字识别引擎
 
@@ -21,9 +21,10 @@ class TesseractOCREngine(BaseOCREngine):
     def name(self) -> str:
         return "tesseract_ocr"
 
-    def recognize(self, image_path: str) -> Optional[str]:
+    def recognize(self, image_path: str) -> str | None:
         try:
             import pytesseract
+
             text = pytesseract.image_to_string(image_path, lang="chi_sim+eng")
             return text.strip() or None
         except FileNotFoundError:

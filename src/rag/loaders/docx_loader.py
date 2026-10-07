@@ -1,9 +1,11 @@
 """DOCX 格式加载器（python-docx）"""
+
 from __future__ import annotations
 
+import json
 import logging
 import re
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 from src.rag.data_sources import FileInfo
 from src.rag.loaders.base import BaseLoader, register_loader
@@ -16,8 +18,18 @@ logger = logging.getLogger(__name__)
 
 # DOCX heading style names (varies by locale, English names are most common)
 _HEADING_STYLES = {
-    "heading 1", "heading 2", "heading 3", "heading 4", "heading 5", "heading 6",
-    "标题 1", "标题 2", "标题 3", "标题 4", "标题 5", "标题 6",  # Chinese
+    "heading 1",
+    "heading 2",
+    "heading 3",
+    "heading 4",
+    "heading 5",
+    "heading 6",
+    "标题 1",
+    "标题 2",
+    "标题 3",
+    "标题 4",
+    "标题 5",
+    "标题 6",  # Chinese
 }
 
 
@@ -31,12 +43,13 @@ class DocxLoader(BaseLoader):
         3. 按章节边界拆分文档（每个章节从 Heading 到下一个同级或更高级 Heading）
     """
 
-    def load(self, info: FileInfo, base_meta: dict) -> List["_Doc"]:
+    def load(self, info: FileInfo, base_meta: dict) -> list[_Doc]:
+        from langchain_core.documents import Document
+
         from src.rag.loader import (
             _filter_noise_paragraphs,
             normalize_text,
         )
-        from langchain_core.documents import Document
 
         try:
             from docx import Document as DocxDocument
@@ -68,7 +81,7 @@ class DocxLoader(BaseLoader):
 
         # 2. 构建章节列表
         # 每个段落标记为 (level, text, style_name)
-        paragraph_entries: List[tuple] = []
+        paragraph_entries: list[tuple] = []
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
@@ -89,14 +102,17 @@ class DocxLoader(BaseLoader):
 
         # 4. 如果没有标题，整篇作为一个文档
         if not chapters:
-            full_text = "\n\n".join(
-                t for _, _, t in paragraph_entries
-            )
+            full_text = "\n\n".join(t for _, _, t in paragraph_entries)
             full_text = normalize_text(full_text)
             full_text = _filter_noise_paragraphs(full_text)
             if not full_text.strip():
                 return []
-            return [Document(page_content=full_text, metadata={**base_meta, "source_file": info.name})]
+            return [
+                Document(
+                    page_content=full_text,
+                    metadata={**base_meta, "source_file": info.name},
+                )
+            ]
 
         # 5. 构建大纲树并拆分
         outline_tree = OutlineTree()
@@ -104,8 +120,10 @@ class DocxLoader(BaseLoader):
         source_name = info.name
 
         # 对于 DOCX，我们手动构建 Document 列表（因为段落结构不同于文本块）
-        docs: List["_Doc"] = []
-        for chapter_idx, (chapter_heading, chapter_level, chapter_text) in enumerate(chapters):
+        docs: list[_Doc] = []
+        for _chapter_idx, (chapter_heading, chapter_level, chapter_text) in enumerate(
+            chapters
+        ):
             chapter_text = normalize_text(chapter_text)
             chapter_text = _filter_noise_paragraphs(chapter_text)
             if not chapter_text.strip():
@@ -129,7 +147,8 @@ class DocxLoader(BaseLoader):
                 "heading_text": chapter_heading,
             }
             if flat:
-                from src.rag.config import settings
+                from src.config import settings
+
                 store_json = getattr(settings, "outline_store_full_json", False)
                 if store_json:
                     meta["outline"] = json.dumps(
@@ -143,9 +162,9 @@ class DocxLoader(BaseLoader):
 
     def _group_by_chapters(
         self,
-        paragraphs: List[tuple],
-        headings: List[tuple],
-    ) -> List[tuple]:
+        paragraphs: list[tuple],
+        headings: list[tuple],
+    ) -> list[tuple]:
         """将段落按章节分组
 
         返回 [(heading_text, heading_level, body_text), ...]
@@ -154,18 +173,23 @@ class DocxLoader(BaseLoader):
         if not headings:
             return []
 
-        # 构建章节起始位置索引
-        heading_positions = {i for i, (kind, level, _) in enumerate(paragraphs) if kind == "heading"}
-
-        chapters: List[tuple] = []
-        heading_items = [(i, l, t) for i, (kind, l, t) in enumerate(paragraphs) if kind == "heading"]
+        chapters: list[tuple] = []
+        heading_items = [
+            (i, lvl, t)
+            for i, (kind, lvl, t) in enumerate(paragraphs)
+            if kind == "heading"
+        ]
 
         for idx, (pos, level, text) in enumerate(heading_items):
             # 找到下一个 heading 的位置
-            next_pos = heading_items[idx + 1][0] if idx + 1 < len(heading_items) else len(paragraphs)
+            next_pos = (
+                heading_items[idx + 1][0]
+                if idx + 1 < len(heading_items)
+                else len(paragraphs)
+            )
 
             # 收集该 heading 后的 body 段落
-            body_lines: List[str] = []
+            body_lines: list[str] = []
             for j in range(pos + 1, next_pos):
                 kind, _, t = paragraphs[j]
                 if kind == "body" and t.strip():

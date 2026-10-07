@@ -8,6 +8,7 @@
 
 这些分支需要控制会话 mode，真实 session_manager 无法从外部设定，故用 Fake 注入。
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -93,6 +94,12 @@ def _client():
 def patch_globals(monkeypatch):
     monkeypatch.setattr("src.api.metrics.gauge_inc", lambda *a, **k: None)
     monkeypatch.setattr("src.api.metrics.gauge_dec", lambda *a, **k: None)
+    # 本文件测的是各业务分支本身，统一以已认证身份建连，绕过匿名 need_login 守卫
+    monkeypatch.setattr(
+        rt,
+        "_resolve_ws_identity",
+        lambda ws, sid: ("u-test", "t-test", "free", "agent", True),
+    )
 
 
 def test_human_escalation_idempotent(monkeypatch, patch_globals):
@@ -143,9 +150,7 @@ def test_chat_while_human_chat_forward(monkeypatch, patch_globals):
         assert resp["type"] == "message_received"
         assert resp.get("status") == "forwarded_to_agent"
         # 坐席端收到用户消息
-        assert any(
-            m.get("type") == "agent_chat_message" for m in agent_ws.sent
-        )
+        assert any(m.get("type") == "agent_chat_message" for m in agent_ws.sent)
 
 
 def test_resume_session_db_error(monkeypatch, patch_globals):

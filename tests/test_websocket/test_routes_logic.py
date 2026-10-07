@@ -392,8 +392,17 @@ def test_chat_invalid_json(monkeypatch):
         assert err["error_code"] == "INVALID_JSON"
 
 
+def _patch_authed(monkeypatch):
+    # 让连接以已认证身份建立，绕过匿名守卫（这些用例测的是 resume/handoff 本身）
+    monkeypatch.setattr(
+        "src.websocket.routes._resolve_ws_identity",
+        lambda ws, sid: ("u-test", "t-test", "free", "agent", True),
+    )
+
+
 def test_chat_resume_no_session_id(monkeypatch):
     _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    _patch_authed(monkeypatch)
     client = _client()
     with client.websocket_connect("/ws/chat") as ws:
         ws.receive_json()  # session_ready
@@ -406,6 +415,7 @@ def test_chat_resume_no_session_id(monkeypatch):
 
 def test_chat_resume_new_session_from_db(monkeypatch):
     _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    _patch_authed(monkeypatch)
     # 模拟从 DB 恢复历史
     monkeypatch.setattr(
         "src.db.repositories.message_list",
@@ -428,6 +438,7 @@ def test_chat_resume_new_session_from_db(monkeypatch):
 def test_chat_human_escalation(monkeypatch):
     disp = FakeDispatcher()
     _patch_route_globals(monkeypatch, fake_dispatcher=disp)
+    _patch_authed(monkeypatch)
     client = _client()
     with client.websocket_connect("/ws/chat") as ws:
         ready = ws.receive_json()
@@ -679,6 +690,7 @@ async def test_handle_ai_chat_persistence_failure(monkeypatch):
 
 def test_chat_message_too_long(monkeypatch):
     _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    _patch_authed(monkeypatch)
     client = _client()
     with client.websocket_connect("/ws/chat") as ws:
         ws.receive_json()  # session_ready
@@ -686,3 +698,89 @@ def test_chat_message_too_long(monkeypatch):
         err = ws.receive_json()
         assert err["type"] == "error"
         assert err["error_code"] == "MESSAGE_TOO_LONG"
+
+
+# ===========================================================================
+# 匿名访问策略（产品方向 B：匿名引导登录，CURRENT 待办 #2 已决议）
+#
+# 无 token 连接仍可建立（session_ready 正常），身份固定 anonymous、租户按
+# 连接粒度隔离为 anon-<session_id>；但除心跳外的业务动作（问答 / 转人工 /
+# 历史续接）一律被身份守卫挡回 need_login(AUTH_REQUIRED)，不触碰数据链路。
+# ===========================================================================
+
+
+def test_anonymous_connection_identity_baseline(monkeypatch):
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    client = _client()
+    with client.websocket_connect("/ws/chat") as ws:
+        ready = ws.receive_json()
+        sid = ready["session_id"]
+        sess = get_session_manager().get_session(sid)
+
+        # 匿名身份固定，租户按连接粒度隔离，不与任何真实租户共享
+        assert sess.user_id == "anonymous"
+        assert sess.tenant_id == f"anon-{sid}"
+
+
+def test_anonymous_heartbeat_still_allowed(monkeypatch):
+    # 心跳不涉及数据，匿名连接仍可保活
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    client = _client()
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.receive_json()  # session_ready
+        ws.send_text('{"type": "heartbeat"}')
+        ack = ws.receive_json()
+        assert ack["type"] == "heartbeat_ack"
+
+
+def test_anonymous_chat_message_blocked_with_need_login(monkeypatch):
+    fake_app = FakeApp(_dispatch_result())
+    _patch_chat_deps(monkeypatch, fake_app, FakeTracker(), FakeDispatcher(), FakeHITL())
+    # 在会话落库最早一环打点：被身份守卫拦截时根本到不了这里
+    ensure_calls: list = []
+    monkeypatch.setattr(
+        "src.db.repositories.conversation_ensure",
+        lambda *a, **k: ensure_calls.append(1),
+    )
+
+    client = _client()
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.receive_json()  # session_ready
+        ws.send_text('{"type": "chat_message", "message": "测温设备量程是多少"}')
+        frame = ws.receive_json()
+
+        assert frame["type"] == "need_login"
+        assert frame["error_code"] == "AUTH_REQUIRED"
+        assert "登录" in frame["message"]
+        assert ensure_calls == [], "匿名问答不得触发会话落库"
+
+
+def test_anonymous_human_escalation_blocked(monkeypatch):
+    disp = FakeDispatcher()
+    _patch_route_globals(monkeypatch, fake_dispatcher=disp)
+    client = _client()
+    with client.websocket_connect("/ws/chat") as ws:
+        ready = ws.receive_json()
+        sid = ready["session_id"]
+        ws.send_text(
+            f'{{"type": "human_escalation", "session_id": "{sid}", '
+            '"reason": "user_requested"}'
+        )
+        frame = ws.receive_json()
+
+        assert frame["type"] == "need_login"
+        assert frame["error_code"] == "AUTH_REQUIRED"
+        assert disp.escalations == [], "匿名不得进入转人工链路"
+
+
+def test_anonymous_resume_session_blocked(monkeypatch):
+    # 历史续接同样需要身份，匿名态不允许借 session_id 拉取任何会话数据
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    client = _client()
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.receive_json()  # session_ready
+        ws.send_text('{"type": "resume_session", "session_id": "someone-else-session"}')
+        frame = ws.receive_json()
+
+        assert frame["type"] == "need_login"
+        assert frame["error_code"] == "AUTH_REQUIRED"

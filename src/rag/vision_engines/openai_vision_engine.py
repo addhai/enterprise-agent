@@ -2,21 +2,21 @@
 
 兼容 OpenAI 格式的视觉理解引擎，支持 GPT-4V、GPT-4o 等模型。
 """
+
 from __future__ import annotations
 
 import base64
 import logging
 import os
 from pathlib import Path
-from typing import Optional
 
-from src.rag.vision_engines.base import BaseVisionEngine, VisionResult
 from src.rag.vision_engines import VisionEngineRegistry
+from src.rag.vision_engines.base import BaseVisionEngine, VisionResult
 
 logger = logging.getLogger(__name__)
 
 
-@register_vision_engine("openai")
+@VisionEngineRegistry.register_vision("openai")
 class OpenAIVisionEngine(BaseVisionEngine):
     """OpenAI GPT-4V 视觉理解引擎
 
@@ -34,8 +34,8 @@ class OpenAIVisionEngine(BaseVisionEngine):
         self,
         image_path: str,
         image_type: str,
-        prompt: Optional[str] = None,
-    ) -> Optional[VisionResult]:
+        prompt: str | None = None,
+    ) -> VisionResult | None:
         try:
             from openai import OpenAI
         except ImportError:
@@ -64,16 +64,21 @@ class OpenAIVisionEngine(BaseVisionEngine):
 
             response = client.chat.completions.create(
                 model=model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_prompt},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:{mime_type};base64,{image_b64}",
-                            "detail": "high",
-                        }},
-                    ],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": user_prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime_type};base64,{image_b64}",
+                                    "detail": "high",
+                                },
+                            },
+                        ],
+                    }
+                ],
                 max_tokens=2048,
                 temperature=0.0,
                 timeout=timeout,
@@ -94,12 +99,17 @@ class OpenAIVisionEngine(BaseVisionEngine):
     def _build_default_prompt(self, image_type: str) -> str:
         # 复用 Qwen 的默认提示
         from src.rag.vision_engines.qwen_vision_engine import QwenVisionEngine
+
         return QwenVisionEngine._build_default_prompt(None, image_type)
 
     def _get_mime_type(self, image_path: str) -> str:
         ext = Path(image_path).suffix.lower()
         mime_map = {
-            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-            ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
         }
         return mime_map.get(ext, "image/png")

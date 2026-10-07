@@ -758,7 +758,8 @@ interface ChatCitation {
   kb_id?: string
   // PDF 语料 chunk 的物理页码（1 起），md 等非 PDF 来源为 null/undefined
   page?: number | null
-  // 6.4 章节面包屑，形如「1. 概述 / 2.1 认证方式」；老块/无章节语料缺省
+  // 6.4 章节面包屑，outline 切块时写入，形如「1. 概述 / 2.1 认证方式」；
+  // 老索引块与无章节语料为 null/undefined，前端不占位
   chapter_path?: string | null
 }
 
@@ -789,10 +790,13 @@ const QUICK_QUESTIONS = [
   { icon: '', text: '查看系统架构' },
 ]
 
-function FloatingChatWidget({ user, token }: { user: User | null; token: string | null }) {
+function FloatingChatWidget({ user, token, onLoginClick }: { user: User | null; token: string | null; onLoginClick: () => void }) {
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
+  // 匿名引导登录（产品方向 B）：未登录用户的业务动作被后端 need_login 挡回后置真，
+  // 输入区上方显示登录引导条；登录拿到 token 后自动清除。
+  const [authBlocked, setAuthBlocked] = useState(false)
   const [connected, setConnected] = useState(false)
   const [connecting, setConnecting] = useState(true)
   const [isTyping, setIsTyping] = useState(false)
@@ -819,6 +823,9 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
   })
 
   const wsRef = useRef<WebSocket | null>(null)
+  // 标记下一条 need_login 是否由 onopen 的自动 resume 触发。
+  // 自动 resume 引发的拒绝要静默（只置引导态），用户尚未主动发问，不该弹消息。
+  const autoResumeRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -837,6 +844,9 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, isTyping])
 
+  // 登录拿到 token 后解除匿名拦截态；登出回到匿名态时重新置位
+  useEffect(() => { setAuthBlocked(!token) }, [token])
+
   useEffect(() => {
     if (!userId) return
     // 已登录则把 JWT 拼到 WS URL（浏览器 WebSocket 无法设 Authorization 头，用 query 最稳）；
@@ -849,6 +859,7 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
       setConnected(true); setConnecting(false); inputRef.current?.focus()
       const savedSessionId = localStorage.getItem('session_id')
       if (savedSessionId) {
+        autoResumeRef.current = true
         ws.send(JSON.stringify({ type: 'resume_session', session_id: savedSessionId, user_id: userId, token: token || undefined }))
       }
     }
@@ -883,6 +894,15 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
         } else if (data.type === 'transfer_notice') { if (!humanEscalated) setHumanEscalated(true); setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '正在为您转接人工客服...', timestamp: Date.now() }]); setIsTyping(false) }
         else if (data.type === 'handoff_context') { setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '转接上下文已记录', timestamp: Date.now() }]); setIsTyping(false) }
         else if (data.type === 'message_received') { setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '消息已发送给人工客服', timestamp: Date.now() }]) }
+        else if (data.type === 'need_login') {
+          // 后端身份守卫：匿名动作被挡。自动 resume 引发的静默处理，
+          // 用户主动发问/转人工引发的推一条可见引导。
+          setAuthBlocked(true); setIsTyping(false)
+          if (!autoResumeRef.current) {
+            setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: data.message || '请先登录后再向知识库提问', timestamp: Date.now() }])
+          }
+          autoResumeRef.current = false
+        }
         else if (data.type === 'info') { setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: data.text || '', timestamp: Date.now() }]); setIsTyping(false) }
         else if (data.type === 'error') { setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: data.error_message || '发生错误', timestamp: Date.now() }]); setIsTyping(false) }
       } catch { /* ignore */ }
@@ -929,6 +949,12 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
   const sendMessage = () => {
     const text = input.trim()
     if ((!text && !imagePreview && !audioPreview) || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    // 匿名乐观拦截：未登录不向服务端发问答，直接在本地给出登录引导
+    if (!token) {
+      setAuthBlocked(true); setInput('')
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '当前为匿名会话，请登录后再向知识库提问', timestamp: Date.now() }])
+      return
+    }
     setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', content: text || (imagePreview ? '[图片]' : '[语音]'), timestamp: Date.now(), image: imagePreview || undefined, audio: audioPreview || undefined }])
     wsRef.current.send(JSON.stringify({ type: 'chat_message', message: text || '[图片消息]', session_id: sessionId, user_id: userId, token: token || undefined, image_base64: imagePreview, audio_base64: audioPreview }))
     setInput(''); setImagePreview(null); setAudioPreview(null); setIsTyping(true); inputRef.current?.focus()
@@ -938,6 +964,7 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
 
   const handleHumanEscalate = (_msgId: string) => {
     if (humanEscalated || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    if (!token) { setAuthBlocked(true); return }
     setHumanEscalated(true)
     wsRef.current.send(JSON.stringify({ type: 'human_escalation', session_id: sessionId, user_id: userId, reason: 'user_requested' }))
     setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '正在为您转接人工客服...', timestamp: Date.now() }])
@@ -1198,7 +1225,9 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
                                 <span className="chat-citation-score">匹配度 {(c.score ?? 0).toFixed(3)}</span>
                               </div>
                               {c.chapter_path && (
-                                <div className="chat-citation-chapter" title={c.chapter_path}>{c.chapter_path}</div>
+                                <div className="chat-citation-chapter" title={c.chapter_path}>
+                                  {c.chapter_path}
+                                </div>
                               )}
                               {c.content && <div className="chat-citation-content">{c.content}</div>}
                             </div>
@@ -1228,6 +1257,13 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
               <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <img src={imagePreview} alt="" style={{ height: 40, borderRadius: 6 }} />
                 <button className="chat-panel-action-btn" onClick={removeImage}>&times;</button>
+              </div>
+            )}
+
+            {authBlocked && !token && (
+              <div className="chat-login-gate" data-testid="chat-login-gate">
+                <span className="chat-login-gate-text">登录后即可向设备知识库提问</span>
+                <button className="chat-login-gate-btn" data-testid="chat-login-btn" onClick={onLoginClick}>去登录</button>
               </div>
             )}
 
@@ -1345,7 +1381,7 @@ function App() {
         <TechDetailsSection />
         <CTASection />
         <Footer />
-        <FloatingChatWidget user={user} token={token} />
+        <FloatingChatWidget user={user} token={token} onLoginClick={() => setAuthModalOpen(true)} />
         <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} onLoginSuccess={handleLoginSuccess} />
         <ProfileModal isOpen={profileModalOpen} onClose={() => setProfileModalOpen(false)} user={user} onLogout={() => { setProfileModalOpen(false); handleLogout() }} />
       </div>

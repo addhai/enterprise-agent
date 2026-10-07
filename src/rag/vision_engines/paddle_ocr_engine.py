@@ -1,16 +1,16 @@
 """PaddleOCR 引擎"""
+
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from src.rag.vision_engines.base import BaseOCREngine
 from src.rag.vision_engines import VisionEngineRegistry
+from src.rag.vision_engines.base import BaseOCREngine
 
 logger = logging.getLogger(__name__)
 
 
-@register_ocr("paddle")
+@VisionEngineRegistry.register_ocr("paddle")
 class PaddleOCREngine(BaseOCREngine):
     """PaddleOCR 文字识别引擎
 
@@ -21,9 +21,10 @@ class PaddleOCREngine(BaseOCREngine):
     def name(self) -> str:
         return "paddle_ocr"
 
-    def recognize(self, image_path: str) -> Optional[str]:
+    def recognize(self, image_path: str) -> str | None:
         try:
             from paddleocr import PaddleOCR
+
             ocr = PaddleOCR(use_angle_cls=True, lang="ch")
             result = ocr.ocr(image_path, cls=True)
             if result and result[0]:

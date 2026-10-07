@@ -58,10 +58,12 @@ addopts = [
     "--cov=src",
     "--cov-report=term-missing",
     "--cov-report=xml",
-    # 失败门槛：实测 CI 裸环境（无 Key、无 .env、requires_llm 自动跳过）覆盖率
-    # 约 48%（828 passed / 17 skipped）。取 40 作为基线，预留环境波动余量；
-    # 测试逐步补全后再上调。CI 用同样的 --cov-fail-under，本地 make test 与 CI 一致。
-    "--cov-fail-under=40",
+    # 失败门槛：CI run 37680938689（HEAD f9ab0cf，1596 passed / 16 skipped）
+    # 上传的 coverage.xml 实测 line-rate 0.6653（10845/16302 行）。阶段 2 开门周
+    # 把基线一次抬到 60，高于阶段 1 收口目标 55，并保留约 6.5 个点的环境波动余量。
+    # CI Run tests 步骤用 --cov-fail-under=0 只判用例成败，真正卡门槛的是
+    # Coverage gate 步骤的 `coverage report`，其数字以 [tool.coverage.report] 为准。
+    "--cov-fail-under=60",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -90,8 +92,9 @@ omit = [
 ]
 
 [tool.coverage.report]
-# 显式声明目标，配合 --cov-fail-under 作为单一真相
-fail_under = 40
+# 单一真相：CI Coverage gate 步骤跑 `coverage report` 读这里的 fail_under。
+# 60 = 阶段 2 开门周基线，依据 CI run 37680938689 实测行覆盖率 66.53%。
+fail_under = 60
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
