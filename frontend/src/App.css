@@ -1139,6 +1139,15 @@
   color: var(--brand-teal);
   font-variant-numeric: tabular-nums;
 }
+.chat-citation-chapter {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .chat-citation-content {
   margin-top: 4px;
   font-size: 12px;

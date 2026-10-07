@@ -758,6 +758,8 @@ interface ChatCitation {
   kb_id?: string
   // PDF 语料 chunk 的物理页码（1 起），md 等非 PDF 来源为 null/undefined
   page?: number | null
+  // 6.4 章节面包屑，形如「1. 概述 / 2.1 认证方式」；老块/无章节语料缺省
+  chapter_path?: string | null
 }
 
 interface ChatMessage {
@@ -1195,6 +1197,9 @@ function FloatingChatWidget({ user, token }: { user: User | null; token: string 
                                 )}
                                 <span className="chat-citation-score">匹配度 {(c.score ?? 0).toFixed(3)}</span>
                               </div>
+                              {c.chapter_path && (
+                                <div className="chat-citation-chapter" title={c.chapter_path}>{c.chapter_path}</div>
+                              )}
                               {c.content && <div className="chat-citation-content">{c.content}</div>}
                             </div>
                           ))}

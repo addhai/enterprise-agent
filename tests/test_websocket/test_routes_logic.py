@@ -258,6 +258,31 @@ def test_build_citations_bad_page_coerces_none():
     assert cites[1]["page"] is None
 
 
+def test_build_citations_chapter_path_passthrough():
+    # 6.4：outline 写入的 chapter_path 原样透出，老块/无章节语料降级 None
+    docs = [
+        Document(
+            page_content="a",
+            metadata={"title": "手册", "chapter_path": "1. 概述 / 2.1 认证方式"},
+        ),
+        Document(page_content="b", metadata={"title": "md文档"}),
+    ]
+    cites = _build_citations(docs)
+    assert cites[0]["chapter_path"] == "1. 概述 / 2.1 认证方式"
+    assert cites[1]["chapter_path"] is None
+
+
+def test_build_citations_blank_chapter_path_is_none():
+    # 空白章节路径与非字符串脏值安全降级为 None，不向前端吐空串
+    docs = [
+        Document(page_content="a", metadata={"chapter_path": "   "}),
+        Document(page_content="b", metadata={"chapter_path": 123}),
+    ]
+    cites = _build_citations(docs)
+    assert cites[0]["chapter_path"] is None
+    assert cites[1]["chapter_path"] == "123"
+
+
 # ===========================================================================
 # _resolve_ws_identity
 # ===========================================================================

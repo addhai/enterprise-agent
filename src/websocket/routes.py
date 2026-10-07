@@ -580,6 +580,12 @@ def _build_citations(retrieved_docs) -> list[dict[str, Any]]:
             page = int(page) if page is not None else None
         except (TypeError, ValueError):
             page = None
+        # 6.4 章节面包屑：outline 切块时写入 metadata["chapter_path"]，
+        # 形如「1. 概述 / 2.1 认证方式」。老索引块、无章节结构语料可能缺
+        # 该键，统一输出 None，前端不占位。
+        chapter_path = meta.get("chapter_path")
+        if chapter_path is not None:
+            chapter_path = str(chapter_path).strip() or None
         content = getattr(d, "page_content", None) or ""
         content = content[:500] if isinstance(content, str) else str(content)[:500]
         try:
@@ -604,6 +610,7 @@ def _build_citations(retrieved_docs) -> list[dict[str, Any]]:
                 "doc_id": doc_id,
                 "kb_id": kb_id,
                 "page": page,
+                "chapter_path": chapter_path,
             }
         )
     return citations
