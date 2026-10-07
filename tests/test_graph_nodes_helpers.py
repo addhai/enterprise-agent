@@ -1,5 +1,7 @@
 """graph/nodes.py 纯逻辑 helper 单元测试（确定性，不触网/不依赖 LLM）"""
 
+from types import SimpleNamespace
+
 from src.graph.nodes import (
     _detect_missing_info,
     _detect_negative_emotion,
@@ -9,7 +11,12 @@ from src.graph.nodes import (
     _looks_like_react_output,
     _rewrite_query,
     _try_infer_from_memory,
+    query_corpus_bigram_overlap,
 )
+
+
+def _doc(text):
+    return SimpleNamespace(page_content=text)
 
 
 class TestIsNonsensicalInput:
@@ -130,3 +137,54 @@ class TestDetectNegativeEmotion:
 
     def test_empty(self):
         assert _detect_negative_emotion("") is None
+
+    def test_operation_word_not_anger_gp04_gp07(self):
+        # 单字「操」误伤回归（金标题 GP04/GP07 实测）：
+        # 正常「操作/操作步骤」不得被判为愤怒转人工
+        assert _detect_negative_emotion("一个校准点的数据采集怎么操作") is None
+        assert _detect_negative_emotion("设置高温报警阈值的按键操作步骤") is None
+
+    def test_explicit_profanity_still_detected(self):
+        # 收紧词表后明确脏话仍要检出
+        assert _detect_negative_emotion("这破东西操蛋得很") == "愤怒"
+        assert _detect_negative_emotion("操你妈的破系统") == "愤怒"
+
+
+class TestQueryCorpusBigramOverlap:
+    def test_gr05_printer_near_zero(self):
+        # GR05 实测：打印机/卡纸在测温语料零出现，仅「激光」偶命中
+        docs = [
+            _doc("T100 红外测温仪激光定位说明与常见故障维修条目"),
+        ]
+        ratio = query_corpus_bigram_overlap(
+            "顺便问一下，我办公室的激光打印机卡纸了怎么修？", docs
+        )
+        assert ratio < 0.12
+
+    def test_gp04_calibration_high_overlap(self):
+        # GP04 实测：校准/读数/稳定/仪器/设置在召回语料高频
+        docs = [
+            _doc(
+                "专业黑体校准一个校准点的数据采集：仪器发射率设置，"
+                "读数次数连续10次，稳定判据为读数稳定"
+            ),
+        ]
+        ratio = query_corpus_bigram_overlap(
+            "专业黑体校准时一个校准点的数据采集怎么操作（仪器设置、读数次数、稳定判据）",
+            docs,
+        )
+        assert ratio > 0.3
+
+    def test_english_token_match(self):
+        docs = [_doc("ThermoView T100 supports USB data export to CSV files.")]
+        ratio = query_corpus_bigram_overlap("T100 USB CSV export?", docs)
+        assert ratio >= 0.5
+
+    def test_no_content_words_returns_one(self):
+        # 提不出实词时返回 1.0，宁可不收口也不误伤
+        assert query_corpus_bigram_overlap("怎么？", [_doc("无关内容")]) == 1.0
+        assert query_corpus_bigram_overlap("", [_doc("无关内容")]) == 1.0
+
+    def test_empty_docs_zero_overlap(self):
+        ratio = query_corpus_bigram_overlap("打印机卡纸怎么修", [])
+        assert ratio == 0.0

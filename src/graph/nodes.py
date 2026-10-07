@@ -47,6 +47,11 @@ from src.rag.call_policy import (
     resolve_mode,
     warn_if_over_budget,
 )
+from src.safety.topic_guard import (
+    OUT_OF_SCOPE_RESPONSE,
+    enforce_topic_guard,
+    has_refusal_signal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -519,7 +524,12 @@ def _detect_negative_emotion(content: str) -> str | None:
         "狗屎",
         "他妈",
         "卧槽",
-        "操",
+        # 只能收明确脏话组合，禁止用单字「操」：子串匹配会误伤极高频
+        # 正常词「操作/操作步骤」（实测 GP04 黑体校准操作、GP07 按键操作
+        # 步骤被误判愤怒直接转人工）。「操你/操他/操蛋」不与「操作」共现。
+        "操你",
+        "操他",
+        "操蛋",
         "shit",
         "fuck",
         "damn",
@@ -683,7 +693,15 @@ def router_node(state: AgentState) -> dict[str, Any]:
 
 
 def faq_node(state: AgentState) -> dict[str, Any]:
-    """FAQ 节点：尝试从常见问题库匹配答案，未匹配时用 LLM + 对话历史回答"""
+    """FAQ 节点：只做本地常见问题库的确定性匹配。
+
+    硬约束（2026-10-07 金标题库 GR01 等 12 题实测驱动）：
+        未命中必须返回 faq_match=None，由 workflow 的 _decide_after_faq
+        边路由到 rag 节点走真实检索。此前未命中时用 LLM 无资料裸答，
+        导致医疗越界（GR01 编造「额温 37.3℃ 算发烧」）、规格参数编造
+        （GF06 量程、GF16 电池容量等共 12 题零引用幻觉），整条绕过 RAG。
+        提示词里的「不要编造」约束不住 7B 的参数化知识冲动，故删除该分支。
+    """
     messages = state.get("messages", [])
     last_message = messages[-1]
     content = (
@@ -694,40 +712,7 @@ def faq_node(state: AgentState) -> dict[str, Any]:
 
     if result:
         return {"faq_match": result, "needs_human": False}
-    else:
-        try:
-            llm = _get_intent_llm()
-            history_text = ""
-            if len(messages) > 1:
-                history_parts = []
-                for msg in messages[:-1]:
-                    if isinstance(msg, HumanMessage):
-                        history_parts.append(f"用户: {msg.content}")
-                    elif isinstance(msg, AIMessage):
-                        history_parts.append(f"客服: {msg.content}")
-                history_text = "\n".join(history_parts)
-
-            system_prompt = (
-                "你是工业设备产品的智能技术支持助手。请根据对话历史回答用户的问题。\n"
-                "如果是关于设备使用、故障排查、保养校准等问题，尽量简洁回答；"
-                "涉及具体型号、参数、故障代码等你不确定的事实，不要编造，"
-                "诚实说明不确定并建议用户提供型号或具体现象。\n"
-                "如果是闲聊或身份确认类问题，根据对话历史友好回应。"
-            )
-
-            user_prompt = f"{system_prompt}\n\n"
-            if history_text:
-                user_prompt += f"对话历史:\n{history_text}\n\n"
-            user_prompt += f"用户当前问题: {content}\n\n请回答:"
-
-            response = llm.invoke(user_prompt)
-            answer = response.content.strip()
-            return {"faq_match": answer, "needs_human": False, "faq_from_llm": True}
-        except Exception as e:
-            if isinstance(e, WorkflowCancelled):
-                raise
-            logger.warning(f"FAQ fallback LLM failed: {e}")
-            return {"faq_match": None}
+    return {"faq_match": None, "needs_human": False}
 
 
 # ======================================================================
@@ -822,6 +807,71 @@ def _count_agent_kb_searches(messages: list) -> int:
     return count
 
 
+# 库外收口窄化判据（2026-10-07 金标题 GP04 误伤驱动）。
+# 仅靠「直答自认未覆盖 + ReAct 零检索」会误杀高相关库内题（GP04 预检索
+# top1 向量相似度 0.647、校准语料高相关，但 7B 直答保守地说「未找到」，
+# 回落 ReAct 又偷懒零检索）。故追加两个确定性条件，四者同时成立才收口：
+#   1. 预检索 top1 相似度低于此地板（GR05 打印机实测 0.463；GP04 0.647）
+#   2. query 实词 2-gram 在召回语料的命中率低于此比例（GR05 约 0.05~0.10，
+#      「打印机/卡纸」语料零出现；GP04 约 0.55，「校准/读数/稳定」高频）
+# 50 题实测纯向量相似度对库外不可分（GR05 0.463 与正常题 GF15 0.465、
+# GF16 0.464、GP02 0.460 混叠），词面覆盖用来解这个混叠。
+_OUT_OF_SCOPE_SIM_FLOOR = 0.50
+_OUT_OF_SCOPE_LEXICAL_RATIO = 0.12
+
+# 中文 2-gram 里的疑问/客套停用组合，不计入实词覆盖
+_LEXICAL_STOP_BIGRAMS = frozenset(
+    {
+        "怎么",
+        "一个",
+        "我们",
+        "你们",
+        "你好",
+        "请问",
+        "一下",
+        "可以",
+        "应该",
+        "需要",
+        "如何",
+        "什么",
+        "多少",
+        "哪里",
+        "为什",
+        "顺便",
+        "问一",
+    }
+)
+
+
+def query_corpus_bigram_overlap(query: str, docs: list) -> float:
+    """query 实词在召回文档全文中的 2-gram 命中率，用于库外确定性判定。
+
+    中文取去停用的相邻两字 bigram，英文/数字取长度≥2 的整体词。
+    返回命中数 / 实词数；提不出实词时返回 1.0（无法判定，按相关处理，
+    宁可漏收口也不误伤）。纯函数，无 IO、无分词依赖。
+    """
+    # CJK 统一表意文字 U+4E00-U+9FFF
+    zh_chars = "".join(re.findall(r"[一-鿿]", query or ""))
+    grams: set[str] = set()
+    for i in range(len(zh_chars) - 1):
+        gram = zh_chars[i : i + 2]
+        if gram not in _LEXICAL_STOP_BIGRAMS:
+            grams.add(gram)
+    for token in re.findall(r"[a-zA-Z0-9]+", query or ""):
+        if len(token) >= 2:
+            grams.add(token.casefold())
+    if not grams:
+        return 1.0
+
+    corpus_parts = []
+    for doc in docs or []:
+        content = getattr(doc, "page_content", None)
+        corpus_parts.append(content if isinstance(content, str) else str(doc))
+    corpus = "".join(corpus_parts).casefold()
+    hit = sum(1 for gram in grams if gram in corpus)
+    return hit / len(grams)
+
+
 def _direct_answer_without_retrieval(
     content: str, history: list, mode: str
 ) -> dict[str, Any]:
@@ -876,14 +926,19 @@ def _direct_synthesize_with_docs(
     mode: str,
     retrieval_decided_by: str,
     retrieval_count: int,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str]:
     """高置信命中直答：不构建工具 Agent，单次 LLM 调用直接依据预检索资料合成。
 
     用于绕过 7B 模型在多工具 ReAct 下的误路由/不收敛（生产实测：F02 检索 top1
     相似度 0.55，资料含正确答案，Agent 仍 5 轮空转走兜底）。
 
-    返回 None 表示直答不可用（LLM 异常 / 空输出 / 模型自认答不出），
-    调用方必须回落 ReAct Agent，不得把失败信号直接发用户。
+    返回 ``(result, reason)``。result 非 None 时 reason 为空串；直答不可用时
+    result 为 None，reason 取值：
+      - ``"llm_error"``  LLM 调用异常
+      - ``"empty"``      模型返回空串
+      - ``"uncovered"``  模型自认资料未覆盖（命中 _DIRECT_UNANSWERED_MARKERS）。
+        该信号是高质量的库外证据（注入资料后模型仍说没有），调用方回落
+        ReAct 后应保留它，供输出侧库外收口双信号使用（GR05 缺陷修复）。
     """
     try:
         llm = _get_intent_llm()
@@ -900,14 +955,14 @@ def _direct_synthesize_with_docs(
         if isinstance(e, WorkflowCancelled):
             raise
         logger.warning("高置信直答异常，回落 ReAct Agent：%s", e)
-        return None
+        return None, "llm_error"
 
     if not output:
         logger.info("高置信直答返回空，回落 ReAct Agent")
-        return None
+        return None, "empty"
     if any(marker in output for marker in _DIRECT_UNANSWERED_MARKERS):
         logger.info("高置信直答模型自认资料未覆盖，回落 ReAct Agent：%s", output[:60])
-        return None
+        return None, "uncovered"
 
     logger.info(
         "[kb_call_mode=%s] 高置信直答命中，旁路 ReAct：decided_by=%s docs=%d",
@@ -930,7 +985,7 @@ def _direct_synthesize_with_docs(
         # 资料事实直答，reflect 的二次 LLM 审核既慢（CPU 多一次数分钟调用）
         # 又可能改坏答案，显式标记让 reflect_node 跳过（与 tool_sourced 同例）。
         "has_reflected": True,
-    }
+    }, ""
 
 
 # ======================================================================
@@ -1017,6 +1072,39 @@ def rag_node(
         logger.info("[kb_call_mode=never] decided_by=never retrieval_count=0")
         return _direct_answer_without_retrieval(content, history, mode)
 
+    # ==================================================================
+    # 前置话题硬闸门（2026-10-07 GR03 复测超时驱动前移）
+    # ------------------------------------------------------------------
+    # 四类确定性禁区（医疗/火焰/防爆/越权校准）语料有明文禁令，标准话术
+    # 就是禁令口径，没必要再花一次 embedding + 直答 + ReAct（生产 CPU 实测
+    # 350~400s，且清空注入后 ReAct 多轮会爆 600s 超时）。在任何检索与 LLM
+    # 之前直接收口，零引用、零幻觉、毫秒级。
+    # 输出侧闸门与 reply 最终防线保留作纵深防御（覆盖 never 模式与
+    # faq 命中等其他入口）。库外问题（GR05）不命中话题词，仍走下方
+    # 「直答未覆盖 + ReAct 零检索」双信号收口，不在此前置。
+    # ==================================================================
+    pre_guard = enforce_topic_guard(content, "")
+    if pre_guard.blocked:
+        logger.warning(
+            "前置话题护栏收口 topic=%s question=%s",
+            pre_guard.topic,
+            content[:60],
+        )
+        return {
+            "needs_human": False,
+            "tool_sourced": False,
+            "final_response": pre_guard.response,
+            "retrieved_docs": [],
+            "quality_score": 0.2,
+            "answer_status": "refused",
+            "kb_call_mode": mode,
+            "retrieval_decided_by": "topic_guard",
+            "retrieval_count": 0,
+            "answer_path": "topic_guard",
+            "safety_guard_topic": pre_guard.topic,
+            "has_reflected": True,
+        }
+
     if retriever is not None:
         if mode == MODE_ALWAYS:
             try:
@@ -1087,6 +1175,14 @@ def rag_node(
     #   - smart ：仅限 score 判据命中（rule/fallback 不旁路，保持语义一致）
     # 任何不满足/直答失败的情形都继续走下方 Agent，行为可回退。
     # ==================================================================
+    # direct_reason：直答自认未覆盖时为 "uncovered"，供输出侧库外收口双信号
+    direct_reason = ""
+    # uncovered_fallback：直答看注入资料自认未覆盖后回落 ReAct，
+    # 此时已清空 agent_input 强制 ReAct 自主检索（见下方分支）
+    uncovered_fallback = False
+    # uncovered 回落时预检索 top1 相似度，供库外收口窄化判定；
+    # 默认 1.0 保证未走该分支时绝不因分数条件收口
+    uncovered_top_sim = 1.0
     if (
         getattr(settings, "kb_direct_answer_enabled", False)
         and pre_retrieved_docs
@@ -1103,7 +1199,7 @@ def rag_node(
         ]
         top_sim = max(top_sims, default=0.0)
         if top_sim >= float(settings.kb_direct_answer_threshold):
-            direct = _direct_synthesize_with_docs(
+            direct, direct_reason = _direct_synthesize_with_docs(
                 content,
                 history,
                 pre_retrieved_docs,
@@ -1113,7 +1209,22 @@ def rag_node(
             )
             if direct is not None:
                 return direct
-            # direct is None：helper 内部已记录原因，继续走 Agent 安全网
+            # direct 为 None：helper 内部已记录原因（direct_reason），
+            # 继续走 Agent 安全网。
+            # GR05 修复策略（经真机两轮校准后的最终形态）：
+            #   回落时保留预检索资料注入（不重置 agent_input）。早期版本
+            #   曾在此清空注入以「强制自主检索」，但实测 GP04 高相关库内题
+            #   7B 直答也会保守说未覆盖，清空后 ReAct 又偷懒零检索，反而无
+            #   资料可用、输出空骨架并丢引用。库外与否统一交给输出侧四信号
+            #   判定（sim 地板 + 词面覆盖 + 零检索 + 无拒答词），真库外在
+            #   那里收口并整体清空引用，此处不提前破坏库内题的资料供给。
+            if direct_reason == "uncovered":
+                uncovered_fallback = True
+                uncovered_top_sim = top_sim
+                logger.info(
+                    "直答自认未覆盖(top_sim=%.3f)，回落 ReAct，保留注入资料",
+                    top_sim,
+                )
         else:
             logger.info(
                 "top_sim=%.3f 低于直答门槛 %.2f，走 ReAct Agent",
@@ -1263,6 +1374,10 @@ def rag_node(
     # Phase5 §2.5：预检索/探测结果 + Agent 中间步骤文档 + 资源工具文档，
     # 在唯一合并点做内容级去重（sha1 全文指纹 + doc_id|page 辅键，同键留高分）。
     agent_retrieved_docs = _extract_retrieved_docs(result.get("intermediate_steps", []))
+    # 预检索文档始终参与引用合并（含 uncovered 回落）：库内高相关题（GP04）
+    # 需要这些真实相关文档作引用。真库外（GR05）的引用污染由输出侧四信号
+    # 收口时整体 retrieved_docs=[] 清除，不靠在这里提前剔除（提前剔除会让
+    # 库内题丢引用）。
     retrieved_docs = dedup_docs(
         list(pre_retrieved_docs) + (agent_retrieved_docs or []) + tool_docs
     )
@@ -1371,6 +1486,61 @@ def rag_node(
         except Exception:
             logger.debug("Hallucination check skipped", exc_info=True)
 
+    # ==================================================================
+    # 输出侧安全硬闸门（2026-10-07 金标题库 GR01/GR02/GR04/GR05 实测驱动）
+    # ------------------------------------------------------------------
+    # 背景：REACT_SYSTEM_PROMPT 规则 2/7 只做行为约束，7B 会被诱导突破
+    # （GR02 语料有禁令仍答「550℃ 以内可以测」；GR04 给出改增益步骤；
+    #  GR05 无资料编造断电重启并挂 4 条无关引用）。故在唯一出答案点
+    # 用确定性规则收口，零 LLM 调用。
+    #   闸门 1 话题：输入命中用途禁区/越权校准 AND 输出无拒答信号 →
+    #       替换语料口径标准话术，清空引用（禁止编造配权威引用）。
+    #   闸门 2 库外（四信号合取，刻意收窄防误伤）：直答看注入资料自认
+    #       未覆盖（uncovered_fallback），回落时已清空注入强制 ReAct 自主
+    #       检索；ReAct 仍零工具调用 AND 无资源工具结果 AND 输出无拒答词
+    #       AND 预检索 top1 相似度 < 地板 AND query 实词在召回语料命中率
+    #       极低（话题实体在知识库近乎零出现）→ 判真库外收口。
+    #       GP04 误伤教训：高相关库内题（sim 0.647、校准词高频）7B 直答也
+    #       会保守说未覆盖、ReAct 也会偷懒零检索，故行为两信号不足以定库外，
+    #       必须叠加相似度地板与词面覆盖两个确定性证据。
+    # 两种收口都标记 has_reflected=True 跳过 reflect 二次 LLM 改写，
+    # 避免标准话术被改坏，并省下 CPU 上一次数分钟的审核调用。
+    # ==================================================================
+    safety_topic = ""
+    guard = enforce_topic_guard(content, output)
+    lexical_overlap = query_corpus_bigram_overlap(content, pre_retrieved_docs)
+    _out_of_scope = (
+        uncovered_fallback
+        and _agent_searches == 0
+        and not tool_docs
+        and not has_refusal_signal(output)
+        and uncovered_top_sim < _OUT_OF_SCOPE_SIM_FLOOR
+        and lexical_overlap < _OUT_OF_SCOPE_LEXICAL_RATIO
+    )
+    if guard.blocked:
+        logger.warning(
+            "输出侧话题护栏拦截 topic=%s question=%s",
+            guard.topic,
+            content[:60],
+        )
+        output = guard.response
+        retrieved_docs = []
+        is_refusal = True
+        quality_score = 0.2
+        safety_topic = guard.topic
+    elif _out_of_scope:
+        logger.warning(
+            "库外四信号收口：top_sim=%.3f 词面覆盖=%.2f question=%s",
+            uncovered_top_sim,
+            lexical_overlap,
+            content[:60],
+        )
+        output = OUT_OF_SCOPE_RESPONSE
+        retrieved_docs = []
+        is_refusal = True
+        quality_score = 0.2
+        safety_topic = "out_of_scope"
+
     return {
         "final_response": output,
         "needs_human": needs_human,
@@ -1384,6 +1554,10 @@ def rag_node(
         "retrieval_count": retrieval_count,
         # 答案合成路径：react_agent（高置信直答旁路见 _direct_synthesize_with_docs）
         "answer_path": "react_agent",
+        # 安全护栏命中类型（空串=未命中），供监控与金标题复测定位
+        "safety_guard_topic": safety_topic,
+        # 护栏收口话术是最终结论，跳过 reflect 二次 LLM 改写
+        "has_reflected": bool(safety_topic),
     }
 
 
@@ -1672,6 +1846,31 @@ def reply_node(state: AgentState, memory_manager=None) -> dict[str, Any]:
             "needs_human": False,
             "suggest_human": suggest_human,
             "failed_attempts": failed_attempts,
+        }
+
+    # ===== 安全护栏收口话术：原样送达，跳过一切"美化"后处理 =====
+    # 触发来源有两类：
+    #   1. rag_node 输出侧闸门已收口（state.safety_guard_topic 非空）；
+    #   2. 最终防线：faq 命中文本等其他路径漏网，此处对成品再过一次
+    #      话题闸门（纯函数、幂等，已含拒答词的答案会被放行）。
+    # 必须早于 quality_score<0.3 替换、统一精简、_is_refusal_response
+    # 三处后处理，否则明确禁令会被换成「答不上来」通用话术，丢失
+    # 「不能作为医疗设备 / 禁止进入校准模式」等安全含义（GR01/GR04 实测）。
+    reply_guard = enforce_topic_guard(last_message, final_response)
+    guard_topic = state.get("safety_guard_topic") or (
+        reply_guard.topic if reply_guard.blocked else ""
+    )
+    if guard_topic:
+        if reply_guard.blocked and not state.get("safety_guard_topic"):
+            logger.warning("reply 最终防线话题护栏拦截 topic=%s", reply_guard.topic)
+            final_response = reply_guard.response
+        return {
+            "final_response": final_response,
+            "needs_human": False,
+            "suggest_human": state.get("suggest_human", False),
+            "quality_score": quality_score,
+            "safety_guard_topic": guard_topic,
+            "failed_attempts": state.get("failed_attempts", 0),
         }
 
     # 如果检索置信度太低 → 友好回复，建议转人工（但不强制

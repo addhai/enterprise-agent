@@ -84,6 +84,8 @@
 
 **回归**：1529 passed / 17 skipped / 0 failed（203s）；ruff 0.9.0（target py310）check + format 全绿；`scripts/golden/reports/` 已入 .gitignore。
 
+**全量首跑结果 + GR01/GR05 修复（2026-10-07，详见 `docs/缺陷修复报告-GR01-GR05-金标题首跑-20261007.md`）**：50/50 全部有结果，17 pass / 33 fail，总延迟 avg 154.2s、p50 138.7s、p95 367.0s、max 412.3s。失题四桶：faq 无资料 LLM 裸答零引用编造 10 题（含 GR01/GF06/GF16 等）、情绪词单字「操」误伤「操作步骤」约 2s 强转人工 3 题（GP02/GP04/GP07）、RAG 路径越界/库外被诱导 3 题（GR02/GR04/GR05）、有引用但要点不全 17 题（含 GF02 判分偏严，属答案合成质量后续项）。修复：①新增 `src/safety/topic_guard.py` 纯函数话题硬护栏（医疗/火焰/防爆/越权校准，双条件「输入命中话题且输出无拒答词」，越权校准 A×B 组合），rag 前置零成本闸门 + reply 最终防线；②`faq_node` 删除 LLM 裸答，未命中确定性回落 RAG；③GR05 库外四信号合取收口（直答自认未覆盖 + ReAct 零检索 + 无拒答词 + top1 sim<0.50 且 query 实词 2-gram 语料命中<0.12），收口清空全部引用根治引用污染；④情绪词表收紧为明确脏话组合。真机 WS 复测 GR01-GR05 全 pass（GR03 从超时改善到 18.4s），GF01/GF19 无误伤，GF16 编造 10000mAh 纠正为真实 2600mAh。全量 pytest 绿（新增约 47 例），ruff 绿。遗留：GP04 安全缺陷已除但 7B 多要点程序题答案仍残缺（独立质量任务）；修复先 docker cp 热验证，后重建 `enterprise-agent-app-ollama:latest` 镜像固化。
+
 ---
 
 ## 2026-10-07 交付：CI 双红灯 + Q3 页码断链（代码已合入 a056bfe，CI run 37511886163 五 job 全绿）

@@ -105,3 +105,8 @@ class AgentState(TypedDict):
     # 答案合成路径：direct_synthesis（高置信直答旁路）/ react_agent /
     # direct_no_retrieval（never 模式直答）
     answer_path: str | None
+
+    # 输出侧安全护栏命中类型（2026-10-07）：空串未命中；
+    # medical_temperature / flame_temperature / explosion_zone /
+    # calibration_bypass / out_of_scope
+    safety_guard_topic: str | None
