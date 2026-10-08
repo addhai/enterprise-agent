@@ -33,6 +33,38 @@ def test_direct_answer_prompt_has_no_saas_brand():
     assert "CloudSync" not in _DIRECT_ANSWER_SYSTEM_PROMPT
 
 
+def test_direct_answer_prompt_requires_complete_coverage():
+    """直答提示词必须含完整性硬条款（2026-10-08 金标 7B 要点遗漏归因）
+
+    7B 旧版把「简洁直接」执行成提前收尾，条款必须具体可执行，
+    不能只写一句「要完整」。
+    """
+    assert "完整性优先于简短" in _DIRECT_ANSWER_SYSTEM_PROMPT
+    assert "逐点作答" in _DIRECT_ANSWER_SYSTEM_PROMPT
+    assert "禁止中途收尾" in _DIRECT_ANSWER_SYSTEM_PROMPT
+    assert "列出所有档位" in _DIRECT_ANSWER_SYSTEM_PROMPT
+    assert "先解释代码含义" in _DIRECT_ANSWER_SYSTEM_PROMPT
+    # 资料已给判据时禁止声称未给出（GP04 稳定判据漏写根因）
+    assert "禁止回答「未明确给出」" in _DIRECT_ANSWER_SYSTEM_PROMPT
+    # 完整性条款不得破坏无覆盖拒答兜底
+    assert "资料中未找到该问题的相关信息" in _DIRECT_ANSWER_SYSTEM_PROMPT
+    # few-shot 具体范例已于 2026-10-08 证伪：7B 照抄虚构事实污染真实答案
+    # （汽油/松香水禁忌被搬进 F01 答案），规则约束版不得复活问答范例
+    assert "回答格式示范" not in _DIRECT_ANSWER_SYSTEM_PROMPT
+    assert "汽油" not in _DIRECT_ANSWER_SYSTEM_PROMPT
+    for real_model in ("T90", "T100", "ThermoView", "ThermoSense"):
+        assert real_model not in _DIRECT_ANSWER_SYSTEM_PROMPT
+
+
+def test_react_prompt_requires_complete_coverage():
+    """ReAct 提示词同步含完整性条款，且旧的「不要长篇大论」压垮"""
+    assert "完整性优先于简短" in REACT_SYSTEM_PROMPT
+    assert "逐点作答" in REACT_SYSTEM_PROMPT
+    assert "禁止提前收尾" in REACT_SYSTEM_PROMPT
+    assert "不得声称「未明确给出」" in REACT_SYSTEM_PROMPT
+    assert "不要长篇大论" not in REACT_SYSTEM_PROMPT
+
+
 # ---- 静态 FAQ 库边界 -------------------------------------------------------
 
 

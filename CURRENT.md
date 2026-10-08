@@ -3,7 +3,7 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-08 下午（**M2 开门周已镜像固化并完成真机验证**：新镜像 `enterprise-agent-app-ollama:latest`=**8cf450cf2340**（旧 8835fc74b155 备份 tag `backup-pre-m2-openweek-20261008`），真机匿名三帧 need_login、登录态 F02 184.9s 答案 4/4 要点且 T90 PDF 第 5 页引用带出 chapter_path，8 容器 healthy；md 章戳 6.4.1 A+B 已合 3b3ee68 并完成生产卷重建与真机验证（检索双 100%、md 面包屑端到端贯通）。代码两 commit `02caab0`+`c6ece33`、文档 `0ea135d` 均在 origin/master，CI run 37700986762 五 job 全绿。详见下「2026-10-08 M2 开门周」。正式路线见 `docs/增量演进计划-2026Q4.md`）
+> 最后更新：2026-10-09 凌晨（**M2 生成质量攻坚收口并镜像固化**，50 题 36→**39/50** 净 +3，p50 157.2s）。新镜像 `enterprise-agent-app-ollama:latest`=**8b0ab6432965**（旧 8cf450cf2340 备份 tag `backup-pre-prompt-v1-20261009`），干净容器 GF05 真机 pass 292.2s、nodes.py/prompt.py MD5 双向一致、8 容器 healthy。prompt v1 完整性规则净修复 GF09/GS03；few-shot 具体范例因 7B 照抄虚构禁忌已证伪回退；GF15/GF20/GS06/GP02/GP09 随 md 细切与 v1 转 pass；GS01/GS02/GP06 三题探针实证为 chunk 细切 × 7B 跨块注意力的结构权衡，登记 M3 综合题专用编排。代码未 commit，待授权。详见下「2026-10-09」时间线。
 > 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
 
 ---
@@ -126,6 +126,24 @@
 
 ---
 
+## 2026-10-09 交付：M2 生成质量攻坚收口，50 题 36→39 pass，prompt v1 镜像固化
+
+**总账（全量真机 `scripts/golden/reports_prompt_v1_full/e2e_20261009_005939.json`，50 题串行，p50 157.2s）**：39/50，基线 36/50 净 +3。正向 6 题 GF09/GF15/GS03/GS06/GP02/GP09；3 个 `ConnectionClosedError: no close frame`（GF05/GS07/GR05）单题重测全 pass（GR05 拒答零引用正确），属 WS/ollama 长连接抖动非质量；仍 fail 8 题 GF02/GF20/GS10/GS11/GS14/GP03/GP04/GP05。
+
+**prompt v1（完整性规则，保留）**：`src/graph/nodes.py` `_DIRECT_ANSWER_SYSTEM_PROMPT` 由 5 条扩为 8 条（完整性优先于简短、逐点作答、流程禁中途收尾、各档参数列全、错误代码先解释含义、资料已给判据数字禁答「未明确给出」，简洁降为规则 6，拒答规则 7 不变），`src/agent/prompt.py` 行为约束第 1/10 条同步。20 题真机净修复 GF09/GS03、零回归、拒答 5/5 稳、p50 215.4→221.9s 持平。
+
+**few-shot v2 证伪回退**：规则后追加的具体问答范例（虚构「E2 探头中断 + 汽油/松香水禁忌」）致 7B 两次把虚构禁忌照抄进 GF01 真实答案，仅救回 GF02 一题，事实污染对工业维修是红线，净收益为负。已删除范例段，nodes.py:747-749 留归因注释，`tests/test_agent/test_persona.py` 加防复活断言（常量内禁含「回答格式示范/汽油/真实型号」）。结论：该 prompt 只留规则约束，不得加含具体事实的范例。
+
+**检索侧**：GF15（1mW rank2）、GF20（IP40 rank1）随 md 章戳细切新索引恢复，doc 均 product_spec_manual.md。GS11「电量低于 20%」7.2 充电块被 reranker top_n=5 压排（5 组 rerank_top_n/source_cap 参数纹丝不动，BM25 warmup 652 块 MRR 0.9388→0.9354 退化），判据经 maintenance_guide.md:423/:825 坐实不可改 gold，登记边界。另查实两个潜伏项：生产 BM25 内存索引从未构建（retriever.py:85 恒 None，混合检索长期只有向量一路）、默认无参构造 sentence_store=None（2834 句子块是否生效待核）。
+
+**反向 3 题归因（GS01/GS02/GP06，本次最关键辩证）**：三题在旧索引基线为 pass，全量翻 fail 后同 v1 重测全部稳定复现、答案逐字一致（temperature=0 确定性，排除随机）。生产同构 `HybridRetriever().search(top_k=5)` 探针 dump 最终注入全文，证实缺失料全部在上下文内：GS02 注入 5 块中 4 块是保修（PDF 第 7 页「整机保修期 12 个月」+faq+售后），模型只答 rank1 的 F02 维修步骤；GP06 rank1 明文「自签收之日起 7 天内」仍漏报「7 天」；GS01 冲突两版数字（500/550）都召回却只给「正确参数」未说「以规格书为准」。定性：md 细切提升精确定位题（白捡 4 题），但知识切成更小更纯的独立块后，7B 在 synthesis 跨块综合/判断题上只抓 rank1 强相关块、漏后续块关键结论，属检索粒度 × 小模型注意力的结构性权衡，检索供给健康、磨 prompt 边际已尽，需综合题专用编排（逐块抽要点再综合）或更大模型，登记 M3。
+
+**镜像固化（用户授权接受 39/50）**：tag 备份 `backup-pre-prompt-v1-20261009`=8cf450cf2340，定向 `compose build app`（依赖全缓存，41s）+ `up -d app` 干净重建，新 latest **8b0ab6432965**；容器内 nodes.py/prompt.py MD5 与宿主一致（f4a1b4da…/9382a4fd…），常量探针「完整性优先」在、「回答格式示范」0、「汽油」仅存于第 748 行归因注释。干净容器真机冒烟 GF05 pass 292.2s（384×288、17μm 正确），8 容器全 healthy。全量 pytest EXIT=0、覆盖率 66.20%、ruff 0.9.0 过。
+
+**附带性能发现（登记 M3，非本次退化）**：容器 env `OLLAMA_MAX_LOADED_MODELS=1` + `OLLAMA_NUM_PARALLEL=1`，bge-m3(1.2GB) 与 qwen2.5:7b(5.1GB) 互相挤占、逐轮重载；库外多轮题 GR05 冷态 615/662s 破 600s 墙、热态 450.0s 压线（旧容器 retry3 同值），常规直答题不受影响（292s）。评测期间宿主 127.0.0.1:8000 被另一项目 uvicorn 占用，评测统一走 `http://[::1]:8000` IPv6 绕行。
+
+---
+
 ## 2026-10-07 交付：CI 双红灯 + Q3 页码断链（代码已合入 a056bfe，CI run 37511886163 五 job 全绿）
 
 **CI-1 幽灵入口**：根目录 `main.py`（原型，gitignore :148）从未入库，`tests/test_ops/test_health.py:60` 却 `import main`，本地全绿、Linux CI 4 用例 ModuleNotFoundError。修复：`src/api/routes.py` 新增 `GET /api/v1/health/detail`（HTTP 恒 200，body.status=ok/degraded，含 database/vector_store/ollama/models 明细与 elapsed_ms；ollama 地址经 `_ollama_base_url()` 从 env 反推，超时 2s 预算），`/api/v1/health` 保持轻量探针不探依赖，测试 4 用例改写打正式端点；把 main.py 改名隐藏后跑 tests/test_ops 25 项全过（模拟 CI 环境），已还原。
@@ -241,6 +259,7 @@
 | 6 | ollama 为 CPU-only 构建（无 CUDA 后端，`total_vram="0 B"`）；直答已把单题压到 2 分钟级，进一步提速需换 CUDA 构建；`static/` 仍是 09-17 产物；A2A 探针 connection failed 仅告警 | 成本/低优 |
 | 7 | 阶段 1 三硬门全关：50 题 36/50 pass（10-08 凌晨节），修复固化镜像 8835fc74b155；题库 2026-10-08 整体冻结，frozen=true + questions.lock.json 内容锁 + pytest/eval 双守卫，改题走 MR+refresh。阶段 2 靶子：11 题 7B 生成要点不全、2 题检索（GF15/GF20） | 阶段 1 完成 |
 | 8 | M2 开门周完成并固化（镜像 8cf450cf2340，备份 backup-pre-m2-openweek-20261008）：6.4 chapter_path、覆盖率门禁 60、四 loader 25 例、5 处潜伏缺陷、匿名引导登录均真机通过。6.4.1 md 章戳治理 A+B 已生产卷重建（652/2834 全覆盖、备份 chroma_pre_md_chapter_20261008.tar.gz），金标检索双 100%（MRR 0.9388）、真机 md 面包屑贯通。后续：11 题生成质量（6.5/6.1）、2 题块级/表格检索（GF15/GF20）、观察切块增 4 倍后的 rerank 延迟 | 开门周+6.4.1 完成 |
+| 9 | M2 生成质量收口并固化（镜像 8b0ab6432965，备份 backup-pre-prompt-v1-20261009）：50 题 36→39，prompt v1 完整性规则修复 GF09/GS03，md 细切修复 GF15/GF20/GS06/GP02/GP09；few-shot 污染已回退。**M3 专项**：①synthesis 跨块综合专用编排（GS01/GS02/GP06 料全在上下文却漏报，chunk 细切 × 7B 注意力权衡）；②MAX_LOADED_MODELS=1 下 bge/qwen 反复重载致库外多轮题贴 600s 墙（GR05 450-662s）；③GS11 reranker 压排边界；④BM25 内存索引生产未构建、sentence_store=None 待核；⑤剩 5 道纯生成 fail（GF02/GF20/GS10/GS14/GP03/GP04/GP05 中归并）依赖更大模型 | M2 完成，M3 待排期 |
 
 ---
 

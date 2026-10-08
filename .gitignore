@@ -94,6 +94,7 @@ playwright-report/
 scripts/smoke/reports/
 # golden 金标题库实跑产物（检索/端到端评测报告，脚本运行时自动建目录）
 scripts/golden/reports/
+scripts/golden/reports_*/
 .tmp_pt_*/
 .ruff_cache/
 pytest_tmp/
