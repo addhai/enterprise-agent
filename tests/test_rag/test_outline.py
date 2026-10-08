@@ -3,6 +3,7 @@
 覆盖 OutlineNode / OutlineTree 的构建、扁平化、路径查找、章节拆分，
 以及标题提取工具（Markdown / PDF 正文）。
 """
+
 from src.rag.outline import (
     OutlineNode,
     OutlineTree,
@@ -55,12 +56,14 @@ def test_build_single():
 
 def test_build_nested():
     t = OutlineTree()
-    t.build([
-        (1, "A", None),
-        (2, "A.1", None),
-        (2, "A.2", None),
-        (1, "B", None),
-    ])
+    t.build(
+        [
+            (1, "A", None),
+            (2, "A.1", None),
+            (2, "A.2", None),
+            (1, "B", None),
+        ]
+    )
     # 第二个 H1 会被算法归到根节点 A 之下（弹出同级直到 level<1）
     assert [c.text for c in t.root.children] == ["A.1", "A.2", "B"]
     assert t.root.children[0].children == []
@@ -147,6 +150,7 @@ def test_split_with_outline_json():
     assert "outline" in docs[0].metadata
     # JSON 可解析
     import json
+
     json.loads(docs[0].metadata["outline"])
 
 
@@ -164,6 +168,22 @@ def test_extract_markdown_headings():
     assert heads[0] == (1, "Title", None)
     assert heads[1] == (2, "Sub", None)
     assert heads[2] == (3, "Deep", None)
+
+
+def test_extract_markdown_headings_tolerates_escaped_hash():
+    # 6.4.1 兜底：行首转义标题 \# 也要识别，层级取井号个数
+    text = "\\# Title\n\n\\## Sub\n\n\\### Deep\n\nbody\n\\#### 更深"
+    heads = extract_markdown_headings(text)
+    assert heads == [
+        (1, "Title", None),
+        (2, "Sub", None),
+        (3, "Deep", None),
+        (4, "更深", None),
+    ]
+    # 标准标题与转义标题混排都识别，行内反斜杠井号不当标题
+    mixed = "# A\n\n正文里的 \\# 不是标题\n\n\\## B"
+    heads_mixed = extract_markdown_headings(mixed)
+    assert heads_mixed == [(1, "A", None), (2, "B", None)]
 
 
 def test_extract_pdf_body_headings_markdown():
@@ -233,7 +253,7 @@ def test_extract_docx_headings():
     assert (1, "第一章", None) in heads
     assert (2, "第二节", None) in heads
     # 非 Heading 样式被忽略
-    assert all("正文" != h[1] and "列表" != h[1] for h in heads)
+    assert all(h[1] != "正文" and h[1] != "列表" for h in heads)
 
 
 class _FakeDoc:

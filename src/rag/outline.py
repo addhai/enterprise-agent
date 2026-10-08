@@ -276,7 +276,10 @@ def extract_markdown_headings(text: str) -> list[tuple[int, str, int | None]]:
         [(level, text, page), ...]
         level: 1-6 对应 # 到 ######
     """
-    pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+    # 兼容语料里被转义的标题（行首 ``\#``）：部分 md 写作时用反斜杠转义
+    # 井号，标准 Markdown 会渲染成字面量而非标题，这里容错识别为标题，
+    # 与语料规范化（data/docs 去转义）形成双保险。仅容错行首单个反斜杠。
+    pattern = re.compile(r"^\\?(#{1,6})\s+(.+)$", re.MULTILINE)
     headings: list[tuple[int, str, int | None]] = []
     for match in pattern.finditer(text):
         level = len(match.group(1))
