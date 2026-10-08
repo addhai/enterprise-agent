@@ -3,7 +3,7 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-08 下午（**M2 开门周已镜像固化并完成真机验证**：新镜像 `enterprise-agent-app-ollama:latest`=**8cf450cf2340**（旧 8835fc74b155 备份 tag `backup-pre-m2-openweek-20261008`），真机匿名三帧 need_login、登录态 F02 184.9s 答案 4/4 要点且 T90 PDF 第 5 页引用带出 chapter_path，8 容器 healthy；md 章戳零覆盖已立演进计划 6.4.1（根因 365 处行首 `\#` 转义）。代码两 commit `02caab0`+`c6ece33`、文档 `0ea135d` 均在 origin/master，CI run 37700986762 五 job 全绿。详见下「2026-10-08 M2 开门周」。正式路线见 `docs/增量演进计划-2026Q4.md`）
+> 最后更新：2026-10-08 下午（**M2 开门周已镜像固化并完成真机验证**：新镜像 `enterprise-agent-app-ollama:latest`=**8cf450cf2340**（旧 8835fc74b155 备份 tag `backup-pre-m2-openweek-20261008`），真机匿名三帧 need_login、登录态 F02 184.9s 答案 4/4 要点且 T90 PDF 第 5 页引用带出 chapter_path，8 容器 healthy；md 章戳 6.4.1 A+B 已合 3b3ee68（CI 37749927894 全绿，待授权卷重建）。代码两 commit `02caab0`+`c6ece33`、文档 `0ea135d` 均在 origin/master，CI run 37700986762 五 job 全绿。详见下「2026-10-08 M2 开门周」。正式路线见 `docs/增量演进计划-2026Q4.md`）
 > 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
 
 ---
@@ -102,7 +102,7 @@
 
 **镜像固化与真机验证（2026-10-08 下午，选项 B 授权）**：新镜像 **8cf450cf2340**（旧 8835fc74b155 备份 tag `backup-pre-m2-openweek-20261008`），force-recreate 后三件套全过（镜像 sha 一致、routes.py MD5 b4a346fb 宿主=容器、health 四项 ok），8 容器 healthy。真机：匿名建连/心跳放行，chat/human_escalation/resume 三帧立即回 need_login（AUTH_REQUIRED，无 typing 泄漏）；登录态 F02 184.9s 答案四要点全中，done 帧 4 条引用中 T90 PDF 第 5 页带 `chapter_path=第一章 安全注意事项 / 第五章 故障代码与排查`。完整取证 `scripts/smoke/reports/ws_verify_20261008_m2_openweek.md`。
 
-**md 章戳零覆盖与 6.4.1 立项**：生产索引章戳仅标准 18/169、句子 54/1010，全在 2 个 PDF，7 个 md 零章戳。根因是 md 全部用行首转义 `\#`（365 处、层级完整、零空标题零行内转义），标题提取器只认标准 `#`。已立演进计划 6.4.1，方案 A 语料去转义规范化（零误伤已证）为主、方案 B `outline.py:279` 正则容错为兜底，实施后需授权窗口重建索引（CPU embedding 约 10 分钟），不重建镜像。11 题 7B 生成质量仍在 6.5/6.1，开门周未动生成链路。
+**md 章戳零覆盖与 6.4.1（A+B 已开发，待授权重建索引）**：生产索引章戳仅标准 18/169、句子 54/1010，全在 2 个 PDF，7 个 md 零章戳。根因是 md 全部用行首转义 `\#`（365 处、层级完整、零空标题零行内转义）。2026-10-08 下午按 A+B 双保险落地（commit `3b3ee68`，CI run 37749927894 五 job 全绿）：A 语料 365 处字节级去转义（零非标题变更、CRLF/编码不变），B `outline.py:282` 正则 `^\\?(#{1,6})` 兜底并容错单测；离线实测章戳 378/378 文档全覆盖、面包屑层级正确，标准切块 169→695（章节级细切，检索分布需重建后用金标检索基线复核双 100%）。生产索引仍是旧切块，待授权窗口跑 `scripts/rebuild_index.py`（CPU embedding 约 10 分钟，不占 ollama，无需重建镜像），随后真机验 md 题面包屑。11 题 7B 生成质量仍在 6.5/6.1。
 
 ---
 
@@ -240,7 +240,7 @@
 | 5 | `data/docs/` 语料侧 13 个 SaaS 文档已归档并重建索引（镜像 082f2147dcd2）；A2A agents、sanitizer 白名单、helm/chatwoot 域名账号仍有 CloudSync 字样，维持边界不动 | 语料已完成，协议侧划边界 |
 | 6 | ollama 为 CPU-only 构建（无 CUDA 后端，`total_vram="0 B"`）；直答已把单题压到 2 分钟级，进一步提速需换 CUDA 构建；`static/` 仍是 09-17 产物；A2A 探针 connection failed 仅告警 | 成本/低优 |
 | 7 | 阶段 1 三硬门全关：50 题 36/50 pass（10-08 凌晨节），修复固化镜像 8835fc74b155；题库 2026-10-08 整体冻结，frozen=true + questions.lock.json 内容锁 + pytest/eval 双守卫，改题走 MR+refresh。阶段 2 靶子：11 题 7B 生成要点不全、2 题检索（GF15/GF20） | 阶段 1 完成 |
-| 8 | M2 开门周完成并固化（02caab0+c6ece33，镜像 8cf450cf2340，备份 backup-pre-m2-openweek-20261008，CI 37700986762 全绿）：6.4 chapter_path、覆盖率门禁 60（66.09%）、四 loader 25 例、5 处潜伏缺陷、匿名引导登录，均真机通过。后续：md 章戳治理（6.4.1，待语料去转义+授权重建索引）、11 题生成质量（6.5/6.1）、2 题块级/表格检索（GF15/GF20） | 开门周完成，6.4.1 待实施 |
+| 8 | M2 开门周完成并固化（02caab0+c6ece33，镜像 8cf450cf2340，备份 backup-pre-m2-openweek-20261008，CI 37700986762 全绿）：6.4 chapter_path、覆盖率门禁 60（66.09%）、四 loader 25 例、5 处潜伏缺陷、匿名引导登录，均真机通过。后续：md 章戳治理 6.4.1（A+B 代码已合 3b3ee68/CI 37749927894，待授权卷重建+金标检索基线复核）、11 题生成质量（6.5/6.1）、2 题块级/表格检索（GF15/GF20） | 开门周完成，6.4.1 待卷重建 |
 
 ---
 
