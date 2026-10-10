@@ -7,16 +7,16 @@ admin / agent 可传 ?user_id= 查看他人会话。
 实现委托给 ``src.api.sessions_service`` 共享 service 层（与 admin.py 的
 /sessions、/admin/sessions 共用同一套 list/detail/messages/delete 逻辑）。
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.rbac import Role, get_current_user, require_roles
 from src.api.sessions_service import (
-    delete_session,
+    delete_session_checked,
     get_session_messages,
     list_sessions,
 )
@@ -27,7 +27,7 @@ router = APIRouter(prefix="/conversations", tags=["会话历史 Conversations"])
 
 @router.get("")
 async def list_conversations(
-    user_id: Optional[str] = Query(None, description="按用户过滤；留空则返回当前用户"),
+    user_id: str | None = Query(None, description="按用户过滤；留空则返回当前用户"),
     limit: int = Query(50, ge=1, le=200),
     current_user: dict = Depends(get_current_user),
 ):
@@ -54,11 +54,9 @@ async def get_conversation_messages(
     try:
         data = get_session_messages(session_id, current_user, limit)
     except PermissionError:
-        raise HTTPException(status_code=403, detail="无权访问此会话")
+        raise HTTPException(status_code=403, detail="无权访问此会话") from None
     if data is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
     return data
 
 
@@ -67,10 +65,14 @@ async def delete_conversation(
     session_id: str,
     current_user: dict = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
-    """删除会话及其全部消息（仅 admin / agent；同时从内存与 DB 删除）。"""
-    ok = delete_session(session_id)
+    """删除会话及其全部消息（仅 admin / agent；同时从内存与 DB 删除）。
+
+    P0-3：租户隔离对所有角色生效，跨租户删除返回 403。
+    """
+    try:
+        ok = delete_session_checked(session_id, current_user)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="无权删除此会话") from None
     if not ok:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
     return {"success": True, "session_id": session_id}

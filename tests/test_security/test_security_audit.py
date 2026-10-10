@@ -14,21 +14,22 @@ sessions_service.py、rbac.py、auth.py），不凭接口文档猜测。
 执行：
     pytest tests/test_security/test_security_audit.py -v
 """
-import os
+
 import os
 
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ============================================================
 # Fixtures（复用 P2-3 风格）
 # ============================================================
+
 
 @pytest.fixture
 def client():
     """FastAPI 测试客户端（内存 SQLite，conftest 已初始化）"""
     from src.api.server import app
+
     return TestClient(app)
 
 
@@ -82,6 +83,7 @@ def temp_kb(client, admin_token):
 # ============================================================
 # 1. 鉴权绕过
 # ============================================================
+
 
 class TestAuthBypass:
     """鉴权绕过：未带 token / 无效 token 访问受保护接口"""
@@ -141,6 +143,7 @@ class TestAuthBypass:
 # 2. 越权访问
 # ============================================================
 
+
 class TestPrivilegeEscalation:
     """越权访问：普通用户访问 admin 接口"""
 
@@ -183,6 +186,7 @@ class TestPrivilegeEscalation:
 # 3. 文件上传校验
 # ============================================================
 
+
 class TestFileUploadValidation:
     """文件上传校验：路径穿越、类型白名单、大小限制
 
@@ -193,20 +197,21 @@ class TestFileUploadValidation:
     """
 
     # S-03a: 路径穿越变体
-    @pytest.mark.parametrize("evil_name", [
-        "../../../etc/passwd_test",
-        "/etc/passwd",
-        "..%2f..%2fetc/passwd.md",
-        "..\\..\\..\\windows\\system32\\evil.md",
-        "../../.md",
-    ])
+    @pytest.mark.parametrize(
+        "evil_name",
+        [
+            "../../../etc/passwd_test",
+            "/etc/passwd",
+            "..%2f..%2fetc/passwd.md",
+            "..\\..\\..\\windows\\system32\\evil.md",
+            "../../.md",
+        ],
+    )
     def test_path_traversal_blocked(self, client, admin_token, temp_kb, evil_name):
         """路径穿越文件名应返回 400 或安全清洗后不逃逸"""
         resp = client.post(
             f"/api/v1/admin/knowledge/{temp_kb}/documents/upload",
-            files={
-                "file": (evil_name, b"# test", "text/markdown")
-            },
+            files={"file": (evil_name, b"# test", "text/markdown")},
             headers=_auth(admin_token),
         )
         # 路径穿越应被拒绝（400）或安全清洗后保存
@@ -214,6 +219,7 @@ class TestFileUploadValidation:
         if resp.status_code == 200:
             # 如果成功，说明被清洗了，验证文件在 upload_dir 内
             from src.config import settings
+
             upload_base = os.path.join(
                 getattr(settings, "chroma_persist_dir", "./chroma_data"),
                 "uploads",
@@ -223,11 +229,9 @@ class TestFileUploadValidation:
             # 遍历 upload_dir 确认没有逃逸文件
             for root, dirs, files in os.walk(upload_base):
                 for f in files:
-                    assert os.path.abspath(
-                        os.path.join(root, f)
-                    ).startswith(upload_abs), (
-                        f"File escaped upload_dir: {root}/{f}"
-                    )
+                    assert os.path.abspath(os.path.join(root, f)).startswith(
+                        upload_abs
+                    ), f"File escaped upload_dir: {root}/{f}"
         else:
             # 被拒绝 → 安全
             assert resp.status_code in (400, 422)
@@ -248,6 +252,7 @@ class TestFileUploadValidation:
             )
         # 检查 upload_dir 的上级目录没有这些文件
         from src.config import settings
+
         upload_base = os.path.join(
             getattr(settings, "chroma_persist_dir", "./chroma_data"),
             "uploads",
@@ -297,23 +302,17 @@ class TestFileUploadValidation:
         large_content = b"x" * (11 * 1024 * 1024)  # 11MB > 10MB limit
         resp = client.post(
             f"/api/v1/admin/knowledge/{temp_kb}/documents/upload",
-            files={
-                "file": ("large.md", large_content, "text/markdown")
-            },
+            files={"file": ("large.md", large_content, "text/markdown")},
             headers=_auth(admin_token),
         )
         assert resp.status_code == 413
         assert "文件过大" in resp.json().get("detail", "")
 
-    def test_normal_size_file_not_rejected_for_size(
-        self, client, admin_token, temp_kb
-    ):
+    def test_normal_size_file_not_rejected_for_size(self, client, admin_token, temp_kb):
         """正常大小文件（1KB）不应因大小限制被拒绝"""
         resp = client.post(
             f"/api/v1/admin/knowledge/{temp_kb}/documents/upload",
-            files={
-                "file": ("small.md", b"x" * 1024, "text/markdown")
-            },
+            files={"file": ("small.md", b"x" * 1024, "text/markdown")},
             headers=_auth(admin_token),
         )
         # 不应返回 413（可能因其他原因 200/400/500，但不应是大小问题）
@@ -325,12 +324,17 @@ class TestFileUploadValidation:
 # 4. 输入注入
 # ============================================================
 
+
 class TestInputInjection:
     """输入注入：超长 prompt、SQL 注入、XSS、session_id 枚举"""
 
-    def test_chat_oversized_message(self, client):
+    def test_chat_oversized_message(self, client, admin_token):
         """超长 prompt 应被 Pydantic 拦截（max_length=2000）"""
-        resp = client.post("/api/v1/chat", json={"message": "x" * 5000})
+        resp = client.post(
+            "/api/v1/chat",
+            json={"message": "x" * 5000},
+            headers=_auth(admin_token),
+        )
         assert resp.status_code == 422
 
     def test_sql_injection_in_session_id(self, client, admin_token):
@@ -352,12 +356,12 @@ class TestInputInjection:
                 f"unexpected {resp.status_code}"
             )
 
-    def test_xss_payload_in_chat(self, client):
+    def test_xss_payload_in_chat(self, client, admin_token):
         """XSS payload 在 message 中不应被执行
 
-        POST /chat 是公开接口，message 内容会进入 LangGraph。
+        P0-1 起 POST /chat 需要登录。message 内容会进入 LangGraph。
         无 LLM Key 时会 500，但不应 200 返回原始 XSS（应被清洗或忽略）。
-        本测试只验证请求被接收（422 或 requires_llm skip）。
+        本测试只验证请求被接收（422 或 进入处理链路）。
         """
         xss_payloads = [
             "<script>alert('xss')</script>",
@@ -366,7 +370,11 @@ class TestInputInjection:
         ]
         for payload in xss_payloads:
             # 只验证 Pydantic 不拒绝（长度合法）
-            resp = client.post("/api/v1/chat", json={"message": payload})
+            resp = client.post(
+                "/api/v1/chat",
+                json={"message": payload},
+                headers=_auth(admin_token),
+            )
             # 422 = 校验失败（长度等），其他 = 进入处理
             assert resp.status_code in (422, 200, 500)
 
@@ -396,6 +404,7 @@ class TestInputInjection:
 # ============================================================
 # 5. 会话隔离
 # ============================================================
+
 
 class TestSessionIsolation:
     """会话隔离：匿名 session_id 不可预测、删除后不可访问"""
@@ -456,10 +465,11 @@ class TestSessionIsolation:
 # 6. 敏感信息泄露
 # ============================================================
 
+
 class TestInfoLeak:
     """敏感信息泄露：错误响应不暴露堆栈/密钥/内部路径"""
 
-    def test_chat_500_no_stack_trace(self, client):
+    def test_chat_500_no_stack_trace(self, client, admin_token):
         """POST /chat 在 500 时不应泄露完整堆栈
 
         源码 routes.py:176:
@@ -470,7 +480,11 @@ class TestInfoLeak:
         """
         # 触发 500：不传 message（422）或传有效 message 但无 LLM（500）
         # 用 requires_llm 跳过的用例无法验证，这里用参数校验路径
-        resp = client.post("/api/v1/chat", json={"message": "test"})
+        resp = client.post(
+            "/api/v1/chat",
+            json={"message": "test"},
+            headers=_auth(admin_token),
+        )
         if resp.status_code == 500:
             detail = resp.json().get("detail", "")
             # 不应包含完整堆栈（Traceback / File "/ 等关键词）
@@ -536,9 +550,7 @@ class TestInfoLeak:
         # 会话不存在返回 404（先查 owner，owner=None → 404）
         assert resp.status_code == 404
 
-    def test_anonymous_cannot_delete_existing_session(
-        self, client, admin_token
-    ):
+    def test_anonymous_cannot_delete_existing_session(self, client, admin_token):
         """匿名用户删除存在的会话应返回 403（P2-6 S-05a 核心回归）
 
         流程：
@@ -549,10 +561,11 @@ class TestInfoLeak:
         # admin 先发一条消息创建会话（会进 500 因为无 LLM Key，
         # 但 session_id 可能已在内存中注册）
         sid = "p2-6-anon-delete-test-001"
+        # P0-1 起 /chat 强制登录：用 admin 身份创建会话，再让匿名用户尝试删除
         client.post(
             "/api/v1/chat",
-            json={"message": "test", "session_id": sid,
-                  "user_id": "admin"},
+            json={"message": "test", "session_id": sid},
+            headers=_auth(admin_token),
         )
         # 无 token 尝试删除
         resp = client.delete(f"/api/v1/sessions/{sid}")
@@ -562,6 +575,4 @@ class TestInfoLeak:
             f"Anonymous delete should be 403/404, got {resp.status_code}"
         )
         if resp.status_code == 200:
-            pytest.fail(
-                "S-05a REGRESSION: Anonymous user deleted session successfully"
-            )
+            pytest.fail("S-05a REGRESSION: Anonymous user deleted session successfully")

@@ -24,21 +24,20 @@
 覆盖率：
     pytest tests/test_api/test_api_reference.py --cov=src/api --cov-report=term-missing
 """
-import io
-import json
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ============================================================
 # Fixtures
 # ============================================================
 
+
 @pytest.fixture
 def client():
     """FastAPI 测试客户端（内存 SQLite，conftest 已初始化）"""
     from src.api.server import app
+
     return TestClient(app)
 
 
@@ -111,15 +110,20 @@ def temp_kb(client, admin_token):
 # 1. POST /api/v1/chat  对话发起
 # ============================================================
 
+
 class TestChatEndpoint:
     """对话发起接口"""
 
-    def test_chat_normal_call(self, client):
-        """正常调用：有效消息应返回 200 + 完整响应体"""
-        resp = client.post("/api/v1/chat", json={
-            "message": "你好",
-            "user_id": "test_user",
-        })
+    def test_chat_normal_call(self, client, admin_token):
+        """正常调用：有效消息 + 登录态应返回 200 + 完整响应体"""
+        resp = client.post(
+            "/api/v1/chat",
+            json={
+                "message": "你好",
+                "user_id": "test_user",
+            },
+            headers=_auth(admin_token),
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert "session_id" in data
@@ -128,37 +132,50 @@ class TestChatEndpoint:
         assert isinstance(data["needs_human"], bool)
         assert isinstance(data["suggest_human"], bool)
 
-    def test_chat_with_session_id(self, client):
+    def test_chat_with_session_id(self, client, admin_token):
         """传入 session_id 应被使用（同一会话续接）"""
         sid = "test-session-p2-3-001"
-        resp = client.post("/api/v1/chat", json={
-            "message": "第一条消息",
-            "session_id": sid,
-        })
+        resp = client.post(
+            "/api/v1/chat",
+            json={
+                "message": "第一条消息",
+                "session_id": sid,
+            },
+            headers=_auth(admin_token),
+        )
         assert resp.status_code == 200
         assert resp.json()["session_id"] == sid
 
-    def test_chat_missing_message(self, client):
-        """参数缺失：不传 message 应返回 422"""
-        resp = client.post("/api/v1/chat", json={})
+    def test_chat_missing_message(self, client, admin_token):
+        """参数缺失：不传 message 应返回 422（携带 token 隔离认证层）"""
+        resp = client.post("/api/v1/chat", json={}, headers=_auth(admin_token))
         assert resp.status_code == 422
 
-    def test_chat_empty_message(self, client):
+    def test_chat_empty_message(self, client, admin_token):
         """非法参数：空字符串应返回 422（min_length=1）"""
-        resp = client.post("/api/v1/chat", json={"message": ""})
+        resp = client.post(
+            "/api/v1/chat", json={"message": ""}, headers=_auth(admin_token)
+        )
         assert resp.status_code == 422
 
-    def test_chat_message_too_long(self, client):
+    def test_chat_message_too_long(self, client, admin_token):
         """非法参数：超 2000 字符应返回 422（max_length=2000）"""
-        resp = client.post("/api/v1/chat", json={"message": "x" * 2001})
+        resp = client.post(
+            "/api/v1/chat",
+            json={"message": "x" * 2001},
+            headers=_auth(admin_token),
+        )
         assert resp.status_code == 422
 
-    def test_chat_wrong_content_type(self, client):
+    def test_chat_wrong_content_type(self, client, admin_token):
         """非法参数：非 JSON 请求体应返回 422"""
         resp = client.post(
             "/api/v1/chat",
             data="plain text",
-            headers={"Content-Type": "text/plain"},
+            headers={
+                "Content-Type": "text/plain",
+                "Authorization": f"Bearer {admin_token}",
+            },
         )
         assert resp.status_code == 422
 
@@ -167,14 +184,13 @@ class TestChatEndpoint:
 # 2. GET /api/v1/conversations/{session_id}/messages  历史消息
 # ============================================================
 
+
 class TestConversationMessages:
     """历史消息读取接口"""
 
     def test_get_messages_no_auth(self, client):
         """未鉴权：无 Authorization header 应返回 401"""
-        resp = client.get(
-            "/api/v1/conversations/any-session/messages"
-        )
+        resp = client.get("/api/v1/conversations/any-session/messages")
         assert resp.status_code == 401
 
     def test_get_messages_not_found(self, client, admin_token):
@@ -195,12 +211,15 @@ class TestConversationMessages:
         默认的 FakeWorkflow 不会写会话历史，故显式关闭打桩并标注 requires_llm。
         """
         sid = "p2-3-msg-test-001"
-        # 发一条消息
-        client.post("/api/v1/chat", json={
-            "message": "测试消息",
-            "session_id": sid,
-            "user_id": "admin",
-        })
+        # 发一条消息（P0-1 起 /chat 强制登录）
+        client.post(
+            "/api/v1/chat",
+            json={
+                "message": "测试消息",
+                "session_id": sid,
+            },
+            headers=_auth(admin_token),
+        )
         # 读取消息
         resp = client.get(
             f"/api/v1/conversations/{sid}/messages",
@@ -242,10 +261,83 @@ class TestConversationMessages:
         )
         assert resp.status_code == 422
 
+    def test_get_messages_other_user_forbidden(self, client, viewer_token):
+        """P0-3：普通角色读取他人会话必须 403（内存会话 IDOR 回归）"""
+        from src.websocket.session_manager import (
+            SessionMode,
+            get_session_manager,
+        )
+
+        sid = "p0-3-idor-read-001"
+        mgr = get_session_manager()
+        mgr.create_session(
+            session_id=sid,
+            user_id="user-victim",
+            tenant_id="default",
+            mode=SessionMode.AI_CHAT,
+        )
+        try:
+            resp = client.get(
+                f"/api/v1/conversations/{sid}/messages",
+                headers=_auth(viewer_token),
+            )
+            assert resp.status_code == 403
+        finally:
+            mgr.remove_session(sid)
+
+
+class TestSessionIdorP03:
+    """P0-3：/sessions 详情与删除的匿名/越权收口"""
+
+    def test_anonymous_detail_of_existing_session_denied(self, client):
+        """未登录访问他人存在的会话详情必须 403（修复前匿名可直读）"""
+        from src.websocket.session_manager import (
+            SessionMode,
+            get_session_manager,
+        )
+
+        sid = "p0-3-idor-detail-001"
+        mgr = get_session_manager()
+        mgr.create_session(
+            session_id=sid,
+            user_id="user-victim",
+            tenant_id="default",
+            mode=SessionMode.AI_CHAT,
+        )
+        try:
+            resp = client.get(f"/api/v1/sessions/{sid}")
+            assert resp.status_code == 403
+        finally:
+            mgr.remove_session(sid)
+
+    def test_anonymous_delete_of_existing_session_denied(self, client):
+        """未登录删除他人存在的会话必须 403（修复前 if user_id 短路放行）"""
+        from src.websocket.session_manager import (
+            SessionMode,
+            get_session_manager,
+        )
+
+        sid = "p0-3-idor-delete-001"
+        mgr = get_session_manager()
+        mgr.create_session(
+            session_id=sid,
+            user_id="user-victim",
+            tenant_id="default",
+            mode=SessionMode.AI_CHAT,
+        )
+        try:
+            resp = client.delete(f"/api/v1/sessions/{sid}")
+            assert resp.status_code == 403
+            # 会话必须仍然存在，未被匿名删掉
+            assert mgr.get_session(sid) is not None
+        finally:
+            mgr.remove_session(sid)
+
 
 # ============================================================
 # 3. POST /api/v1/admin/knowledge/{kb_id}/documents/upload  文档上传
 # ============================================================
+
 
 class TestDocumentUpload:
     """知识库文档上传接口"""
@@ -288,9 +380,7 @@ class TestDocumentUpload:
     @pytest.mark.requires_llm
     def test_upload_markdown_normal(self, client, admin_token, temp_kb):
         """正常调用：上传 .md 文件应成功（需向量化，标 requires_llm）"""
-        content = "# 产品手册\n\n## 第一章 概述\n\n产品 A 是一款智能客服系统。".encode(
-            "utf-8"
-        )
+        content = "# 产品手册\n\n## 第一章 概述\n\n产品 A 是一款智能客服系统。".encode()
         resp = client.post(
             f"/api/v1/admin/knowledge/{temp_kb}/documents/upload",
             files={"file": ("manual.md", content, "text/markdown")},
@@ -305,10 +395,9 @@ class TestDocumentUpload:
     @pytest.mark.requires_llm
     def test_upload_with_title(self, client, admin_token, temp_kb):
         """正常调用：通过 query 参数指定标题"""
-        content = "# 文档内容".encode("utf-8")
+        content = "# 文档内容".encode()
         resp = client.post(
-            f"/api/v1/admin/knowledge/{temp_kb}/documents/upload"
-            "?title=自定义标题",
+            f"/api/v1/admin/knowledge/{temp_kb}/documents/upload?title=自定义标题",
             files={"file": ("doc.md", content, "text/markdown")},
             headers=_auth(admin_token),
         )
@@ -319,6 +408,7 @@ class TestDocumentUpload:
 # ============================================================
 # 4. POST /api/v1/admin/knowledge/{kb_id}/hit_test  RAG 检索
 # ============================================================
+
 
 class TestHitTest:
     """RAG 检索（命中测试）接口"""
@@ -419,6 +509,7 @@ class TestHitTest:
 # 5. DELETE /api/v1/sessions/{session_id}  会话清除
 # ============================================================
 
+
 class TestSessionDelete:
     """会话清除接口"""
 
@@ -462,12 +553,15 @@ class TestSessionDelete:
         需要真实工作流：断言 chat 落库后再删除的副作用，故关闭默认打桩。
         """
         sid = "p2-3-delete-test-001"
-        # 先发一条消息
-        client.post("/api/v1/chat", json={
-            "message": "测试",
-            "session_id": sid,
-            "user_id": "admin",
-        })
+        # 先发一条消息（P0-1 起 /chat 强制登录）
+        client.post(
+            "/api/v1/chat",
+            json={
+                "message": "测试",
+                "session_id": sid,
+            },
+            headers=_auth(admin_token),
+        )
         # 删除
         resp = client.delete(
             f"/api/v1/sessions/{sid}",

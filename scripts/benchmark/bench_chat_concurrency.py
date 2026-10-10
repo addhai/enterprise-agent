@@ -32,14 +32,31 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
 from _endpoint import require_http_url  # noqa: E402
 
 
-def send_chat(base_url: str, message: str) -> tuple[int, float]:
+def login(base_url: str, username: str, password: str) -> str:
+    """登录获取 JWT。P0-1 起 /chat 强制认证，压测前必须先取 token。"""
+    url = f"{base_url}/api/v1/auth/login"
+    payload = json.dumps({"username": username, "password": password}).encode()
+    req = urllib.request.Request(  # noqa: S310
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+        return json.loads(resp.read())["token"]
+
+
+def send_chat(base_url: str, message: str, token: str) -> tuple[int, float]:
     """发送一条 chat 请求，返回 (status_code, latency_ms)"""
     url = f"{base_url}/api/v1/chat"
     payload = json.dumps({"message": message}).encode("utf-8")
     req = urllib.request.Request(  # noqa: S310
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
         method="POST",
     )
     start = time.perf_counter()
@@ -55,7 +72,9 @@ def send_chat(base_url: str, message: str) -> tuple[int, float]:
         return 0, elapsed
 
 
-def run_level(base_url: str, concurrency: int, total: int, mock: bool) -> dict:
+def run_level(
+    base_url: str, concurrency: int, total: int, mock: bool, token: str
+) -> dict:
     """跑一个并发档位"""
     message = "ping" if mock else "你好，请简单介绍一下产品"
     latencies = []
@@ -63,7 +82,9 @@ def run_level(base_url: str, concurrency: int, total: int, mock: bool) -> dict:
 
     wall_start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = [pool.submit(send_chat, base_url, message) for _ in range(total)]
+        futures = [
+            pool.submit(send_chat, base_url, message, token) for _ in range(total)
+        ]
         for f in as_completed(futures):
             status, lat = f.result()
             if status == 200:
@@ -124,6 +145,9 @@ def main():
         action="store_true",
         help="Mock mode: send minimal payload (no real LLM call expected)",
     )
+    # P0-1 起 /chat 强制登录，压测账号通过命令行传入
+    parser.add_argument("--username", default="admin", help="登录用户名")
+    parser.add_argument("--password", default="admin123", help="登录密码")
     args = parser.parse_args()
 
     # 只允许打 http(s)，防止误传 file: 协议时读到本地文件
@@ -138,10 +162,18 @@ def main():
     # 健康检查
     try:
         urllib.request.urlopen(f"{args.base_url}/api/v1/health", timeout=5)  # noqa: S310
-        print("Health check: OK\n")
+        print("Health check: OK")
     except Exception as e:
         print(f"Health check FAILED: {e}")
         print("Start the service first: bash deploy/p2/scripts/start.sh")
+        sys.exit(1)
+
+    # 登录取 token（/chat 已强制认证）
+    try:
+        token = login(args.base_url, args.username, args.password)
+        print("Login: OK\n")
+    except Exception as e:
+        print(f"Login FAILED: {e}")
         sys.exit(1)
 
     # 表头
@@ -153,7 +185,7 @@ def main():
 
     results = []
     for level in levels:
-        r = run_level(args.base_url, level, args.total, args.mock)
+        r = run_level(args.base_url, level, args.total, args.mock, token)
         results.append(r)
         print(
             f"{r['concurrency']:>6} | {r['total']:>6} | {r['p50']:>8} | "

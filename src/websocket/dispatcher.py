@@ -17,6 +17,7 @@
                      │  (排队兜底)     │
                      └────────────────┘
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,24 +26,17 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from src.websocket.handoff import build_handoff_context as build_context
 from src.websocket.protocol import (
     build_copilot_suggestion,
-    build_handoff_context,
     build_new_transfer,
     build_session_update,
-    build_streaming_chunk,
     build_transfer_notice,
-    TYPE_COPILOT_SUGGESTION,
-    TYPE_NEW_TRANSFER,
-    TYPE_SESSION_UPDATE,
-    TYPE_TRANSFER_NOTICE,
 )
-from src.websocket.handoff import build_handoff_context as build_context
 from src.websocket.session_manager import (
     SessionMode,
-    WebSocketSessionManager,
     get_session_manager,
 )
 
@@ -52,22 +46,23 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TransferRecord:
     """转接记录"""
+
     transfer_id: str
     session_id: str
     user_id: str
-    context: Dict[str, Any]
+    context: dict[str, Any]
     urgency: str
     created_at: float = field(default_factory=lambda: time.time())
-    assigned_agent: Optional[str] = None
+    assigned_agent: str | None = None
     status: str = "pending"  # pending / assigned / active / resolved
 
 
 class TransferDispatcher:
     """转接分发器 — 单例"""
 
-    _instance: Optional["TransferDispatcher"] = None
+    _instance: TransferDispatcher | None = None
 
-    def __new__(cls) -> "TransferDispatcher":
+    def __new__(cls) -> TransferDispatcher:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
@@ -80,9 +75,9 @@ class TransferDispatcher:
 
         self._session_mgr = get_session_manager()
         self._queue: deque[TransferRecord] = deque()
-        self._records: Dict[str, TransferRecord] = {}  # transfer_id → record
-        self._session_transfers: Dict[str, str] = {}  # session_id → transfer_id
-        self._copilot_locks: Dict[str, asyncio.Lock] = {}
+        self._records: dict[str, TransferRecord] = {}  # transfer_id → record
+        self._session_transfers: dict[str, str] = {}  # session_id → transfer_id
+        self._copilot_locks: dict[str, asyncio.Lock] = {}
 
     # ------------------------------------------------------------------
     # 核心入口：AI 检测到需要转人工
@@ -91,9 +86,9 @@ class TransferDispatcher:
     async def handle_escalation(
         self,
         session_id: str,
-        state: Dict[str, Any],
+        state: dict[str, Any],
         messages: list,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """处理 AI 转人工请求
 
         流程：
@@ -153,11 +148,13 @@ class TransferDispatcher:
 
         logger.info(
             "Transfer initiated: %s (urgency=%s, agent=%s)",
-            transfer_id, record.urgency, agent_assigned,
+            transfer_id,
+            record.urgency,
+            agent_assigned,
         )
         return result
 
-    async def _try_assign_agent(self, record: TransferRecord) -> Optional[str]:
+    async def _try_assign_agent(self, record: TransferRecord) -> str | None:
         """尝试分配在线坐席"""
         online_agents = self._session_mgr.list_online_agents()
         if not online_agents:
@@ -168,7 +165,8 @@ class TransferDispatcher:
         # 简单轮询分配
         agent_id = online_agents[0]
         self._session_mgr.assign_agent_to_session(
-            record.session_id, agent_id,
+            record.session_id,
+            agent_id,
         )
         record.assigned_agent = agent_id
         record.status = "assigned"
@@ -213,30 +211,65 @@ class TransferDispatcher:
         session_id: str,
         reply_text: str,
     ) -> bool:
-        """坐席回复用户消息 — 直接推送到用户 WebSocket"""
+        """坐席回复用户消息 — 直接推送到用户 WebSocket
+
+        安全约束（2026-10 P0-2 收口 H2）：只允许被分配到该会话的坐席推送。
+        没有人工转接分配记录、或归属坐席与调用方不一致时直接拒绝，防止在线
+        坐席枚举 session_id 向任意客户会话注入消息。
+        """
         state = self._session_mgr.get_session(session_id)
         if not state:
+            return False
+
+        # 归属以转接记录为准（record.assigned_agent），state 上的
+        # assigned_agent 作为兼容兜底；两处都没有说明会话从未分配给任何坐席。
+        record_id = self._session_transfers.get(session_id)
+        record = self._records.get(record_id) if record_id else None
+        assigned = None
+        if record and record.assigned_agent:
+            assigned = record.assigned_agent
+        elif getattr(state, "assigned_agent", None):
+            assigned = state.assigned_agent
+
+        if assigned is None:
+            logger.warning(
+                "拒绝坐席回复：会话 %s 无人工分配记录（agent=%s）",
+                session_id,
+                agent_id,
+            )
+            return False
+        if assigned != agent_id:
+            logger.warning(
+                "拒绝坐席回复：agent=%s 非会话 %s 归属坐席（assigned=%s）",
+                agent_id,
+                session_id,
+                assigned,
+            )
             return False
 
         # 直接推送到用户的 WebSocket
         ws = state._websocket_ref
         if ws is None:
             # 没有 WebSocket 引用，放入队列等待下次循环消费
-            await state.message_queue.put({
-                "type": "human_reply",
-                "from_agent": agent_id,
-                "text": reply_text,
-                "timestamp": time.time(),
-            })
+            await state.message_queue.put(
+                {
+                    "type": "human_reply",
+                    "from_agent": agent_id,
+                    "text": reply_text,
+                    "timestamp": time.time(),
+                }
+            )
             return False
 
         try:
-            await ws.send_json({
-                "type": "human_reply",
-                "from_agent": agent_id,
-                "text": reply_text,
-                "timestamp": time.time(),
-            })
+            await ws.send_json(
+                {
+                    "type": "human_reply",
+                    "from_agent": agent_id,
+                    "text": reply_text,
+                    "timestamp": time.time(),
+                }
+            )
             state.last_active = time.time()
             return True
         except Exception as e:
@@ -252,7 +285,7 @@ class TransferDispatcher:
         session_id: str,
         user_message: str,
         conversation: list,
-    ) -> List[str]:
+    ) -> list[str]:
         """为坐席生成建议回复（Copilot 模式）
 
         基于对话历史和知识库检索，生成 2-3 条候选回复供坐席选择。
@@ -329,7 +362,9 @@ class TransferDispatcher:
             return
 
         suggestions = await self.get_copilot_suggestions(
-            session_id, user_message, conversation,
+            session_id,
+            user_message,
+            conversation,
         )
 
         ws = self._session_mgr.get_agent(record.assigned_agent)
@@ -345,7 +380,8 @@ class TransferDispatcher:
             )
         except Exception as e:
             logger.warning(
-                "Failed to push copilot suggestions: %s", e,
+                "Failed to push copilot suggestions: %s",
+                e,
             )
 
     # ------------------------------------------------------------------
@@ -362,8 +398,8 @@ class TransferDispatcher:
         state.needs_human = True
         state.last_active = time.time()
 
-        # 推送会话更新通知
-        update = build_session_update(
+        # 构造会话更新帧（当前通道未挂接下游推送，保留构建点便于后续接线）
+        build_session_update(
             session_id=session_id,
             mode=SessionMode.HUMAN_CHAT.value,
         )
@@ -389,7 +425,7 @@ class TransferDispatcher:
     # 查询接口
     # ------------------------------------------------------------------
 
-    def get_transfer_record(self, transfer_id: str) -> Optional[TransferRecord]:
+    def get_transfer_record(self, transfer_id: str) -> TransferRecord | None:
         """获取转接记录"""
         return self._records.get(transfer_id)
 
@@ -397,11 +433,11 @@ class TransferDispatcher:
         """获取排队中的转接数量"""
         return len(self._queue)
 
-    def get_session_transfer(self, session_id: str) -> Optional[str]:
+    def get_session_transfer(self, session_id: str) -> str | None:
         """获取会话当前的转接 ID"""
         return self._session_transfers.get(session_id)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取转接系统统计"""
         return {
             "total_transfers": len(self._records),
@@ -422,7 +458,7 @@ class TransferDispatcher:
 
 
 # 全局单例
-_dispatcher: Optional[TransferDispatcher] = None
+_dispatcher: TransferDispatcher | None = None
 
 
 def get_dispatcher() -> TransferDispatcher:

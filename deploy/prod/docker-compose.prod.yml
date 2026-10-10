@@ -56,9 +56,19 @@ services:
     ports:
       - "${HOST_PORT:-8000}:8000"
     environment:
-      # JWT_SECRET 必须显式注入。缺失时应用会退回出厂默认弱口令，
-      # 重建容器后所有已签发的 token 集体失效（Phase4b 实测踩过）。
+      # 运行环境：production 启用最严安全档（P0-6）。
+      # 此时 JWT_SECRET 为空或仍是出厂占位值会直接拒启动（fail fast）。
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      # JWT_SECRET 必须显式注入。production 下缺失/占位会拒启动；
+      # 历史上缺失时会退回弱密钥或一次性随机密钥，重建容器后 token 集体失效。
       - JWT_SECRET=${JWT_SECRET}
+      # 出厂默认密码账号（admin/admin123 等）是否强制改密后才能访问业务
+      # 接口与坐席 WS。默认开启；前端改密页未上线前可临时置 false 豁免，
+      # 豁免必须登记并限期收敛（P0-6）。
+      - REQUIRE_DEFAULT_PASSWORD_CHANGE=${REQUIRE_DEFAULT_PASSWORD_CHANGE:-true}
+      # 登录爆破防护：同一用户名连续失败 N 次锁 M 分钟（默认 5 / 15）。
+      - LOGIN_MAX_FAILURES=${LOGIN_MAX_FAILURES:-5}
+      - LOGIN_LOCKOUT_MINUTES=${LOGIN_LOCKOUT_MINUTES:-15}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       # ↓↓↓ 全内网离线的核心：下面三行必须指向容器内本地 Ollama
       - OPENAI_API_BASE=http://127.0.0.1:11434/v1

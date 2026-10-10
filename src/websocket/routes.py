@@ -101,6 +101,72 @@ def _resolve_ws_identity(websocket, session_id: str):
     return ("anonymous", f"anon-{session_id}", "free", "", False)
 
 
+# 允许接入人工坐席工作台的角色：具备会话处置职责的内部角色。
+# viewer 只读账号不得接入坐席路由表（接入即可接收转接客户资料）。
+_AGENT_WS_ROLES = frozenset({"agent", "admin", "super_admin", "supervisor"})
+
+
+def _authenticate_agent_ws(websocket, agent_id: str):
+    """坐席工作台 WS 强鉴权（2026-10 P0-2 收口 H2）。
+
+    五条全部满足才返回 user dict，否则返回 None，由调用方以 1008 关连接：
+        1. URL query 携带可验签的 JWT；
+        2. 用户存在且 status=active（停用立即踢）；
+        3. 角色属于坐席类角色；
+        4. token 身份与路径 agent_id 严格一致，防止 A 坐席用自己的 token
+           注册成 B 的 agent_id，劫持 B 的转接通知与客户资料推送；
+        5. 出厂默认密码必须先改（P0-6，与 REST get_current_user 同策略，
+           settings.require_default_password_change 关闭时豁免）。
+    """
+    try:
+        token = websocket.query_params.get("token")
+    except Exception:
+        token = None
+    if not token:
+        logger.warning("坐席 WS 拒绝：缺少 token（agent_id=%s）", agent_id)
+        return None
+
+    try:
+        payload = _ws_decode_token(token, _ws_settings.jwt_secret)
+    except (_WS_JWTExpired, _WS_JWTInvalid, Exception):
+        logger.warning("坐席 WS 拒绝：token 验签失败（agent_id=%s）", agent_id)
+        return None
+
+    uid = payload.get("sub")
+    if not uid:
+        return None
+
+    from src.db.repositories import user_get_by_id
+
+    user = user_get_by_id(uid)
+    if not user:
+        logger.warning("坐席 WS 拒绝：用户不存在（uid=%s）", uid)
+        return None
+    if user.get("status") and user.get("status") != "active":
+        logger.warning("坐席 WS 拒绝：账号已停用（uid=%s）", uid)
+        return None
+    if user.get("role", "agent") not in _AGENT_WS_ROLES:
+        logger.warning(
+            "坐席 WS 拒绝：角色 %s 无坐席权限（uid=%s）", user.get("role"), uid
+        )
+        return None
+    if user.get("user_id", uid) != agent_id:
+        logger.warning(
+            "坐席 WS 拒绝：路径 agent_id=%s 与 token 用户 %s 不一致",
+            agent_id,
+            user.get("user_id", uid),
+        )
+        return None
+    if _ws_settings.require_default_password_change:
+        # 局部导入规避 websocket.routes <-> api.auth 模块加载环
+        from src.api.auth import is_default_password
+
+        if is_default_password(user):
+            logger.warning("坐席 WS 拒绝：账号仍使用出厂默认密码（uid=%s）", uid)
+            return None
+    return user
+
+
 # ====================================================================
 # 用户端 WebSocket
 # ====================================================================
@@ -246,6 +312,34 @@ async def websocket_chat(websocket: WebSocket):
 
                 existing = session_mgr.get_session(incoming_session)
                 if existing:
+                    # P0-3 归属校验（H3 IDOR）：只能续接本人、同租户的会话。
+                    # 归属不符时不得挂载 websocket 引用（否则后续推送会串到
+                    # 攻击者连接），回报 forbidden 并保留本连接的原会话。
+                    if (
+                        getattr(existing, "user_id", None) != _auth_user_id
+                        or getattr(existing, "tenant_id", _auth_tenant_id)
+                        != _auth_tenant_id
+                    ):
+                        logger.warning(
+                            "resume_session 拒绝跨用户续接: sid=%s "
+                            "owner=%s/%s requester=%s/%s",
+                            incoming_session,
+                            getattr(existing, "tenant_id", "?"),
+                            getattr(existing, "user_id", "?"),
+                            _auth_tenant_id,
+                            _auth_user_id,
+                        )
+                        await websocket.send_json(
+                            {
+                                "type": "session_forbidden",
+                                "session_id": incoming_session,
+                                "error_code": "SESSION_FORBIDDEN",
+                                "message": "无权续接此会话",
+                                "timestamp": time.time(),
+                            }
+                        )
+                        continue
+
                     # 内存仍有该会话（同生命周期内的重连）→ 直接复用，更新连接引用；
                     # 租户/身份以服务端解析为准（防客户端伪造 tenant_id 越权串台）
                     session_id = incoming_session
@@ -265,7 +359,38 @@ async def websocket_chat(websocket: WebSocket):
                         }
                     )
                 else:
-                    # 内存无此会话（如服务重启）→ 以该 id 重建，并从 DB 恢复历史；
+                    # 内存无此会话（如服务重启）。重建前先查 DB 归属（P0-3 H3）：
+                    # 会话在 DB 存在但归属他人/他租户时直接拒绝，防止拖走历史。
+                    from src.db.repositories import conversation_get
+
+                    owner_meta = await asyncio.to_thread(
+                        conversation_get, incoming_session
+                    )
+                    if owner_meta and (
+                        owner_meta.get("user_id") != _auth_user_id
+                        or owner_meta.get("tenant_id") != _auth_tenant_id
+                    ):
+                        logger.warning(
+                            "resume_session 拒绝跨用户恢复: sid=%s owner=%s/%s "
+                            "requester=%s/%s",
+                            incoming_session,
+                            owner_meta.get("tenant_id"),
+                            owner_meta.get("user_id"),
+                            _auth_tenant_id,
+                            _auth_user_id,
+                        )
+                        await websocket.send_json(
+                            {
+                                "type": "session_forbidden",
+                                "session_id": incoming_session,
+                                "error_code": "SESSION_FORBIDDEN",
+                                "message": "无权恢复此会话历史",
+                                "timestamp": time.time(),
+                            }
+                        )
+                        continue
+
+                    # DB 无记录（全新 id）允许以该 id 重建；有记录且归属一致才恢复；
                     # 租户/身份以服务端解析为准
                     session_id = incoming_session
                     user_id = _auth_user_id
@@ -280,13 +405,13 @@ async def websocket_chat(websocket: WebSocket):
                     new_state = session_mgr.get_session(session_id)
                     if new_state is not None:
                         new_state._websocket_ref = websocket
-                        # 从 DB 恢复历史
+                        # 从 DB 恢复历史（带租户纵深过滤）
                         restored_count = 0
                         try:
                             from src.db.repositories import message_list
 
                             restored = await asyncio.to_thread(
-                                message_list, session_id, 200
+                                message_list, session_id, 200, tenant_id
                             )
                             if restored:
                                 new_state.conversation_history = [
@@ -1249,11 +1374,20 @@ async def websocket_agent(websocket: WebSocket, agent_id: str = Path(...)):
     """人工坐席工作台 WebSocket 端点
 
     流程：
-        1. 坐席连接 → 注册到 session_manager
+        1. 坐席连接（P0-2 起必须携带有效 JWT，角色与身份校验通过）
+           → 注册到 session_manager
         2. 有新转接时收到 new_transfer 通知
-        3. 坐席回复用户 → agent_send_reply → 推送到用户
+        3. 坐席回复用户 → agent_send_reply → 归属校验 → 推送到用户
         4. Copilot 模式：用户发消息时自动推送建议回复
     """
+    # 握手阶段强鉴权：未认证 / 角色不足 / 身份冒用直接拒绝，绝不注册到
+    # agent 路由表，否则攻击者可抢占 agent_id 接收其他坐席的转接客户资料。
+    # 1008 = Policy Violation；close 在 accept 之前，客户端收到握手拒绝。
+    agent_user = _authenticate_agent_ws(websocket, agent_id)
+    if agent_user is None:
+        await websocket.close(code=1008)
+        return
+
     session_mgr = get_session_manager()
 
     # 接受连接

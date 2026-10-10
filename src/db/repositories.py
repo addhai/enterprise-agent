@@ -6,18 +6,16 @@
       调用点（knowledge.py / mcp_tools/kb.py / auth.py 等）几乎无需改写逻辑
     - 业务模块（KBSet 等）按需延迟导入，避免顶层循环依赖
 """
+
 from __future__ import annotations
 
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from sqlalchemy import select, func, and_
-from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-from src.db.base import Base
-from src.db.engine import get_engine
 from src.db.models import (
     Conversation,
     KbDocument,
@@ -40,7 +38,8 @@ DEFAULT_TENANT = "default"
 # 通用 helpers
 # ---------------------------------------------------------------------------
 
-def _loads(s: Optional[str], default: Any) -> Any:
+
+def _loads(s: str | None, default: Any) -> Any:
     if s is None or s == "":
         return default
     try:
@@ -53,13 +52,13 @@ def _dumps(v: Any) -> str:
     return json.dumps(v or [], ensure_ascii=False)
 
 
-def _dt2f(dt: Optional[datetime]) -> float:
+def _dt2f(dt: datetime | None) -> float:
     if dt is None:
         return 0.0
     return dt.replace(tzinfo=timezone.utc).timestamp()
 
 
-def _f2dt(f: Optional[float]) -> datetime:
+def _f2dt(f: float | None) -> datetime:
     if not f:
         return datetime.utcnow()
     try:
@@ -68,7 +67,7 @@ def _f2dt(f: Optional[float]) -> datetime:
         return datetime.utcnow()
 
 
-def _iso2dt(s: Optional[str]) -> datetime:
+def _iso2dt(s: str | None) -> datetime:
     if not s:
         return datetime.utcnow()
     try:
@@ -81,7 +80,7 @@ def _iso2dt(s: Optional[str]) -> datetime:
             return datetime.utcnow()
 
 
-def _dt2iso(dt: Optional[datetime]) -> str:
+def _dt2iso(dt: datetime | None) -> str:
     return (dt or datetime.utcnow()).isoformat()
 
 
@@ -89,7 +88,8 @@ def _dt2iso(dt: Optional[datetime]) -> str:
 # 用户（合并原 auth._users 与 mcp_tools/users 双存储）
 # ---------------------------------------------------------------------------
 
-def _user_row_to_dict(row: User) -> Dict[str, Any]:
+
+def _user_row_to_dict(row: User) -> dict[str, Any]:
     username = row.username
     return {
         "user_id": row.id,
@@ -107,19 +107,19 @@ def _user_row_to_dict(row: User) -> Dict[str, Any]:
     }
 
 
-def user_get_by_username(username: str) -> Optional[Dict[str, Any]]:
+def user_get_by_username(username: str) -> dict[str, Any] | None:
     with db_session() as s:
         row = s.query(User).filter(User.username == username).first()
         return _user_row_to_dict(row) if row else None
 
 
-def user_get_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+def user_get_by_id(user_id: str) -> dict[str, Any] | None:
     with db_session() as s:
         row = s.query(User).filter(User.id == user_id).first()
         return _user_row_to_dict(row) if row else None
 
 
-def user_create(user_dict: Dict[str, Any]) -> Dict[str, Any]:
+def user_create(user_dict: dict[str, Any]) -> dict[str, Any]:
     with db_session() as s:
         row = User(
             id=user_dict["user_id"],
@@ -138,19 +138,27 @@ def user_create(user_dict: Dict[str, Any]) -> Dict[str, Any]:
     return user_get_by_id(user_dict["user_id"])
 
 
-def user_update(user_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def user_update(user_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
     with db_session() as s:
         row = s.query(User).filter(User.id == user_id).first()
         if row is None:
             return None
-        for key in ("username", "password_hash", "display_name", "email",
-                    "role", "status", "is_admin", "department"):
+        for key in (
+            "username",
+            "password_hash",
+            "display_name",
+            "email",
+            "role",
+            "status",
+            "is_admin",
+            "department",
+        ):
             if key in data:
                 setattr(row, key, data[key])
     return user_get_by_id(user_id)
 
 
-def list_users(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_users(tenant_id: str | None = None) -> list[dict[str, Any]]:
     with db_session() as s:
         q = s.query(User)
         if tenant_id:
@@ -159,25 +167,30 @@ def list_users(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
         return [_user_row_to_dict(r) for r in rows]
 
 
-def ensure_default_users(defaults: List[Dict[str, Any]]) -> None:
-    """若默认账号不存在则创建。defaults 为含 user_id/username/password_hash/role 的 dict 列表。"""
+def ensure_default_users(defaults: list[dict[str, Any]]) -> None:
+    """若默认账号不存在则创建。
+
+    defaults 为含 user_id/username/password_hash/role 的 dict 列表。
+    """
     for d in defaults:
         with db_session() as s:
             exists = s.query(User).filter(User.username == d["username"]).first()
             if exists is None:
-                s.add(User(
-                    id=d["user_id"],
-                    tenant_id=DEFAULT_TENANT,
-                    username=d["username"],
-                    password_hash=d["password_hash"],
-                    display_name=d.get("display_name", d["username"]),
-                    email=d.get("email", ""),
-                    role=d.get("role", "viewer"),
-                    status=d.get("status", "active"),
-                    is_admin=d.get("is_admin", False),
-                    department=d.get("department", ""),
-                    created_at=datetime.utcnow(),
-                ))
+                s.add(
+                    User(
+                        id=d["user_id"],
+                        tenant_id=DEFAULT_TENANT,
+                        username=d["username"],
+                        password_hash=d["password_hash"],
+                        display_name=d.get("display_name", d["username"]),
+                        email=d.get("email", ""),
+                        role=d.get("role", "viewer"),
+                        status=d.get("status", "active"),
+                        is_admin=d.get("is_admin", False),
+                        department=d.get("department", ""),
+                        created_at=datetime.utcnow(),
+                    )
+                )
                 logger.info("Seeded default user: %s", d["username"])
 
 
@@ -185,7 +198,8 @@ def ensure_default_users(defaults: List[Dict[str, Any]]) -> None:
 # 租户（多租户隔离的根级单元）
 # ---------------------------------------------------------------------------
 
-def _tenant_row_to_dict(row: Tenant) -> Dict[str, Any]:
+
+def _tenant_row_to_dict(row: Tenant) -> dict[str, Any]:
     return {
         "tenant_id": row.id,
         "name": row.name,
@@ -196,7 +210,7 @@ def _tenant_row_to_dict(row: Tenant) -> Dict[str, Any]:
     }
 
 
-def tenant_get(tenant_id: str) -> Optional[Dict[str, Any]]:
+def tenant_get(tenant_id: str) -> dict[str, Any] | None:
     with db_session() as s:
         row = s.query(Tenant).filter(Tenant.id == tenant_id).first()
         return _tenant_row_to_dict(row) if row else None
@@ -206,7 +220,7 @@ def tenant_exists(tenant_id: str) -> bool:
     return tenant_get(tenant_id) is not None
 
 
-def tenant_create(tenant_dict: Dict[str, Any]) -> Dict[str, Any]:
+def tenant_create(tenant_dict: dict[str, Any]) -> dict[str, Any]:
     """创建租户（幂等：已存在则直接返回）。tenant_id 由调用方指定。"""
     with db_session() as s:
         exists = s.query(Tenant).filter(Tenant.id == tenant_dict["tenant_id"]).first()
@@ -223,25 +237,27 @@ def tenant_create(tenant_dict: Dict[str, Any]) -> Dict[str, Any]:
     return tenant_get(tenant_dict["tenant_id"])
 
 
-def tenant_list() -> List[Dict[str, Any]]:
+def tenant_list() -> list[dict[str, Any]]:
     with db_session() as s:
         rows = s.query(Tenant).order_by(Tenant.created_at.asc()).all()
         return [_tenant_row_to_dict(r) for r in rows]
 
 
-def ensure_default_tenants(defaults: List[Dict[str, Any]]) -> None:
+def ensure_default_tenants(defaults: list[dict[str, Any]]) -> None:
     """若默认租户不存在则创建。defaults 为含 tenant_id/name 的 dict 列表。"""
     for d in defaults:
         with db_session() as s:
             exists = s.query(Tenant).filter(Tenant.id == d["tenant_id"]).first()
             if exists is None:
-                s.add(Tenant(
-                    id=d["tenant_id"],
-                    name=d.get("name", d["tenant_id"]),
-                    plan=d.get("plan", "free"),
-                    status=d.get("status", "active"),
-                    created_at=datetime.utcnow(),
-                ))
+                s.add(
+                    Tenant(
+                        id=d["tenant_id"],
+                        name=d.get("name", d["tenant_id"]),
+                        plan=d.get("plan", "free"),
+                        status=d.get("status", "active"),
+                        created_at=datetime.utcnow(),
+                    )
+                )
                 logger.info("Seeded default tenant: %s", d["tenant_id"])
 
 
@@ -249,10 +265,12 @@ def ensure_default_tenants(defaults: List[Dict[str, Any]]) -> None:
 # 知识库集合（KBSet）
 # ---------------------------------------------------------------------------
 
+
 def _row_to_kb_set(row: KnowledgeBase):
     """把 DB 行转为 knowledge.KBSet 对象（供 knowledge.py / 适配器使用）"""
     from src.api.knowledge import KBSet
     from src.mcp_tools.kb import KBType, KBVersion
+
     return KBSet(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -272,9 +290,10 @@ def _row_to_kb_set(row: KnowledgeBase):
 
 def kb_set_save(kb: Any) -> Any:
     """upsert 一个 KBSet（接收 knowledge.py 的 KBSet 模型）。"""
-    from src.mcp_tools.kb import KBType, KBVersion
     tenant_id = getattr(kb, "tenant_id", DEFAULT_TENANT)
-    kb_version = kb.kb_version.value if hasattr(kb.kb_version, "value") else kb.kb_version
+    kb_version = (
+        kb.kb_version.value if hasattr(kb.kb_version, "value") else kb.kb_version
+    )
     kb_type = kb.kb_type.value if hasattr(kb.kb_type, "value") else kb.kb_type
     with db_session() as s:
         row = s.query(KnowledgeBase).filter(KnowledgeBase.id == kb.id).first()
@@ -296,29 +315,36 @@ def kb_set_save(kb: Any) -> Any:
     return kb
 
 
-def kb_set_get(tenant_id: str, kb_id: str) -> Optional[Any]:
+def kb_set_get(tenant_id: str, kb_id: str) -> Any | None:
     with db_session() as s:
-        row = (s.query(KnowledgeBase)
-               .filter(KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.id == kb_id)
-               .first())
+        row = (
+            s.query(KnowledgeBase)
+            .filter(KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.id == kb_id)
+            .first()
+        )
         if row is None:
             return None
         return _row_to_kb_set(row)
 
 
-def kb_set_list(tenant_id: str) -> List[Any]:
+def kb_set_list(tenant_id: str) -> list[Any]:
     with db_session() as s:
-        rows = (s.query(KnowledgeBase)
-                .filter(KnowledgeBase.tenant_id == tenant_id)
-                .order_by(KnowledgeBase.created_at.desc()).all())
+        rows = (
+            s.query(KnowledgeBase)
+            .filter(KnowledgeBase.tenant_id == tenant_id)
+            .order_by(KnowledgeBase.created_at.desc())
+            .all()
+        )
         return [_row_to_kb_set(r) for r in rows]
 
 
 def kb_set_delete(tenant_id: str, kb_id: str) -> bool:
     with db_session() as s:
-        row = (s.query(KnowledgeBase)
-               .filter(KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.id == kb_id)
-               .first())
+        row = (
+            s.query(KnowledgeBase)
+            .filter(KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.id == kb_id)
+            .first()
+        )
         if row is None:
             return False
         s.delete(row)
@@ -335,6 +361,7 @@ def kb_set_reset() -> None:
 # 知识库文档（KBItem）
 # ---------------------------------------------------------------------------
 
+
 def _row_to_kb_item(row: KbDocument):
     """把 DB 行转为 mcp_tools.kb.KBItem 对象（供 mcp_tools/kb.py / 适配器使用）"""
     from src.mcp_tools.kb import (
@@ -344,6 +371,7 @@ def _row_to_kb_item(row: KbDocument):
         KBVersion,
         UploadMethod,
     )
+
     return KBItem(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -378,13 +406,33 @@ def kb_item_save(item: Any) -> Any:
         row.title = getattr(item, "title", "")
         row.file_path = getattr(item, "file_path", "")
         row.source_type = getattr(item, "source_type", "document")
-        row.status = getattr(item, "status", "pending").value if hasattr(getattr(item, "status", "pending"), "value") else getattr(item, "status", "pending")
+        row.status = (
+            getattr(item, "status", "pending").value
+            if hasattr(getattr(item, "status", "pending"), "value")
+            else getattr(item, "status", "pending")
+        )
         row.chunk_count = getattr(item, "chunk_count", 0)
-        row.indexed_at = _iso2dt(getattr(item, "indexed_at", None)) if getattr(item, "indexed_at", None) else None
+        row.indexed_at = (
+            _iso2dt(getattr(item, "indexed_at", None))
+            if getattr(item, "indexed_at", None)
+            else None
+        )
         row.created_at = _iso2dt(getattr(item, "created_at", None))
-        row.kb_version = getattr(item, "kb_version", "standard").value if hasattr(getattr(item, "kb_version", "standard"), "value") else getattr(item, "kb_version", "standard")
-        row.kb_type = getattr(item, "kb_type", "document").value if hasattr(getattr(item, "kb_type", "document"), "value") else getattr(item, "kb_type", "document")
-        row.upload_method = getattr(item, "upload_method", "single").value if hasattr(getattr(item, "upload_method", "single"), "value") else getattr(item, "upload_method", "single")
+        row.kb_version = (
+            getattr(item, "kb_version", "standard").value
+            if hasattr(getattr(item, "kb_version", "standard"), "value")
+            else getattr(item, "kb_version", "standard")
+        )
+        row.kb_type = (
+            getattr(item, "kb_type", "document").value
+            if hasattr(getattr(item, "kb_type", "document"), "value")
+            else getattr(item, "kb_type", "document")
+        )
+        row.upload_method = (
+            getattr(item, "upload_method", "single").value
+            if hasattr(getattr(item, "upload_method", "single"), "value")
+            else getattr(item, "upload_method", "single")
+        )
         row.file_size = getattr(item, "file_size", 0)
         row.doc_format = getattr(item, "doc_format", "")
         row.parse_status = getattr(item, "parse_status", "pending")
@@ -393,35 +441,46 @@ def kb_item_save(item: Any) -> Any:
     return item
 
 
-def kb_item_get(tenant_id: str, doc_id: str) -> Optional[Any]:
+def kb_item_get(tenant_id: str, doc_id: str) -> Any | None:
     with db_session() as s:
-        row = (s.query(KbDocument)
-               .filter(KbDocument.tenant_id == tenant_id, KbDocument.id == doc_id)
-               .first())
+        row = (
+            s.query(KbDocument)
+            .filter(KbDocument.tenant_id == tenant_id, KbDocument.id == doc_id)
+            .first()
+        )
         return _row_to_kb_item(row) if row else None
 
 
-def kb_item_list(tenant_id: str, limit: int = 1000) -> List[Any]:
+def kb_item_list(tenant_id: str, limit: int = 1000) -> list[Any]:
     with db_session() as s:
-        rows = (s.query(KbDocument)
-                .filter(KbDocument.tenant_id == tenant_id)
-                .order_by(KbDocument.created_at.desc()).limit(limit).all())
+        rows = (
+            s.query(KbDocument)
+            .filter(KbDocument.tenant_id == tenant_id)
+            .order_by(KbDocument.created_at.desc())
+            .limit(limit)
+            .all()
+        )
         return [_row_to_kb_item(r) for r in rows]
 
 
-def kb_item_list_by_kb(tenant_id: str, kb_id: str) -> List[Any]:
+def kb_item_list_by_kb(tenant_id: str, kb_id: str) -> list[Any]:
     with db_session() as s:
-        rows = (s.query(KbDocument)
-                .filter(KbDocument.tenant_id == tenant_id, KbDocument.kb_id == kb_id)
-                .order_by(KbDocument.created_at.desc()).all())
+        rows = (
+            s.query(KbDocument)
+            .filter(KbDocument.tenant_id == tenant_id, KbDocument.kb_id == kb_id)
+            .order_by(KbDocument.created_at.desc())
+            .all()
+        )
         return [_row_to_kb_item(r) for r in rows]
 
 
 def kb_item_delete(tenant_id: str, doc_id: str) -> bool:
     with db_session() as s:
-        row = (s.query(KbDocument)
-               .filter(KbDocument.tenant_id == tenant_id, KbDocument.id == doc_id)
-               .first())
+        row = (
+            s.query(KbDocument)
+            .filter(KbDocument.tenant_id == tenant_id, KbDocument.id == doc_id)
+            .first()
+        )
         if row is None:
             return False
         s.delete(row)
@@ -438,8 +497,11 @@ def kb_item_reset() -> None:
 # 工单（Ticket）— 实现 TicketStore Protocol
 # ---------------------------------------------------------------------------
 
+
 def _ticket_row_to_model(row: Ticket):
-    from src.ticket.models import Comment, Ticket as TicketModel, TicketStatus
+    from src.ticket.models import Comment
+    from src.ticket.models import Ticket as TicketModel
+
     comments = [Comment(**c) for c in _loads(row.comments_json, [])]
     return TicketModel(
         id=row.id,
@@ -462,6 +524,7 @@ def _ticket_row_to_model(row: Ticket):
 
 def ticket_create(req) -> Any:
     from src.ticket.models import Ticket as TicketModel
+
     ticket = TicketModel(
         tenant_id=req.tenant_id,
         user_id=req.user_id,
@@ -475,10 +538,14 @@ def ticket_create(req) -> Any:
     with db_session() as s:
         # 幂等检查
         if req.idempotency_key:
-            existing = (s.query(Ticket)
-                        .filter(Ticket.tenant_id == req.tenant_id,
-                                Ticket.idempotency_key == req.idempotency_key)
-                        .first())
+            existing = (
+                s.query(Ticket)
+                .filter(
+                    Ticket.tenant_id == req.tenant_id,
+                    Ticket.idempotency_key == req.idempotency_key,
+                )
+                .first()
+            )
             if existing:
                 return _ticket_row_to_model(existing)
         row = Ticket(
@@ -487,9 +554,15 @@ def ticket_create(req) -> Any:
             user_id=ticket.user_id,
             title=ticket.title,
             description=ticket.description,
-            category=ticket.category.value if hasattr(ticket.category, "value") else ticket.category,
-            priority=ticket.priority.value if hasattr(ticket.priority, "value") else ticket.priority,
-            status=ticket.status.value if hasattr(ticket.status, "value") else ticket.status,
+            category=ticket.category.value
+            if hasattr(ticket.category, "value")
+            else ticket.category,
+            priority=ticket.priority.value
+            if hasattr(ticket.priority, "value")
+            else ticket.priority,
+            status=ticket.status.value
+            if hasattr(ticket.status, "value")
+            else ticket.status,
             assignee=ticket.assignee,
             tags_json=_dumps(ticket.tags),
             idempotency_key=ticket.idempotency_key,
@@ -501,44 +574,60 @@ def ticket_create(req) -> Any:
     return ticket
 
 
-def ticket_get(ticket_id: str, tenant_id: str) -> Optional[Any]:
+def ticket_get(ticket_id: str, tenant_id: str) -> Any | None:
     with db_session() as s:
-        row = (s.query(Ticket)
-               .filter(Ticket.id == ticket_id, Ticket.tenant_id == tenant_id)
-               .first())
+        row = (
+            s.query(Ticket)
+            .filter(Ticket.id == ticket_id, Ticket.tenant_id == tenant_id)
+            .first()
+        )
         return _ticket_row_to_model(row) if row else None
 
 
-def ticket_update(ticket_id: str, tenant_id: str, req) -> Optional[Any]:
+def ticket_update(ticket_id: str, tenant_id: str, req) -> Any | None:
     from src.ticket.models import TicketStatus
+
     with db_session() as s:
-        row = (s.query(Ticket)
-               .filter(Ticket.id == ticket_id, Ticket.tenant_id == tenant_id)
-               .first())
+        row = (
+            s.query(Ticket)
+            .filter(Ticket.id == ticket_id, Ticket.tenant_id == tenant_id)
+            .first()
+        )
         if row is None:
             return None
         if row.status in (TicketStatus.CLOSED.value, TicketStatus.CANCELLED.value):
             return None
-        for field, attr in (("title", "title"), ("description", "description"),
-                            ("category", "category"), ("priority", "priority"),
-                            ("status", "status"), ("assignee", "assignee"),
-                            ("tags", "tags")):
+        for field in (
+            "title",
+            "description",
+            "category",
+            "priority",
+            "status",
+            "assignee",
+            "tags",
+        ):
             value = getattr(req, field, None)
             if value is not None:
                 if field in ("category", "priority", "status"):
-                    setattr(row, field, value.value if hasattr(value, "value") else value)
+                    setattr(
+                        row, field, value.value if hasattr(value, "value") else value
+                    )
                 elif field == "tags":
-                    setattr(row, "tags_json", _dumps(list(value)))
+                    row.tags_json = _dumps(list(value))
                 else:
                     setattr(row, field, value)
-        if getattr(req, "status", None) in (TicketStatus.CLOSED, TicketStatus.CANCELLED):
+        if getattr(req, "status", None) in (
+            TicketStatus.CLOSED,
+            TicketStatus.CANCELLED,
+        ):
             from datetime import timezone
+
             row.closed_at = datetime.now(timezone.utc)
         row.updated_at = datetime.utcnow()
     return ticket_get(ticket_id, tenant_id)
 
 
-def ticket_list(filter) -> List[Any]:
+def ticket_list(filter) -> list[Any]:
     with db_session() as s:
         q = s.query(Ticket)
         if filter.tenant_id:
@@ -546,13 +635,25 @@ def ticket_list(filter) -> List[Any]:
         if filter.user_id:
             q = q.filter(Ticket.user_id == filter.user_id)
         if filter.status:
-            st = filter.status.value if hasattr(filter.status, "value") else filter.status
+            st = (
+                filter.status.value
+                if hasattr(filter.status, "value")
+                else filter.status
+            )
             q = q.filter(Ticket.status == st)
         if filter.category:
-            cat = filter.category.value if hasattr(filter.category, "value") else filter.category
+            cat = (
+                filter.category.value
+                if hasattr(filter.category, "value")
+                else filter.category
+            )
             q = q.filter(Ticket.category == cat)
         if filter.priority:
-            pr = filter.priority.value if hasattr(filter.priority, "value") else filter.priority
+            pr = (
+                filter.priority.value
+                if hasattr(filter.priority, "value")
+                else filter.priority
+            )
             q = q.filter(Ticket.priority == pr)
         if filter.assignee:
             q = q.filter(Ticket.assignee == filter.assignee)
@@ -560,21 +661,28 @@ def ticket_list(filter) -> List[Any]:
         return [_ticket_row_to_model(r) for r in rows]
 
 
-def ticket_add_comment(ticket_id: str, tenant_id: str, comment) -> Optional[Any]:
+def ticket_add_comment(ticket_id: str, tenant_id: str, comment) -> Any | None:
     with db_session() as s:
-        row = (s.query(Ticket)
-               .filter(Ticket.id == ticket_id, Ticket.tenant_id == tenant_id)
-               .first())
+        row = (
+            s.query(Ticket)
+            .filter(Ticket.id == ticket_id, Ticket.tenant_id == tenant_id)
+            .first()
+        )
         if row is None:
             return None
         comments = _loads(row.comments_json, [])
-        comments.append({
-            "id": getattr(comment, "id", ""),
-            "author": getattr(comment, "author", ""),
-            "content": getattr(comment, "content", ""),
-            "created_at": getattr(comment, "created_at", datetime.utcnow()).isoformat()
-            if hasattr(getattr(comment, "created_at", None), "isoformat") else str(getattr(comment, "created_at", "")),
-        })
+        comments.append(
+            {
+                "id": getattr(comment, "id", ""),
+                "author": getattr(comment, "author", ""),
+                "content": getattr(comment, "content", ""),
+                "created_at": getattr(
+                    comment, "created_at", datetime.utcnow()
+                ).isoformat()
+                if hasattr(getattr(comment, "created_at", None), "isoformat")
+                else str(getattr(comment, "created_at", "")),
+            }
+        )
         row.comments_json = _dumps(comments)
         row.updated_at = datetime.utcnow()
     return ticket_get(ticket_id, tenant_id)
@@ -582,9 +690,11 @@ def ticket_add_comment(ticket_id: str, tenant_id: str, comment) -> Optional[Any]
 
 def ticket_delete(ticket_id: str, tenant_id: str) -> bool:
     with db_session() as s:
-        row = (s.query(Ticket)
-               .filter(Ticket.id == ticket_id, Ticket.tenant_id == tenant_id)
-               .first())
+        row = (
+            s.query(Ticket)
+            .filter(Ticket.id == ticket_id, Ticket.tenant_id == tenant_id)
+            .first()
+        )
         if row is None:
             return False
         s.delete(row)
@@ -601,7 +711,8 @@ def ticket_reset() -> None:
 # 满意度（Satisfaction）
 # ---------------------------------------------------------------------------
 
-def satisfaction_create(record: Dict[str, Any]) -> Dict[str, Any]:
+
+def satisfaction_create(record: dict[str, Any]) -> dict[str, Any]:
     with db_session() as s:
         row = Satisfaction(
             id=record["id"],
@@ -619,12 +730,12 @@ def satisfaction_create(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def satisfaction_list(
-    user_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    agent_id: Optional[str] = None,
-    tenant_id: Optional[str] = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    agent_id: str | None = None,
+    tenant_id: str | None = None,
     limit: int = 200,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     with db_session() as s:
         q = s.query(Satisfaction)
         if tenant_id:
@@ -636,30 +747,38 @@ def satisfaction_list(
         if agent_id:
             q = q.filter(Satisfaction.agent_id == agent_id)
         rows = q.order_by(Satisfaction.created_at.desc()).limit(limit).all()
-        return [{
-            "id": r.id,
-            "session_id": r.session_id,
-            "user_id": r.user_id,
-            "score": r.score,
-            "tags": _loads(r.tags_json, []),
-            "comment": r.comment,
-            "agent_id": r.agent_id,
-            "created_at": _dt2f(r.created_at),
-        } for r in rows]
+        return [
+            {
+                "id": r.id,
+                "session_id": r.session_id,
+                "user_id": r.user_id,
+                "score": r.score,
+                "tags": _loads(r.tags_json, []),
+                "comment": r.comment,
+                "agent_id": r.agent_id,
+                "created_at": _dt2f(r.created_at),
+            }
+            for r in rows
+        ]
 
 
 def satisfaction_count_since(cutoff_float: float) -> int:
     with db_session() as s:
         cutoff = _f2dt(cutoff_float)
-        return s.query(func.count(Satisfaction.id)).filter(
-            Satisfaction.created_at >= cutoff).scalar() or 0
+        return (
+            s.query(func.count(Satisfaction.id))
+            .filter(Satisfaction.created_at >= cutoff)
+            .scalar()
+            or 0
+        )
 
 
 # ---------------------------------------------------------------------------
 # 通知（Notification）
 # ---------------------------------------------------------------------------
 
-def notification_create(record: Dict[str, Any]) -> Dict[str, Any]:
+
+def notification_create(record: dict[str, Any]) -> dict[str, Any]:
     with db_session() as s:
         row = Notification(
             id=record["id"],
@@ -678,17 +797,18 @@ def notification_create(record: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
-def notification_list_all(limit: int = 500, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def notification_list_all(
+    limit: int = 500, tenant_id: str | None = None
+) -> list[dict[str, Any]]:
     with db_session() as s:
         q = s.query(Notification)
         if tenant_id:
             q = q.filter(Notification.tenant_id == tenant_id)
-        rows = q.order_by(
-            Notification.created_at.desc()).limit(limit).all()
+        rows = q.order_by(Notification.created_at.desc()).limit(limit).all()
         return [_note_row_to_dict(r) for r in rows]
 
 
-def _note_row_to_dict(r: Notification) -> Dict[str, Any]:
+def _note_row_to_dict(r: Notification) -> dict[str, Any]:
     return {
         "id": r.id,
         "type": r.type,
@@ -733,9 +853,7 @@ def _note_visible(r: Notification, user_id: str, role: str, username: str) -> bo
     target_users = _loads(r.target_users_json, [])
     target_roles = _loads(r.target_roles_json, [])
     if target_users:
-        if username in target_users or user_id in target_users:
-            return True
-        return False
+        return username in target_users or user_id in target_users
     if target_roles:
         return role in target_roles
     return True
@@ -745,12 +863,13 @@ def _note_visible(r: Notification, user_id: str, role: str, username: str) -> bo
 # 会话 / 消息（WebSocket 对话持久化）
 # ---------------------------------------------------------------------------
 
+
 def conversation_ensure(
     session_id: str,
     tenant_id: str,
     user_id: str,
     channel: str = "web",
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> str:
     """确保会话存在（不存在则创建），返回 conversation id (= session_id)。"""
     with db_session() as s:
@@ -777,11 +896,12 @@ def message_save(
     role: str,
     content: str,
     intent: str = "",
-    metadata: Optional[Dict[str, Any]] = None,
-    message_id: Optional[str] = None,
+    metadata: dict[str, Any] | None = None,
+    message_id: str | None = None,
 ) -> None:
     """持久化一条消息到 messages 表（不阻塞 WS 流式推送）。"""
     import uuid
+
     with db_session() as s:
         row = Message(
             id=message_id or f"MSG-{uuid.uuid4().hex[:12]}",
@@ -798,26 +918,54 @@ def message_save(
             conv.updated_at = datetime.utcnow()
 
 
-def message_list(session_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+def conversation_get(session_id: str) -> dict[str, Any] | None:
+    """按 session_id 取会话归属元数据（P0-3 归属/租户校验用）。
+
+    返回 ``{id, session_id, tenant_id, user_id, status}``；不存在返回 None。
+    """
     with db_session() as s:
-        rows = (s.query(Message)
-                .filter(Message.conversation_id == session_id)
-                .order_by(Message.created_at.asc()).limit(limit).all())
-        return [{
-            "id": r.id,
-            "role": r.role,
-            "content": r.content,
-            "intent": r.intent,
-            "metadata": _loads(r.metadata_json, {}),
-            "created_at": _dt2f(r.created_at),
-        } for r in rows]
+        row = s.query(Conversation).filter(Conversation.id == session_id).first()
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "session_id": row.session_id or row.id,
+            "tenant_id": row.tenant_id or DEFAULT_TENANT,
+            "user_id": row.user_id or "",
+            "status": row.status,
+        }
+
+
+def message_list(
+    session_id: str,
+    limit: int = 200,
+    tenant_id: str | None = None,
+) -> list[dict[str, Any]]:
+    # tenant_id 为纵深过滤项（P0-3）：会话恢复链路必须带租户，
+    # 即使有人绕过会话归属校验直接构造 session_id，也读不到他租户消息。
+    with db_session() as s:
+        q = s.query(Message).filter(Message.conversation_id == session_id)
+        if tenant_id:
+            q = q.filter(Message.tenant_id == tenant_id)
+        rows = q.order_by(Message.created_at.asc()).limit(limit).all()
+        return [
+            {
+                "id": r.id,
+                "role": r.role,
+                "content": r.content,
+                "intent": r.intent,
+                "metadata": _loads(r.metadata_json, {}),
+                "created_at": _dt2f(r.created_at),
+            }
+            for r in rows
+        ]
 
 
 def conversation_list(
     tenant_id: str = DEFAULT_TENANT,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     limit: int = 50,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     with db_session() as s:
         q = s.query(Conversation).filter(Conversation.tenant_id == tenant_id)
         if user_id:
@@ -825,19 +973,26 @@ def conversation_list(
         rows = q.order_by(Conversation.updated_at.desc()).limit(limit).all()
         result = []
         for r in rows:
-            last = (s.query(Message)
+            last = (
+                s.query(Message)
+                .filter(Message.conversation_id == r.id)
+                .order_by(Message.created_at.desc())
+                .first()
+            )
+            result.append(
+                {
+                    "session_id": r.session_id or r.id,
+                    "user_id": r.user_id,
+                    "channel": r.channel,
+                    "status": r.status,
+                    "message_count": s.query(func.count(Message.id))
                     .filter(Message.conversation_id == r.id)
-                    .order_by(Message.created_at.desc()).first())
-            result.append({
-                "session_id": r.session_id or r.id,
-                "user_id": r.user_id,
-                "channel": r.channel,
-                "status": r.status,
-                "message_count": s.query(func.count(Message.id))
-                .filter(Message.conversation_id == r.id).scalar() or 0,
-                "last_message": last.content[:200] if last else "",
-                "updated_at": _dt2f(r.updated_at),
-            })
+                    .scalar()
+                    or 0,
+                    "last_message": last.content[:200] if last else "",
+                    "updated_at": _dt2f(r.updated_at),
+                }
+            )
         return result
 
 
