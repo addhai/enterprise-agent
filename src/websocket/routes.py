@@ -987,37 +987,45 @@ async def _handle_ai_chat(
 
         thread_config = {"configurable": {"thread_id": session_id}}
         workflow_outcome: dict = {}
-        with workflow_run(
-            session_id, float(_ws_settings.ws_workflow_hard_timeout)
-        ) as _run_gen:
-            result = await asyncio.to_thread(
-                _invoke_graph,
-                app,
-                state,
-                thread_config,
-                session_id,
-                _run_gen,
-                workflow_outcome,
-            )
-            _cancel_reason = workflow_outcome.get("cancelled_reason")
-            if _cancel_reason:
-                # 取消原因与耗时已在工作线程侧 _invoke_graph 记录日志
-                if _cancel_reason == "hard_timeout":
-                    # 连接仍在时给用户一个交代；连接已断则发送静默失败
-                    try:
-                        await websocket.send_json(
-                            build_error(
-                                session_id,
-                                "WORKFLOW_TIMEOUT",
-                                "本次处理耗时过长，请缩小问题范围或稍后再试。",
+        # 标记工作流在途：直答静默期可达 450s，防止 session_manager 的
+        # 90s 心跳清理把在途会话当死会话回收。finally 覆盖超时 return 与
+        # 异常路径，保证标记不泄漏。
+        _session_mgr = get_session_manager()
+        _session_mgr.mark_workflow_start(session_id)
+        try:
+            with workflow_run(
+                session_id, float(_ws_settings.ws_workflow_hard_timeout)
+            ) as _run_gen:
+                result = await asyncio.to_thread(
+                    _invoke_graph,
+                    app,
+                    state,
+                    thread_config,
+                    session_id,
+                    _run_gen,
+                    workflow_outcome,
+                )
+                _cancel_reason = workflow_outcome.get("cancelled_reason")
+                if _cancel_reason:
+                    # 取消原因与耗时已在工作线程侧 _invoke_graph 记录日志
+                    if _cancel_reason == "hard_timeout":
+                        # 连接仍在时给用户一个交代；连接已断则发送静默失败
+                        try:
+                            await websocket.send_json(
+                                build_error(
+                                    session_id,
+                                    "WORKFLOW_TIMEOUT",
+                                    "本次处理耗时过长，请缩小问题范围或稍后再试。",
+                                )
                             )
-                        )
-                    except Exception:
-                        # 连接已断时发送必然失败，属预期静默路径
-                        logger.debug(
-                            "WORKFLOW_TIMEOUT frame send failed", exc_info=True
-                        )
-                return
+                        except Exception:
+                            # 连接已断时发送必然失败，属预期静默路径
+                            logger.debug(
+                                "WORKFLOW_TIMEOUT frame send failed", exc_info=True
+                            )
+                    return
+        finally:
+            _session_mgr.mark_workflow_end(session_id)
 
         # ===== HITL 检测：检查工作流是否被 interrupt() 暂停 =====
         is_interrupted = False

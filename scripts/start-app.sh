@@ -32,6 +32,14 @@ timeout 180 sh -c 'until /usr/bin/ollama list > /dev/null 2>&1; do sleep 2; done
 echo "[start-app] ollama readiness probe finished, starting uvicorn"
 
 # ---- 3) uvicorn 前台托管 ----
+# WS 协议心跳 25s/60s（2026-10-09 由 300/300 收紧）。
+# 病因：直答路径一次 LLM 调用静默 100-450s，期间无业务帧；300s 心跳等于
+# 没有保活，Docker Desktop WSL2 端口转发会把静默连接静默回收，客户端收到
+# ConnectionClosedError（no close frame）零帧断连，而服务端 LLM 实际 200
+# 正常返回。A/B 两轮各随机命中 2/50，与单题静默时长无关（446s 不断、103s
+# 断），符合中间层连接回收特征。协议层 ping/pong 每 25s 给链路续命；
+# timeout 留 60s 防 CPU 推理满载时 pong 回复慢被反杀。
+# 验证：收紧后跑 GF13/GF16/GP10/GS12 定向题集重复两轮零断连方可镜像固化。
 exec uvicorn src.api.server:app \
   --host 0.0.0.0 --port 8000 \
-  --ws-ping-interval 300 --ws-ping-timeout 300
+  --ws-ping-interval 25 --ws-ping-timeout 60

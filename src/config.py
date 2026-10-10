@@ -160,6 +160,24 @@ class Settings(BaseSettings):
     rerank_model: str = "gte-rerank"
     rerank_top_n: int = 5  # 重排序后返回前 N 个结果
 
+    # 句子粒度检索通道（独立 collection knowledge_base_sentences）
+    # 2026-10-09 修复：生产单例无参构造 collection_name=None 导致
+    # sentence_store 恒为空，2834 条句子向量建库后从未被查询。
+    # 接线后句子路并入 RRF 会改变 top_k 构成，金标回归若出现负向，
+    # 用此开关秒级关回纯标准粒度，无需回滚代码。
+    rag_sentence_enabled: bool = True
+    # 启动时从 Chroma 标准集合重建内存 BM25（BM25 纯内存、无持久化，
+    # 进程每次启动都要重建；不补这一步，混合检索长期只有向量一路）。
+    # 配 jieba 中文分词，裸 langchain 默认单字切词已实测让 MRR 反降。
+    rag_bm25_warmup_enabled: bool = True
+
+    # M3 跨块综合编排（2026-10-09）：直答路径要求模型先输出 <coverage>
+    # 逐块要点与提问点覆盖表，再输出 <answer>，服务端剥离只外发答案段；
+    # 同时按问题信号词用 BM25 毫秒级保底补入保修/退货/裁决类支撑块。
+    # 默认关闭：全量 50 题金标验证不退破基线后再默认开启，期间用 env 灰度。
+    synthesis_enabled: bool = False
+    synthesis_max_injected_docs: int = 6  # 保底补块后的注入上限（原 5 + 补 1）
+
     # Agent
     max_reasoning_turns: int = 5
     max_turns_faq: int = 1

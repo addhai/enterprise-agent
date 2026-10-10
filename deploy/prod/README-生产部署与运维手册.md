@@ -107,6 +107,41 @@ docker compose -f deploy/prod/docker-compose.prod.yml --env-file deploy/prod/.en
 
 > **重要**：所有 compose 操作必须显式加 `-f deploy/prod/docker-compose.prod.yml`，否则会操作到根目录云端形态的旧容器。
 
+### 3.4 检索存储与模型驻留巡检（2026-10-09 起）
+
+BM25 是纯内存索引无持久化，句子集合曾发生过接线断开后建库不查询的
+静默事故。发版后与定期运维必须跑一次完整性巡检：
+
+```powershell
+# 容器内执行（计数基线不符、BM25 未建成、Ollama API 不可达均退出码 1）
+docker exec -w /app -e PYTHONPATH=/app prod-app-1 `
+    python scripts/ops/check_rag_integrity.py `
+    --expect-standard 652 --expect-sentences 2834
+
+# 需要验证真实检索链路时加 --probe（会产生一次 embedding 调用）
+docker exec -w /app -e PYTHONPATH=/app prod-app-1 `
+    python scripts/ops/check_rag_integrity.py `
+    --expect-standard 652 --expect-sentences 2834 --probe "F02 快门卡滞"
+```
+
+重负载窗口的资源峰值采样用 `scripts/smoke/sample_docker_stats.py`，
+产出 CSV 供事后核对内存峰值。
+
+**Ollama 双模型驻留档位**（2026-10-09 实测验收，见 compose 注释）：
+
+| 项 | 档位 | 验收实测 |
+|----|------|----------|
+| 容器内存限额 | 10G | 连跑 5 题峰值 7.71G，均值 4.31G，无 OOM |
+| OLLAMA_MAX_LOADED_MODELS | 2 | qwen2.5:7b 与 bge-m3 同驻，消除互相驱逐冷加载 |
+| OLLAMA_NUM_PARALLEL | 1 | CPU 串行，不可调高 |
+
+回退（出现 OOM 或峰值贴 9.5G）：compose 中内存改回 `8G`、
+`OLLAMA_MAX_LOADED_MODELS=1` 后 `up -d app`。
+宿主 `.wslconfig` 内存上限 12G，容器限额不得超过 10G。
+
+检索双通道与 M3 综合编排均有 env 开关可秒级回退：
+`RAG_SENTENCE_ENABLED`、`RAG_BM25_WARMUP_ENABLED`、`SYNTHESIS_ENABLED`。
+
 ---
 
 ## 四、配置说明

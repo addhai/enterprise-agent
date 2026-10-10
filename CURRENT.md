@@ -3,8 +3,26 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-09 凌晨（**M2 生成质量攻坚收口并镜像固化**，50 题 36→**39/50** 净 +3，p50 157.2s）。新镜像 `enterprise-agent-app-ollama:latest`=**8b0ab6432965**（旧 8cf450cf2340 备份 tag `backup-pre-prompt-v1-20261009`），干净容器 GF05 真机 pass 292.2s、nodes.py/prompt.py MD5 双向一致、8 容器 healthy。prompt v1 完整性规则净修复 GF09/GS03；few-shot 具体范例因 7B 照抄虚构禁忌已证伪回退；GF15/GF20/GS06/GP02/GP09 随 md 细切与 v1 转 pass；GS01/GS02/GP06 三题探针实证为 chunk 细切 × 7B 跨块注意力的结构权衡，登记 M3 综合题专用编排。代码未 commit，待授权。详见下「2026-10-09」时间线。
+> 最后更新：2026-10-10 下午（**P0 认证边界收口 H1/H2/H3/H4 全部上线并镜像固化**，PR #2 已合入 master，CI run 38032792853 五 job 全绿）。新镜像 latest=**49d26d7874d4**（旧 8b0ab6432965 备份 tag `backup-pre-p0-security-20261010`），容器注入 `ENVIRONMENT=production`，镜像内 11 文件 MD5 与 worktree 全一致，鉴权探针热部署/干净镜像两轮 12/12，金标子集 7 题 6 pass（GF20 已归因 7B 生成波动非回归）。chat 强制鉴权、坐席 WS 握手鉴权、会话 IDOR 双层边界、登录失败锁定、生产 JWT 强校验、默认账号强制改密全部生效。本地 1701 passed/17 skipped。**运营待办**：三个 seed 账号仍是出厂密码，需安排改密。详见下「2026-10-10」时间线。
 > 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
+
+---
+
+## 2026-10-10 交付：P0 认证边界收口（H1/H2/H3/H4），PR #2 合入，镜像 49d26d7874d4
+
+**交付链路**：独立 worktree `.worktrees/p0-security`（分支 `fix/p0-security-boundaries`，commit `06cdcad`，25 文件 +2955/-728）→ draft PR #2 五 job 全绿 → 热部署探针 → 备份+重建 → 金标子集 → merge `772251e` 合入 master → master CI run **38032792853** 五 job 全 success（Tests+Coverage 5m32s、Infra Validate、SAST、Frontend Build&Lint、Playwright E2E）。本地全量 1701 passed / 17 skipped / 0 failed；ruff 0.9.0（py310）改动文件全绿，gitleaks 过。
+
+**P0-1 chat 强制鉴权与身份服务端化**：`POST /api/v1/chat` 强制 Bearer；user_id/tenant_id/角色/密级全部取自 token，请求体同名字段不采信；非 active 账号 403。新增 `role_to_access_levels`，viewer 收敛 public+internal；agent 暂保持四级（生产 652 块中 139 个 confidential/restricted 是金标必读料，密级为关键词启发式粗标，机械收紧会滤掉金标答案，待业务校准，注释已标明）。
+
+**P0-2 坐席 WS 强鉴权**：`/ws/agent/{agent_id}` accept 前完成 JWT 验签、用户存在且 active、坐席角色白名单、token 身份与路径 id 严格一致四项校验，失败 1008 关连接；`dispatcher.agent_reply` 加转接归属校验，无分配或非归属坐席回复一律拒绝。
+
+**P0-3 会话 IDOR 与租户隔离**：`resume_session` 内存/DB 两分支按服务端 token 身份做归属校验，拒绝时不挂 ws 引用；`message_list` 租户参数下推 SQL。用户端 `/sessions` 严格本人（角色不豁免），员工端 `/admin/sessions` 同租户跨用户，租户隔离对 super_admin 同样生效；修复 master 原 `if user_id and owner != user_id` 在匿名 user_id=None 时短路放行、可读可删他人会话的漏洞。全量回归中自抓一处边界放宽（自注册用户默认 role=agent，统一矩阵会使其读到同租户他人会话），改回 master 用户端/员工端双层设计并加 9 例矩阵锁定；顺带修复 master 两个 F821 NameError（人工队列引用未定义的 `_get_last_message_preview`/`_session_to_dict`，命中即 500）。
+
+**P0-6 默认账号与暴力破解面**：新增 `src/api/login_guard.py` LoginGuard，同用户名连续失败 5 次锁 15 分钟（429 + Retry-After，锁定期正确密码亦拒，成功清零；进程内计数，单副本有效，多副本待 Redis）。`ENVIRONMENT=production` 时 JWT_SECRET 为空或仍是仓库占位值直接拒启动（`ENVIRONMENT`/`APP_ENV` 别名注入，dev 保留持久化随机兜底）。seed 出厂密码检测用「用户名在清单 + 哈希验通出厂密码」双条件，无需改表；login 与 /auth/me 返回 `must_change_password`，新增 `POST /auth/change-password`（校验旧密码、8 位下限、不得与任一出厂密码相同）；REST 与坐席 WS 双通道强制改密，白名单仅 me/change-password/logout，`REQUIRE_DEFAULT_PASSWORD_CHANGE` 开关供灰度豁免。rbac.py 与 admin.py 各有一份绕过 status 与改密校验的鉴权副本，统一委托 `auth.get_current_user`。
+
+**真机验证（三轮证据）**：①热部署 11 文件 docker cp 进 prod-app-1，MD5 双向一致，restart 后 healthy，探针 12/12（无/坏 token 401、smoke_kbmode 正常、admin 默认密码业务接口 403 `PASSWORD_CHANGE_REQUIRED`、me/改密白名单可达、锁定 429）；②镜像固化：备份 tag `backup-pre-p0-security-20261010`=8b0ab6432965；worktree 补不入库构建资产 `main.py` + 实体复制 models(1082MB)/static/chroma_data（BuildKit 不跟随 Windows junction，首次 build 实测三个 COPY 全 not found，改实体复制后通过）；定向 compose build app + up -d，新 latest **49d26d7874d4**，recreate 后容器注入 ENVIRONMENT=production 且未拒启动（生产 JWT_SECRET 为 80 位真实值）、镜像 sha 一致、镜像内 11 文件 MD5 全一致、探针再跑 12/12、8 容器 healthy；③金标子集 7 题（GF15/GF20/GS04/GS06/GP08/GP10/GR02，报告 `scripts/golden/reports_p0_sec/`）6 pass，事实/综合/程序/拒答四类链路全通，WS 鉴权对问答零影响。唯一 GF20 fail 归因：M3 同题 30 字 pass，本次 100 字答出 IP40 却漏掉「1.2 米跌落」并答「资料未明确给出」，同账号同库同检索链路，属 7B 生成覆盖波动，按熔断纪律不重跑刷分。
+
+**运营待办与边界**：生产 admin/agent/viewer 三个 seed 账号仍是出厂密码，业务侧需安排登录后改密（改密前业务 REST 与坐席 WS 拦截，仅 /auth/me、/auth/change-password、logout 放行）；如需短期保持连续，显式置 `REQUIRE_DEFAULT_PASSWORD_CHANGE=false` 并登记限期。登录锁定为进程内单副本实现，多副本化需迁移 Redis。agent 密级四级全开是临时口径，待密级标签业务校准。
 
 ---
 
@@ -259,7 +277,8 @@
 | 6 | ollama 为 CPU-only 构建（无 CUDA 后端，`total_vram="0 B"`）；直答已把单题压到 2 分钟级，进一步提速需换 CUDA 构建；`static/` 仍是 09-17 产物；A2A 探针 connection failed 仅告警 | 成本/低优 |
 | 7 | 阶段 1 三硬门全关：50 题 36/50 pass（10-08 凌晨节），修复固化镜像 8835fc74b155；题库 2026-10-08 整体冻结，frozen=true + questions.lock.json 内容锁 + pytest/eval 双守卫，改题走 MR+refresh。阶段 2 靶子：11 题 7B 生成要点不全、2 题检索（GF15/GF20） | 阶段 1 完成 |
 | 8 | M2 开门周完成并固化（镜像 8cf450cf2340，备份 backup-pre-m2-openweek-20261008）：6.4 chapter_path、覆盖率门禁 60、四 loader 25 例、5 处潜伏缺陷、匿名引导登录均真机通过。6.4.1 md 章戳治理 A+B 已生产卷重建（652/2834 全覆盖、备份 chroma_pre_md_chapter_20261008.tar.gz），金标检索双 100%（MRR 0.9388）、真机 md 面包屑贯通。后续：11 题生成质量（6.5/6.1）、2 题块级/表格检索（GF15/GF20）、观察切块增 4 倍后的 rerank 延迟 | 开门周+6.4.1 完成 |
-| 9 | M2 生成质量收口并固化（镜像 8b0ab6432965，备份 backup-pre-prompt-v1-20261009）：50 题 36→39，prompt v1 完整性规则修复 GF09/GS03，md 细切修复 GF15/GF20/GS06/GP02/GP09；few-shot 污染已回退。**M3 专项**：①synthesis 跨块综合专用编排（GS01/GS02/GP06 料全在上下文却漏报，chunk 细切 × 7B 注意力权衡）；②MAX_LOADED_MODELS=1 下 bge/qwen 反复重载致库外多轮题贴 600s 墙（GR05 450-662s）；③GS11 reranker 压排边界；④BM25 内存索引生产未构建、sentence_store=None 待核；⑤剩 5 道纯生成 fail（GF02/GF20/GS10/GS14/GP03/GP04/GP05 中归并）依赖更大模型 | M2 完成，M3 待排期 |
+| 9 | M2 生成质量收口并固化（镜像 8b0ab6432965，备份 backup-pre-prompt-v1-20261009）：50 题 36→39，prompt v1 完整性规则修复 GF09/GS03，md 细切修复 GF15/GF20/GS06/GP02/GP09；few-shot 污染已回退。**M3 专项**：①synthesis 跨块综合专用编排（GS01/GS02/GP06 料全在上下文却漏报，chunk 细切 × 7B 注意力权衡）；②MAX_LOADED_MODELS=1 下 bge/qwen 反复重载致库外多轮题贴 600s 墙（GR05 450-662s）；③GS11 reranker 压排边界；④BM25 内存索引生产未构建、sentence_store=None 待核；⑤剩 5 道纯生成 fail（GF02/GF20/GS10/GS14/GP03/GP04/GP05 中归并）依赖更大模型。M3 全量 50 题已跑 40/50（2026-10-10，报告 reports_m3_gate_full，0 error，p50 181.8s），十题失败归因待做 | M2 完成，M3 成绩达标待归因 |
+| 10 | P0 安全收口 H1/H2/H3/H4 已上线（镜像 49d26d7874d4，备份 backup-pre-p0-security-20261010，PR #2 merge 772251e，master CI run 38032792853 五 job 绿）：chat 鉴权、坐席 WS 鉴权、会话 IDOR 双层边界、登录锁定、生产 JWT 强校验、默认密码强制改密。**遗留**：①运营安排三个 seed 账号改密；②LoginGuard 多副本需 Redis 化；③agent 密级四级为临时口径待业务校准；④P0-4 备份脚本重写、P0-5 Prometheus 告警接通待生产操作授权 | P0 安全完成，运营项跟进 |
 
 ---
 

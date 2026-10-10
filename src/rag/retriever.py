@@ -32,6 +32,42 @@ from src.rag.vector_store import VectorStoreManager
 
 logger = logging.getLogger(__name__)
 
+#: BM25 英文/数字 token 规则。工业语料的检索强项恰是 F02、1mW、IP40、
+#: ±0.2、7天 这类数字字母符号，必须整块保留，不能被中文单字切分稀释。
+_BM25_EN_TOKEN = re.compile(r"[a-z0-9]+(?:[.][0-9]+)?")
+
+
+def _bm25_preprocess(text: str) -> list[str]:
+    """BM25 中文友好分词（jieba 词 + 英文数字整块）。
+
+    langchain BM25Retriever 默认预处理器对中文退化成单字切词，
+    2026-10-08 生产 50 题金标 warmup 实测 MRR 0.9388→0.9354 反降，
+    根因即单字词噪声。这里：
+      - 含汉字段直接保留 jieba 词（如 快门 / 个月 / 保修期）
+      - 非汉字段（含 F02、1mW、1.2、IP40）按英文数字正则整块切
+      - 纯标点文本返回一个去空格兜底 token，避免 BM25 空词表报错
+    """
+    lowered = (text or "").lower()
+    try:
+        import jieba
+
+        segments = jieba.lcut(lowered)
+    except ImportError:
+        # jieba 未装进环境时降级：英文数字整块 + 无中文词切分能力，
+        # 至少保住错误码/参数精确匹配这条主收益通道。
+        return _BM25_EN_TOKEN.findall(lowered) or [lowered.replace(" ", "")[:32]]
+
+    tokens: list[str] = []
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            continue
+        if re.search(r"[\u4e00-\u9fff]", seg):
+            tokens.append(seg)
+        else:
+            tokens.extend(_BM25_EN_TOKEN.findall(seg))
+    return tokens or [lowered.replace(" ", "")[:32]]
+
 
 class HybridRetriever:
     """混合检索器
@@ -73,12 +109,18 @@ class HybridRetriever:
         )
 
         # 句子粒度索引（独立 collection）— 仅 Chroma 模式
+        # 2026-10-09：生产依赖注入是无参构造，collection_name 默认 None，
+        # 导致本通道长期为 None、2834 条句子向量从未被查询；依赖注入侧
+        # 已改为传入 settings.chroma_collection_name。rag_sentence_enabled
+        # 提供金标回归负向时的秒级关回开关。
         self.sentence_store = (
             VectorStoreManager(
                 persist_directory=persist_directory,
                 collection_name=f"{collection_name}_sentences",
             )
-            if collection_name and self.backend != "remote"
+            if collection_name
+            and self.backend != "remote"
+            and settings.rag_sentence_enabled
             else None
         )
 
@@ -300,7 +342,35 @@ class HybridRetriever:
         """
         self._all_documents = documents
         self.vector_store.add_documents(documents)
-        self.bm25_retriever = BM25Retriever.from_documents(documents)
+        # k=10：RRF 侧按 top_k*2 取 BM25 候选，langchain 默认 k=4 会在
+        # 进入 RRF 前先掐掉一半候选；分词器必须与 warmup 完全同构。
+        self.bm25_retriever = BM25Retriever.from_documents(
+            documents, preprocess_func=_bm25_preprocess, k=10
+        )
+
+    def warmup_bm25_from_store(self) -> int:
+        """生产启动重建：从已持久化的 Chroma 标准集合拉全量块构建内存 BM25。
+
+        BM25Retriever 是纯内存对象、无持久化，服务重启即丢失；生产单例
+        走依赖注入构造、从不经过灌库路径 index_documents，不补本方法，
+        混合检索的 BM25 通道恒为空（2026-10-09 前的生产实况）。
+
+        Returns:
+            构建进 BM25 的文档块数；remote 后端或空集合返回 0。
+        """
+        if self.backend == "remote":
+            logger.info("BM25 warmup skipped: remote backend uses upstream BM25")
+            return 0
+        docs = self.vector_store.get_all_documents()
+        if not docs:
+            logger.warning("BM25 warmup skipped: standard collection is empty")
+            return 0
+        self._all_documents = docs
+        self.bm25_retriever = BM25Retriever.from_documents(
+            docs, preprocess_func=_bm25_preprocess, k=10
+        )
+        logger.info("BM25 warmup built from vector store: %d docs", len(docs))
+        return len(docs)
 
     def add_documents(self, documents: list[Document], tenant_id: str = "") -> None:
         """增量索引文档（知识库 API 单文档入库用）
@@ -320,7 +390,9 @@ class HybridRetriever:
         self.vector_store.add_documents(documents)
         self._all_documents.extend(documents)
         try:
-            self.bm25_retriever = BM25Retriever.from_documents(self._all_documents)
+            self.bm25_retriever = BM25Retriever.from_documents(
+                self._all_documents, preprocess_func=_bm25_preprocess, k=10
+            )
         except Exception as e:
             logger.warning("BM25 rebuild failed (non-fatal): %s", e)
 
@@ -369,6 +441,35 @@ class HybridRetriever:
         )
         return [doc for doc, _ in results]
 
+    def keyword_search(
+        self,
+        query: str,
+        top_k: int = 3,
+        tenant_id: str = "",
+        user_id: str = "",
+        user_access_levels: list[str] | None = None,
+    ) -> list[Document]:
+        """纯 BM25 关键词检索（M3 跨块综合的信号保底补块专用）。
+
+        与主检索的区别：只走内存 BM25，不请求 embedding、不触发模型，
+        毫秒级返回。用途是问题含「保修/退货/以哪个为准」等信号词时，
+        把被 rerank 挤出 top_k 的支撑性政策块补注入，解决 7B 只盯
+        最显著一块、期限与裁决依据系统性丢失的问题。
+
+        权限后处理与主检索同口径，保底块不得绕过租户/密级过滤。
+        BM25 未 warmup（通道关闭或空库）时返回空列表，调用方静默跳过。
+        """
+        if not self.bm25_retriever:
+            return []
+        if user_access_levels is None:
+            user_access_levels = ["public", "internal", "confidential", "restricted"]
+        results = self._bm25_search(query, top_k, None)
+        results = self._filter_by_permission(
+            results, tenant_id, user_id, user_access_levels
+        )
+        results = self._resolve_version_conflicts(results, top_k)
+        return [doc for doc, _ in results]
+
     def search_with_scores(
         self,
         query: str,
@@ -413,11 +514,7 @@ class HybridRetriever:
 
         # 句子粒度结果：展开上下文
         if expand_context and sentence_results:
-            expanded = []
-            for doc, score in sentence_results:
-                expanded_doc = self.sentence_splitter.expand_context(doc)
-                expanded.append((expanded_doc, score))
-            sentence_results = expanded
+            sentence_results = self._expand_sentence_results(sentence_results)
 
         # 合并标准 + 句子结果（按内容去重）
         final = self._merge_standard_and_sentence(
@@ -821,6 +918,31 @@ class HybridRetriever:
         except Exception as e:
             logger.warning("Rerank failed, using original order: %s", e)
             return candidates
+
+    def _expand_sentence_results(
+        self,
+        sentence_results: list[tuple[Document, float]],
+    ) -> list[tuple[Document, float]]:
+        """把句子块展开成上下文窗口文本并重新包成 Document。
+
+        SentenceWindowSplitter.expand_context 的契约是返回 str（纯文本），
+        2026-10-09 前调用方直接把它塞进 (doc, score) tuple，下游
+        _merge_standard_and_sentence 访问 doc.metadata 必崩。该通道生产从未
+        被执行（sentence_store 恒 None），类型错误潜伏至今。
+
+        权限元数据（tenant_id/access_level/source）必须原样带到新 Document，
+        否则展开后的句子块会绕过 _filter_by_permission 造成越权召回。
+        """
+        expanded = []
+        for doc, score in sentence_results:
+            expanded_text = self.sentence_splitter.expand_context(doc)
+            if expanded_text and expanded_text != doc.page_content:
+                doc = Document(
+                    page_content=expanded_text,
+                    metadata={**doc.metadata, "sentence_expanded": True},
+                )
+            expanded.append((doc, score))
+        return expanded
 
     def _merge_standard_and_sentence(
         self,

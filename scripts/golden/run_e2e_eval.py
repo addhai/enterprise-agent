@@ -99,6 +99,14 @@ async def ask_once(ws_base: str, token: str, question: str, timeout: float) -> d
         f"{ws_base}/ws/chat?token={token}",
         open_timeout=READY_TIMEOUT_S,
         max_size=4 * 1024 * 1024,
+        # 直答路径一次 LLM 调用可达 200-450s，期间无任何业务帧。
+        # websockets 默认 20s ping/20s pong 超时会在长推理静默期主动掐断
+        # （A 轮 GF13/GP10、11 题样本 GS12 均零帧 ConnectionClosedError，
+        #  服务端 LLM 实际 200 正常返回）。关闭客户端心跳，存活性交给
+        # ws-timeout(900s) 与服务端硬超时兜底。与 verify_pdf_page_citation.py
+        # 的既有写法保持一致。
+        ping_interval=None,
+        ping_timeout=None,
     ) as ws:
         ready = json.loads(await asyncio.wait_for(ws.recv(), timeout=READY_TIMEOUT_S))
         obs["session_id"] = ready.get("session_id")

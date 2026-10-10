@@ -26,6 +26,7 @@ pydantic-settings>=2.0.0
 
 # RAG
 rank-bm25>=0.2.0
+jieba>=0.42.1            # BM25 中文分词（与 requirements-runtime 同步）
 sentence-transformers>=3.0.0
 pymupdf>=1.23.0          # PDF 加载（PyMuPDF）
 beautifulsoup4>=4.12.0   # HTML 正文提取

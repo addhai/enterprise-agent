@@ -15,31 +15,35 @@
 │  _queues:    session_id → asyncio.Queue     │
 └─────────────────────────────────────────────┘
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class SessionMode(Enum):
     """会话模式"""
-    AI_CHAT = "ai_chat"           # AI 对话中
-    AI_THINKING = "ai_thinking"   # AI 正在思考（流式输出中）
+
+    AI_CHAT = "ai_chat"  # AI 对话中
+    AI_THINKING = "ai_thinking"  # AI 正在思考（流式输出中）
     WAITING_HUMAN = "waiting_human"  # 等待人工接入
-    HUMAN_CHAT = "human_chat"     # 人工对话中
-    ESCALATED = "escalated"       # 已转接完成
-    CLOSED = "closed"             # 已关闭
+    HUMAN_CHAT = "human_chat"  # 人工对话中
+    ESCALATED = "escalated"  # 已转接完成
+    CLOSED = "closed"  # 已关闭
 
 
 @dataclass
 class SessionState:
     """单个会话的状态"""
+
     session_id: str
     user_id: str
     tenant_id: str
@@ -48,10 +52,10 @@ class SessionState:
     last_active: float = field(default_factory=time.time)
     turn_count: int = 0
     needs_human: bool = False
-    assigned_agent: Optional[str] = None  # 人工坐席 ID
+    assigned_agent: str | None = None  # 人工坐席 ID
     conversation_history: list = field(default_factory=list)
     # 转接上下文（人工坐席可见）
-    handoff_context: Optional[Dict[str, Any]] = None
+    handoff_context: dict[str, Any] | None = None
     # 消息队列（用于异步推送）
     message_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     # 心跳超时
@@ -62,14 +66,19 @@ class SessionState:
     failed_attempts: int = 0
     # 是否建议转人工（供前端显示按钮）
     suggest_human: bool = False
+    # 工作流是否在途（2026-10-09）。直答路径一次 LLM 调用静默可达 450s，
+    # 期间 last_active 不更新，会被 90s 心跳清理误判成死会话回收，而工作
+    # 线程仍在跑。清理循环必须豁免在途会话。
+    workflow_active: bool = False
+    workflow_started_at: float | None = None
 
 
 class WebSocketSessionManager:
     """WebSocket 会话管理器 — 单例"""
 
-    _instance: Optional["WebSocketSessionManager"] = None
+    _instance: WebSocketSessionManager | None = None
 
-    def __new__(cls) -> "WebSocketSessionManager":
+    def __new__(cls) -> WebSocketSessionManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
@@ -81,11 +90,11 @@ class WebSocketSessionManager:
         self._initialized = True
 
         # session_id → SessionState
-        self._sessions: Dict[str, SessionState] = {}
+        self._sessions: dict[str, SessionState] = {}
         # agent_id → WebSocket 连接引用（通过外部注册）
-        self._agents: Dict[str, Any] = {}
+        self._agents: dict[str, Any] = {}
         # 清理任务
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_task: asyncio.Task | None = None
 
     async def start(self):
         """启动后台清理任务"""
@@ -97,10 +106,8 @@ class WebSocketSessionManager:
         """停止并清理所有会话"""
         if self._cleanup_task:
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
         self._sessions.clear()
         self._agents.clear()
         logger.info("WebSocketSessionManager stopped")
@@ -126,16 +133,39 @@ class WebSocketSessionManager:
         self._sessions[session_id] = state
         logger.info(
             "Session created: %s (user=%s, mode=%s)",
-            session_id, user_id, mode.value,
+            session_id,
+            user_id,
+            mode.value,
         )
         return state
 
-    def get_session(self, session_id: str) -> Optional[SessionState]:
+    def get_session(self, session_id: str) -> SessionState | None:
         """获取会话状态"""
         state = self._sessions.get(session_id)
         if state:
             state.last_active = time.time()
         return state
+
+    # 在途工作流绝对兜底：服务端硬超时 600s 收卷，正常路径不会超过它。
+    # 给 6 倍冗余，仅用于防止标记泄漏导致会话永不过期。
+    WORKFLOW_ABSOLUTE_LIMIT_S: float = 3600.0
+
+    def mark_workflow_start(self, session_id: str) -> None:
+        """标记工作流开始，清理循环豁免该会话（长推理静默期不可回收）。"""
+        state = self._sessions.get(session_id)
+        if state is None:
+            return
+        state.workflow_active = True
+        state.workflow_started_at = time.time()
+
+    def mark_workflow_end(self, session_id: str) -> None:
+        """工作流结束（含异常/取消），恢复心跳清理语义。"""
+        state = self._sessions.get(session_id)
+        if state is None:
+            return
+        state.workflow_active = False
+        state.workflow_started_at = None
+        state.last_active = time.time()
 
     def update_mode(self, session_id: str, mode: SessionMode) -> bool:
         """更新会话模式"""
@@ -147,7 +177,9 @@ class WebSocketSessionManager:
         state.last_active = time.time()
         logger.info(
             "Session %s mode: %s → %s",
-            session_id, old_mode.value, mode.value,
+            session_id,
+            old_mode.value,
+            mode.value,
         )
         return True
 
@@ -173,7 +205,7 @@ class WebSocketSessionManager:
         self._agents.pop(agent_id, None)
         logger.info("Agent unregistered: %s", agent_id)
 
-    def get_agent(self, agent_id: str) -> Optional[Any]:
+    def get_agent(self, agent_id: str) -> Any | None:
         """获取坐席连接"""
         return self._agents.get(agent_id)
 
@@ -181,9 +213,7 @@ class WebSocketSessionManager:
         """列出所有在线坐席"""
         return list(self._agents.keys())
 
-    def assign_agent_to_session(
-        self, session_id: str, agent_id: str
-    ) -> bool:
+    def assign_agent_to_session(self, session_id: str, agent_id: str) -> bool:
         """将会话分配给人工坐席"""
         state = self._sessions.get(session_id)
         if not state or agent_id not in self._agents:
@@ -192,7 +222,9 @@ class WebSocketSessionManager:
         state.mode = SessionMode.HUMAN_CHAT
         state.last_active = time.time()
         logger.info(
-            "Session %s assigned to agent %s", session_id, agent_id,
+            "Session %s assigned to agent %s",
+            session_id,
+            agent_id,
         )
         return True
 
@@ -200,9 +232,7 @@ class WebSocketSessionManager:
     # 消息推送
     # ------------------------------------------------------------------
 
-    async def push_to_session(
-        self, session_id: str, data: Dict[str, Any]
-    ) -> bool:
+    async def push_to_session(self, session_id: str, data: dict[str, Any]) -> bool:
         """向会话推送消息（通过 WebSocket）"""
         state = self._sessions.get(session_id)
         if not state:
@@ -210,9 +240,7 @@ class WebSocketSessionManager:
         await state.message_queue.put(data)
         return True
 
-    async def push_to_agent(
-        self, agent_id: str, data: Dict[str, Any]
-    ) -> bool:
+    async def push_to_agent(self, agent_id: str, data: dict[str, Any]) -> bool:
         """向人工坐席推送消息"""
         ws = self._agents.get(agent_id)
         if ws is None:
@@ -235,13 +263,33 @@ class WebSocketSessionManager:
             now = time.time()
             expired = []
             for sid, state in self._sessions.items():
-                if now - state.last_active > state.heartbeat_timeout * 3:
+                if self._is_expired(state, now):
                     expired.append(sid)
             for sid in expired:
                 self.remove_session(sid)
                 logger.info("Expired session cleaned up: %s", sid)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def _is_expired(self, state: SessionState, now: float) -> bool:
+        """纯判定：该会话此刻是否应被清理（便于单测，不依赖 60s 循环）。
+
+        规则：
+          1. 普通会话按心跳阈值 last_active > 3*heartbeat_timeout(90s)。
+          2. 工作流在途时豁免：长推理静默期 last_active 不更新是正常态。
+          3. 兜底：在途超过 WORKFLOW_ABSOLUTE_LIMIT_S(3600s) 仍强制过期，
+             防止 mark_workflow_end 因异常路径漏调导致会话永不回收。
+        """
+        if state.workflow_active:
+            started = state.workflow_started_at or state.last_active
+            if now - started <= self.WORKFLOW_ABSOLUTE_LIMIT_S:
+                return False
+            logger.warning(
+                "Session %s workflow_active beyond absolute limit, force expire",
+                state.session_id,
+            )
+            return True
+        return now - state.last_active > state.heartbeat_timeout * 3
+
+    def get_stats(self) -> dict[str, Any]:
         """获取管理器统计信息"""
         mode_counts = {}
         for state in self._sessions.values():
@@ -255,7 +303,7 @@ class WebSocketSessionManager:
 
 
 # 全局单例
-_session_manager: Optional[WebSocketSessionManager] = None
+_session_manager: WebSocketSessionManager | None = None
 
 
 def get_session_manager() -> WebSocketSessionManager:

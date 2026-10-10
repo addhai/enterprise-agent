@@ -782,6 +782,186 @@ _DIRECT_UNANSWERED_MARKERS = (
 )
 
 
+# ======================================================================
+# M3：跨块综合专用编排（2026-10-09，设计见 docs/M3-跨块综合编排设计.md）
+# ----------------------------------------------------------------------
+# 针对 GS01/GS02/GP06 类跨块题：资料全在上下文，7B 却只盯最显著一块，
+# 期限、保修状态、裁决依据等支撑事实系统性丢失。两板斧，均零额外 LLM 调用：
+#   1. 标签化综合：强制模型先输出 <coverage>（提问点 + 逐块要点 + 覆盖表），
+#      再输出 <answer>；服务端剥离，用户只看到答案段。
+#   2. 信号保底补块：问题含保修/退货/裁决信号词时，用内存 BM25 毫秒级
+#      把被 rerank 挤出 top_k 的政策块补注入（retriever.keyword_search）。
+# 由 settings.synthesis_enabled 总开关控制，关闭时与 M2 prompt v1 逐字节一致。
+# ======================================================================
+
+#: 综合段标签正则。IGNORECASE 兼容 7B 偶发大写标签；非贪婪取第一个 answer。
+_SYNTHESIS_COVERAGE_RE = re.compile(
+    r"<coverage>\s*(.*?)\s*</coverage>", re.DOTALL | re.IGNORECASE
+)
+_SYNTHESIS_ANSWER_RE = re.compile(
+    r"<answer>\s*(.*?)\s*</answer>", re.DOTALL | re.IGNORECASE
+)
+#: 7B 真机实测约 2/3 概率漏写闭合标签（只输出 <answer> 开头直接作答），
+#: 这两个容错正则兜住「有开标签无闭标签」形态。
+_COVERAGE_OPEN_RE = re.compile(
+    r"<coverage>\s*(.*?)\s*<answer[\s>]", re.DOTALL | re.IGNORECASE
+)
+_ANSWER_OPEN_RE = re.compile(r"<answer>\s*(.*)$", re.DOTALL | re.IGNORECASE)
+_LOOSE_TAG_RE = re.compile(r"</?(?:coverage|answer)\s*>", re.IGNORECASE)
+
+#: M3 直答系统提示词：在 M2 八条规则外加强制两段式输出。
+#: 注意（M2 few-shot 证伪教训）：格式示例只给占位结构，禁止出现任何
+#: 具体设备事实，7B 会把示例里的虚构参数照抄进真实答案。
+_SYNTHESIS_DIRECT_ANSWER_SYSTEM_PROMPT = (
+    "你是设备产品技术支持助手。请严格依据用户消息中提供的知识库资料原文事实，"
+    "用简体中文回答用户的最后一个问题。\n"
+    "输出只能包含下面两个标签段，先写 coverage 再写 answer，"
+    "两个标签都必须写出闭合标记，</answer> 是全文最后一个字符：\n"
+    "<coverage>\n"
+    "先用一行逐块列出每份文档与问题相关的关键事实（写「文档1：…」），"
+    "数字、期限、天数、保修周期、冲突裁决依据照录；再用一行列出问题每个"
+    "提问点（①②③）分别由哪份文档支撑，无资料的标注「无资料」。\n"
+    "</coverage>\n"
+    "<answer>\n"
+    "1. 答案必须来自资料，禁止编造资料中没有的参数、步骤或结论；\n"
+    "2. coverage 拆出的每个提问点逐点作答不得漏；完整性优先于简短；\n"
+    "3. 操作流程按资料顺序列全部步骤，禁止提前收尾；前提条件、禁忌、"
+    "关键数字与警示（如禁止拆卸）必须写出；\n"
+    "4. 周期、天数、阈值、规格、保修按场景列全各档，并结合用户场景给"
+    "结论（如购买时长是否在保、签收第几天适用哪条期限）；错误代码先"
+    "解释含义再给处理方法；\n"
+    "5. 资料写明的判据、数字、天数、期限原样保留，有明确内容不得省略；\n"
+    "6. 先结论后步骤，不寒暄不复述问题，不出现①②③、「文档N」字样或"
+    "任何标签；\n"
+    "7. 资料完全无法覆盖时只回复：资料中未找到该问题的相关信息，"
+    "建议联系技术支持。\n"
+    "8. 不要提及你是 AI、模型，不要出现与设备无关的产品或公司名称。\n"
+    "</answer>"
+)
+
+#: 提问点信号词 → BM25 保底查询词。命中即对该查询词做一次纯内存关键词
+#: 检索，把被 rerank 挤出 top_k 的政策类支撑块补回来。
+#: 元组顺序即补块优先级：保修/退货是实测丢分重灾区，裁决规则殿后。
+_SYNTHESIS_SIGNAL_LEXICON: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("保修", "保内", "质保", "三包", "保修范围", "还在保"), "保修"),
+    (("退货", "换货", "退吗", "退款", "无理由", "几天内退"), "退货"),
+    (("以哪个为准", "以哪份", "为准", "不一致", "冲突", "矛盾"), "规格说明书 为准"),
+)
+
+
+def detect_synthesis_signals(question: str) -> list[str]:
+    """识别需要保底补块的跨域信号，返回去重后的 BM25 查询词列表。
+
+    纯规则、零外部依赖，供确定性单测直接断言。
+    """
+    hits: list[str] = []
+    text = question or ""
+    for words, bm25_query in _SYNTHESIS_SIGNAL_LEXICON:
+        if any(w in text for w in words) and bm25_query not in hits:
+            hits.append(bm25_query)
+    return hits
+
+
+#: 长流程/清单类提问的引导词。命中时跳过 coverage 逐块分析，直答走 M2 原
+#: prompt。50 题 A/B 对照（2026-10-09）的实测分界：coverage 对短事实综合
+#: 题（周期/参数冲突/在保判定，目标答案 50-150 字）净救回 4 题零新挂；
+#: 对步骤清单题（目标答案 250-330 字）则挤占 2048 token 配额与注意力，
+#: GP01 答案由 328 字 pass 退化为 232 字 fail、GS14 打满 600s 硬超时。
+_SYNTHESIS_FLOW_BYPASS_RE = re.compile(
+    r"步骤|流程|清单|规程|怎么操作|如何操作|操作顺序|前几步"
+)
+
+
+def _distinct_doc_sources(docs: list) -> set[str]:
+    """提取注入文档的去重来源名，兼容 Document 与 (Document, score) 两种形态。"""
+    sources: set[str] = set()
+    for item in docs or []:
+        doc = item[0] if isinstance(item, tuple | list) else item
+        metadata = getattr(doc, "metadata", None)
+        if isinstance(metadata, dict):
+            source = metadata.get("source")
+            if source:
+                sources.add(str(source))
+    return sources
+
+
+def should_use_synthesis(question: str, docs: list) -> bool:
+    """逐题判定是否启用 coverage 综合路径（总开关之外的二级门控）。
+
+    必要条件（同时满足）：
+      1. 注入资料来自至少 2 个不同来源文档。同一文档的多个相邻 chunk 只是
+         长内容切片，不存在跨块综合，强上 coverage 只增延迟。
+      2. 问题不含长流程/清单引导词（见 _SYNTHESIS_FLOW_BYPASS_RE）。
+         这类题答案天然是长枚举，coverage 分析段挤占输出预算，M2 单段
+         直答的完整性与延迟都更好。
+
+    纯函数零外部依赖，确定性单测可覆盖全部边界。
+    """
+    return bool(
+        question
+        and len(_distinct_doc_sources(docs)) >= 2
+        and not _SYNTHESIS_FLOW_BYPASS_RE.search(question)
+    )
+
+
+def merge_supplement_docs(
+    primary: list,
+    supplement: list,
+    max_total: int,
+) -> list:
+    """把保底补块并入主检索结果，按内容前 100 字去重，受总量上限约束。
+
+    去重口径与 _merge_standard_and_sentence 完全一致，避免同一块重复注入。
+    """
+    merged = list(primary or [])
+    seen = {getattr(d, "page_content", "")[:100] for d in merged}
+    for doc in supplement or []:
+        if len(merged) >= max_total:
+            break
+        key = getattr(doc, "page_content", "")[:100]
+        if key and key not in seen:
+            seen.add(key)
+            merged.append(doc)
+    return merged
+
+
+def _extract_synthesis_sections(output: str) -> tuple[str, str | None, bool]:
+    """从模型原始输出剥离 coverage/answer 两段。
+
+    真机实测 7B 常漏写闭合标签，按四级容错处理：
+      1. <answer>..</answer> 完整：取内容，well_formed=True
+      2. 只有 <answer> 开标签：取到文末，well_formed=False
+      3. 无 answer 标签：剥掉 coverage 段取裸答案，well_formed=False
+      4. 全空：降级原文
+    任何返回路径都不允许标签残骸流向用户。
+    """
+    text = output or ""
+
+    # coverage：闭合段优先，否则取 <coverage> 到 <answer> 之间
+    cov_match = _SYNTHESIS_COVERAGE_RE.search(text)
+    if cov_match:
+        coverage = cov_match.group(1).strip()
+    else:
+        open_cov = _COVERAGE_OPEN_RE.search(text)
+        coverage = open_cov.group(1).strip() if open_cov else None
+
+    # 1. 完整闭合 answer
+    ans = _SYNTHESIS_ANSWER_RE.search(text)
+    if ans and ans.group(1).strip():
+        return ans.group(1).strip(), coverage, True
+
+    # 2. 有开标签无闭合：取到文末
+    open_ans = _ANSWER_OPEN_RE.search(text)
+    if open_ans and open_ans.group(1).strip():
+        return open_ans.group(1).strip(), coverage, False
+
+    # 3. 无 answer 标签：剥除 coverage（含无闭合形态）与所有标签残骸
+    stripped = _SYNTHESIS_COVERAGE_RE.sub("", text)
+    stripped = re.sub(r"<coverage>.*$", "", stripped, flags=re.DOTALL | re.IGNORECASE)
+    stripped = _LOOSE_TAG_RE.sub("", stripped).strip()
+    return (stripped or text.strip()), coverage, False
+
+
 def _format_pre_retrieved_context(docs: list, max_docs: int = 5) -> str:
     """把预检索 Document 列表格式化成模型可读的参考资料块。"""
     blocks = []
@@ -799,12 +979,67 @@ def _format_pre_retrieved_context(docs: list, max_docs: int = 5) -> str:
     return "\n\n".join(blocks)
 
 
-def _build_agent_input(content: str, pre_retrieved_docs: list) -> str:
+def _build_agent_input(
+    content: str, pre_retrieved_docs: list, max_docs: int = 5
+) -> str:
     """always / smart 命中时，把预检索资料随用户消息一并交给 Agent。"""
     if not pre_retrieved_docs:
         return content
-    context = _format_pre_retrieved_context(pre_retrieved_docs)
+    context = _format_pre_retrieved_context(pre_retrieved_docs, max_docs=max_docs)
     return f"{content}\n\n{_PRE_RETRIEVED_HEADER}\n{context}"
+
+
+def _supplement_pre_retrieved_docs(
+    content: str,
+    docs: list,
+    retriever,
+    user_id: str,
+    tenant_id: str,
+    user_access_levels: list | None,
+) -> tuple[list, list[tuple[str, str]]]:
+    """M3 信号保底：按问题信号词用内存 BM25 补入政策类支撑块。
+
+    只在 synthesis_enabled 且主检索结果未达注入上限时执行；
+    任何异常都静默返回原 docs，保底是增强不是依赖。
+
+    Returns:
+        (合并后的 docs, 实际补入的 [(信号词, 来源), ...] 供日志观测)
+    """
+    signals = detect_synthesis_signals(content)
+    if not signals:
+        return docs, []
+    max_total = int(getattr(settings, "synthesis_max_injected_docs", 6) or 6)
+    if len(docs) >= max_total or not hasattr(retriever, "keyword_search"):
+        return docs, []
+
+    supplemented = list(docs)
+    added: list[tuple[str, str]] = []
+    for keyword in signals[:2]:  # 最多两类信号，防过度注入
+        try:
+            hits = retriever.keyword_search(
+                keyword,
+                top_k=3,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                user_access_levels=user_access_levels,
+            )
+        except Exception:  # noqa: BLE001 - 保底失败不阻断主链路
+            logger.warning("M3 信号保底检索失败（已忽略）：%s", keyword, exc_info=True)
+            continue
+        before = len(supplemented)
+        supplemented = merge_supplement_docs(supplemented, hits, max_total)
+        for doc in supplemented[before:]:
+            source = (
+                (doc.metadata or {}).get("source")
+                if isinstance(getattr(doc, "metadata", None), dict)
+                else "?"
+            )
+            added.append((keyword, str(source)))
+        if len(supplemented) >= max_total:
+            break
+    if added:
+        logger.info("M3 信号保底补块：%s", added)
+    return supplemented, added
 
 
 def _count_agent_kb_searches(messages: list) -> int:
@@ -955,16 +1190,39 @@ def _direct_synthesize_with_docs(
         该信号是高质量的库外证据（注入资料后模型仍说没有），调用方回落
         ReAct 后应保留它，供输出侧库外收口双信号使用（GR05 缺陷修复）。
     """
+    synthesis_enabled = bool(getattr(settings, "synthesis_enabled", False))
+    # 二级门控：总开关开时仍逐题判定，只对多来源短综合题启用 coverage；
+    # 单文档题与长流程清单题保持 M2 prompt（50 题对照实测，见
+    # should_use_synthesis 注释）。
+    synthesis_on = synthesis_enabled and should_use_synthesis(content, docs)
+    if synthesis_enabled and not synthesis_on:
+        logger.info(
+            "M3 门控跳过 coverage：sources=%d flow_bypass=%s",
+            len(_distinct_doc_sources(docs)),
+            bool(_SYNTHESIS_FLOW_BYPASS_RE.search(content or "")),
+        )
+    system_prompt = (
+        _SYNTHESIS_DIRECT_ANSWER_SYSTEM_PROMPT
+        if synthesis_on
+        else _DIRECT_ANSWER_SYSTEM_PROMPT
+    )
+    inject_max = (
+        int(getattr(settings, "synthesis_max_injected_docs", 6) or 6)
+        if synthesis_on
+        else 5
+    )
     try:
         llm = _get_intent_llm()
-        messages: list = [SystemMessage(content=_DIRECT_ANSWER_SYSTEM_PROMPT)]
+        messages: list = [SystemMessage(content=system_prompt)]
         for human_msg, ai_msg in history or []:
             messages.append(HumanMessage(content=human_msg))
             if ai_msg:
                 messages.append(AIMessage(content=ai_msg))
-        messages.append(HumanMessage(content=_build_agent_input(content, docs)))
+        messages.append(
+            HumanMessage(content=_build_agent_input(content, docs, max_docs=inject_max))
+        )
         response = llm.invoke(messages)
-        output = str(getattr(response, "content", "") or "").strip()
+        raw_output = str(getattr(response, "content", "") or "").strip()
     except Exception as e:  # noqa: BLE001 - 任何异常都回落 Agent
         # 协作式取消必须透传，否则断线/硬超时会被当成普通失败回落 ReAct
         if isinstance(e, WorkflowCancelled):
@@ -972,9 +1230,23 @@ def _direct_synthesize_with_docs(
         logger.warning("高置信直答异常，回落 ReAct Agent：%s", e)
         return None, "llm_error"
 
-    if not output:
+    if not raw_output:
         logger.info("高置信直答返回空，回落 ReAct Agent")
         return None, "empty"
+
+    if synthesis_on:
+        # M3：剥离 <coverage> 分析段，只外发 <answer>；marker 检测必须在
+        # 剥离后的答案上做，coverage 里「某提问点无资料」会含未覆盖词，
+        # 用原文判定会误判成库外题。
+        output, _coverage, well_formed = _extract_synthesis_sections(raw_output)
+        if not well_formed:
+            logger.warning(
+                "M3 综合输出未遵守标签格式，已降级剥离，原文前 60 字：%s",
+                raw_output[:60],
+            )
+    else:
+        output = raw_output
+
     if any(marker in output for marker in _DIRECT_UNANSWERED_MARKERS):
         logger.info("高置信直答模型自认资料未覆盖，回落 ReAct Agent：%s", output[:60])
         return None, "uncovered"
@@ -1173,6 +1445,31 @@ def rag_node(
                             pre_retrieved_docs = probe_docs
                 if pre_retrieved_docs:
                     agent_input = _build_agent_input(content, pre_retrieved_docs)
+
+    # ==================================================================
+    # M3 信号保底补块（两种模式汇合后统一执行一次）
+    # 保修/退货/参数冲突类跨块题，政策块常被 rerank 挤出 top5；
+    # 此处用内存 BM25 毫秒级补入，零额外 embedding/LLM 调用。
+    # 补块后必须重建 agent_input，保证 ReAct 与下方直答看到同一份资料。
+    # ==================================================================
+    if (
+        getattr(settings, "synthesis_enabled", False)
+        and retriever is not None
+        and pre_retrieved_docs
+    ):
+        pre_retrieved_docs, _supplement_log = _supplement_pre_retrieved_docs(
+            content,
+            pre_retrieved_docs,
+            retriever,
+            user_id=effective_user,
+            tenant_id=effective_tenant,
+            user_access_levels=effective_access,
+        )
+        agent_input = _build_agent_input(
+            content,
+            pre_retrieved_docs,
+            max_docs=int(getattr(settings, "synthesis_max_injected_docs", 6) or 6),
+        )
 
     logger.info(
         "[kb_call_mode=%s] decided_by=%s 预检索命中=%d tenant=%s",

@@ -51,6 +51,25 @@ def _init_test_database():
         pass
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_chroma_dir(tmp_path_factory):
+    """把 Chroma 持久化目录重定向到会话临时目录，与 SQLite 同等隔离。
+
+    2026-10-09 起因：修复检索句子通道接线（生产单例开始传入
+    collection_name）后，本地开发残留的 ./chroma_data 处于标准集合为空、
+    knowledge_base_sentences 有 1014 条的脏状态，让离线 API 测试真实发出
+    embedding HTTP 请求并 502。测试契约是确定性、不触网，任何机器上的
+    历史数据都不应影响测试结果。
+    """
+    from src.config import settings
+
+    tmp_chroma = tmp_path_factory.mktemp("chroma_test")
+    original = settings.chroma_persist_dir
+    settings.chroma_persist_dir = str(tmp_chroma)
+    yield
+    settings.chroma_persist_dir = original
+
+
 # ---- 收集时忽略清单
 # 历史：这里曾屏蔽 test_graph/test_rag/test_api/test_memory/test_protocols/
 #      test_integrations/test_websocket 七个目录（另有 test_langchain、security 两个

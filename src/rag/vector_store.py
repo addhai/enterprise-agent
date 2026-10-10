@@ -1,8 +1,7 @@
-from typing import List, Optional
-
 import logging
 
 from langchain_core.documents import Document
+
 from src.config import settings
 from src.rag.embedder import Embedder
 
@@ -20,8 +19,8 @@ class VectorStoreManager:
         self.collection_name = collection_name or settings.chroma_collection_name
         self._embedding_function = Embedder()
         self._store = None
-        self._backend = None          # "chroma" | "milvus"
-        self._milvus_store = None     # MilvusVectorStore 实例
+        self._backend = None  # "chroma" | "milvus"
+        self._milvus_store = None  # MilvusVectorStore 实例
 
     def _init_store(self):
         """根据配置初始化向量库"""
@@ -31,11 +30,16 @@ class VectorStoreManager:
             # 尝试连接 Milvus
             try:
                 from src.rag.milvus_store import MilvusVectorStore
+
                 self._milvus_store = MilvusVectorStore()
                 self._milvus_store.connect()
                 self._milvus_store.ensure_collection()
                 self._backend = "milvus"
-                logger.info("Using Milvus vector store at %s:%d", self._milvus_store.host, self._milvus_store.port)
+                logger.info(
+                    "Using Milvus vector store at %s:%d",
+                    self._milvus_store.host,
+                    self._milvus_store.port,
+                )
                 return
             except Exception as e:
                 if backend == "milvus":
@@ -45,6 +49,7 @@ class VectorStoreManager:
 
         # Chroma 降级 / 默认
         from langchain_chroma import Chroma
+
         self._store = Chroma(
             collection_name=self.collection_name,
             embedding_function=self._embedding_function,
@@ -67,7 +72,7 @@ class VectorStoreManager:
             self._init_store()
         return self._backend
 
-    def add_documents(self, documents: List[Document]) -> List[str]:
+    def add_documents(self, documents: list[Document]) -> list[str]:
         """添加文档到向量库"""
         if not documents:
             return []
@@ -78,7 +83,7 @@ class VectorStoreManager:
 
         return self.store.add_documents(documents)
 
-    def search(self, query: str, top_k: int = None) -> List[Document]:
+    def search(self, query: str, top_k: int = None) -> list[Document]:
         """向量相似度搜索"""
         k = top_k or settings.retrieval_top_k
 
@@ -93,7 +98,9 @@ class VectorStoreManager:
             return []
         return self.store.similarity_search(query, k=k)
 
-    def search_with_scores(self, query: str, top_k: int = None, where: Optional[dict] = None) -> List[tuple]:
+    def search_with_scores(
+        self, query: str, top_k: int = None, where: dict | None = None
+    ) -> list[tuple]:
         """带相似度分数的搜索
 
         where: Chroma 元数据过滤条件（如 {"tenant_id": "acme"}），
@@ -104,14 +111,19 @@ class VectorStoreManager:
         if self.backend == "milvus":
             results = self._milvus_store.search(query, top_k=k)
             return [
-                (Document(page_content=r["text"], metadata=r.get("metadata", {})), r["score"])
+                (
+                    Document(page_content=r["text"], metadata=r.get("metadata", {})),
+                    r["score"],
+                )
                 for r in results
             ]
 
         if self.store._collection.count() == 0:
             return []
         if where:
-            return self.store.similarity_search_with_relevance_scores(query, k=k, filter=where)
+            return self.store.similarity_search_with_relevance_scores(
+                query, k=k, filter=where
+            )
         return self.store.similarity_search_with_relevance_scores(query, k=k)
 
     def delete_collection(self) -> None:
@@ -119,22 +131,22 @@ class VectorStoreManager:
         if self.backend == "milvus" and self._milvus_store:
             # Milvus 删除 collection
             from pymilvus import utility
+
             utility.drop_collection(self._milvus_store.collection_name)
             self._milvus_store._collection = None
         elif self._store:
             self._store.delete_collection()
 
-    def delete_by_ids(self, ids: List[str]) -> int:
+    def delete_by_ids(self, ids: list[str]) -> int:
         """按 ID 删除文档（幂等）"""
         if not ids:
             return 0
 
         if self.backend == "milvus":
             # Milvus 按表达式删除
-            from pymilvus import Collection
             coll = self._milvus_store.ensure_collection()
-            id_list = ', '.join(f'"{i}"' for i in ids)
-            result = coll.delete(f'id in [{id_list}]')
+            id_list = ", ".join(f'"{i}"' for i in ids)
+            result = coll.delete(f"id in [{id_list}]")
             return result.delete_count
 
         try:
@@ -150,3 +162,22 @@ class VectorStoreManager:
         if self._store:
             return self.store._collection.count()
         return 0
+
+    def get_all_documents(self) -> list[Document]:
+        """取集合内全部文档（BM25 启动重建专用，灌库外的唯一全量读入口）
+
+        BM25 是纯内存索引、无持久化，生产单例启动时调本方法把已落盘的
+        标准块拉回内存重建。数据量 652 块量级可全量驻留；若未来涨到
+        数万块需改分页或磁盘型 BM25（如 Elasticsearch）。
+        """
+        if self.backend == "milvus":
+            # Milvus 路径当前无 BM25 启动重建需求，显式不支持避免静默空索引
+            raise NotImplementedError("BM25 warmup is only supported on Chroma backend")
+        collection = self.store._collection
+        if collection.count() == 0:
+            return []
+        data = collection.get(include=["documents", "metadatas"])
+        return [
+            Document(page_content=text, metadata=meta or {})
+            for text, meta in zip(data["documents"], data["metadatas"], strict=False)
+        ]

@@ -81,9 +81,19 @@ services:
       - REDIS_URL=redis://redis:6379
       - OLLAMA_BASE_URL=http://127.0.0.1:11434
       # 单容器内 Ollama 与应用抢同一份内存/显存，串行执行避免 OOM。
-      # 并发调高会让 CPU 推理场景直接被 OOM Killer 杀掉。
+      # 并发调高会让 CPU 推理场景直接被 OOM Killer 杀掉，NUM_PARALLEL 保持 1。
       - OLLAMA_NUM_PARALLEL=1
-      - OLLAMA_MAX_LOADED_MODELS=1
+      # 2026-10-09 双驻留档位（用户授权）：1→2 允许 qwen2.5:7b 与 bge-m3 同驻，
+      # 消除两模型互相驱逐导致的 1-5 分钟冷加载（GR05 冷态曾破 600s 墙）。
+      # 50 题长采样实测：双模型完全换入后稳态贴 9.88G/10G（5 题短采样 7.71G
+      # 低估了稳态水位），无 OOM 但余量不足。同日加 flash-attn + KV q8 调优，
+      # 依据 docs.ollama.com/faq（KV 量化必须配合 flash attention，q8_0 质量
+      # 损失显著小于 q4_0），目标稳态 <9G。A 轮（调优前 M3 关）35/50、
+      # p50 132.7s 为对照基线。
+      # 回退：env 删这两行且 OLLAMA_MAX_LOADED_MODELS=1、内存改 8G。
+      - OLLAMA_MAX_LOADED_MODELS=2
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KV_CACHE_TYPE=q8_0
       # 宿主若配了 HTTP_PROXY，容器内访问 postgres/redis 会被代理劫持。
       # 这两行让这些**容器内地址**绕过代理。缺了它健康检查会连不上 postgres。
       - no_proxy=127.0.0.1,localhost,ollama,host.docker.internal,postgres,redis
@@ -107,6 +117,13 @@ services:
       - RERANK_ENABLED=${RERANK_ENABLED:-true}
       - RERANK_PROVIDER=${RERANK_PROVIDER:-local_bge}
       - RERANK_MODEL=${RERANK_MODEL:-/app/models/bge-reranker-base}
+      # 检索双通道开关（2026-10-09 修复，默认开；金标回归负向时 env 秒级关回）
+      - RAG_SENTENCE_ENABLED=${RAG_SENTENCE_ENABLED:-true}
+      - RAG_BM25_WARMUP_ENABLED=${RAG_BM25_WARMUP_ENABLED:-true}
+      # M3 跨块综合（标签化综合 + 信号保底补块），灰度期默认关，
+      # .env.production 设 SYNTHESIS_ENABLED=true 开启；金标不退破后默认开。
+      - SYNTHESIS_ENABLED=${SYNTHESIS_ENABLED:-false}
+      - SYNTHESIS_MAX_INJECTED_DOCS=${SYNTHESIS_MAX_INJECTED_DOCS:-6}
     volumes:
       - agent_chroma:/app/chroma_data
       - agent_logs:/app/logs
@@ -140,8 +157,10 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          # 8G 是含 Ollama + 权重后的实测上限，别下调。
-          memory: 8G
+          # 2026-10-09 实验档位：8G→10G 容纳 qwen+bge 双模型同驻。
+          # 宿主 .wslconfig 上限 12G，容器 10G 后宿主+WSL 仍留 2G 余量。
+          # 验收连跑 5 题峰值 <9.5G 无 OOM，否则回退 8G。别下调旧 8G 注释。
+          memory: 10G
         reservations:
           cpus: '0.5'
           memory: 512M

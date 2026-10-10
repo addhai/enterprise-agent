@@ -6,10 +6,13 @@ API 依赖注入：管理全局单例对象的生命周期
     - MemoryManager（记忆中枢）
     - LangGraph workflow（编译后的状态图）
 """
+
 import logging
-from src.rag.retriever import HybridRetriever
-from src.memory.manager import MemoryManager
+
+from src.config import settings
 from src.graph.workflow import create_workflow
+from src.memory.manager import MemoryManager
+from src.rag.retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +21,40 @@ _memory_manager: MemoryManager = None
 _workflow = None
 
 
+def _init_retriever() -> HybridRetriever:
+    """构造全局检索单例并接通两条历史缺失的检索通道。
+
+    2026-10-09 审计修复：
+      1. 必须显式传 collection_name，否则 sentence_store 恒为 None，
+         knowledge_base_sentences（2834 条）建了库但从不参与检索。
+      2. BM25 是纯内存索引，生产启动不经过灌库路径，需从已落盘的
+         Chroma 集合 warmup 重建；此前混合检索长期只有向量一路。
+    warmup 失败不阻断启动（退化为向量单路，与旧行为一致）。
+    """
+    retriever = HybridRetriever(collection_name=settings.chroma_collection_name)
+    if settings.rag_bm25_warmup_enabled:
+        try:
+            n_docs = retriever.warmup_bm25_from_store()
+            logger.info(
+                "Retriever ready: bm25_docs=%d sentence_channel=%s",
+                n_docs,
+                "on" if retriever.sentence_store else "off",
+            )
+        except Exception:
+            logger.warning("BM25 warmup failed, running vector-only", exc_info=True)
+    else:
+        logger.warning(
+            "Retriever ready: BM25 warmup disabled by RAG_BM25_WARMUP_ENABLED"
+        )
+    return retriever
+
+
 def get_retriever() -> HybridRetriever:
     """获取全局 HybridRetriever 实例（懒加载）"""
     global _retriever
     if _retriever is None:
         logger.info("Initializing HybridRetriever...")
-        _retriever = HybridRetriever()
+        _retriever = _init_retriever()
     return _retriever
 
 
