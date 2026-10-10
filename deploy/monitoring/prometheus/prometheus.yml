@@ -1,15 +1,28 @@
 # =============================================================================
-# Prometheus 监控配置 — Enterprise Agent
+# Prometheus 监控配置 — Enterprise Agent（单机 8 容器生产架构）
+# =============================================================================
+# 拓扑说明（2026-10-10 实测校准）：
+#   生产为单机 8 容器，全部挂在 prod-net 桥接网络，Docker 内置 DNS 按容器名解析：
+#     prod-app-1          业务 FastAPI（8000，metrics 端点 /api/v1/metrics/prometheus）
+#     prod-postgres-1     PostgreSQL（5432）
+#     prod-redis-1        Redis（6379）
+#     agent-pg-exporter   postgres_exporter（9187，数据源 postgres:5432/agent）
+#     agent-redis-exporter redis_exporter（9121，--redis.addr=redis:6379）
+#     agent-prometheus / agent-grafana / agent-feishu-adapter
+#   早期 K8s 时代的幽灵服务名（apisix/rag-service/ws-service/milvus/rabbitmq）
+#   已随架构演进废弃，本文件已剔除，避免抓取目标全部 down。
 # =============================================================================
 
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    cluster: agent-k3s
-    environment: ${ENV:-dev}
+    cluster: agent-prod
+    environment: production
 
-# ---- Alertmanager (可选，暂不配置) ----
+# ---- Alertmanager（可选，暂不配置外部通知出口）----
+# 生产暂无 Alertmanager 容器，告警仅在 Prometheus 内部 /alerts 页可见。
+# 需要外部通知（webhook/邮件）时再接入，勿在无出口时硬开。
 # alerting:
 #   alertmanagers:
 #     - static_configs:
@@ -24,65 +37,25 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # ---- APISIX 网关 ----
-  - job_name: apisix
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['apisix:9092']
-        labels:
-          service: apisix
-
-  # ---- API Service ----
-  - job_name: api-service
+  # ---- 业务应用（FastAPI）----
+  # metrics 路径经实测为 /api/v1/metrics/prometheus（/metrics 返回 404）
+  - job_name: app
     metrics_path: /api/v1/metrics/prometheus
     static_configs:
-      - targets: ['api-service:8000']
+      - targets: ['prod-app-1:8000']
         labels:
           service: api
 
-  # ---- RAG Service ----
-  - job_name: rag-service
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['rag-service:8001']
-        labels:
-          service: rag
-
-  # ---- WebSocket Service ----
-  - job_name: ws-service
-    static_configs:
-      - targets: ['ws-service:8000']
-        labels:
-          service: websocket
-
-  # ---- Milvus ----
-  - job_name: milvus
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['milvus-standalone:9091']
-        labels:
-          service: milvus
-
-  # ---- PostgreSQL ----
-  # (需要 postgres_exporter sidecar)
+  # ---- PostgreSQL（postgres_exporter sidecar）----
   - job_name: postgres
     static_configs:
-      - targets: ['postgres-exporter:9187']
+      - targets: ['agent-pg-exporter:9187']
         labels:
           service: postgres
 
-  # ---- Redis ----
-  # (需要 redis_exporter sidecar)
+  # ---- Redis（redis_exporter sidecar）----
   - job_name: redis
     static_configs:
-      - targets: ['redis-exporter:9121']
+      - targets: ['agent-redis-exporter:9121']
         labels:
           service: redis
-
-  # ---- RabbitMQ ----
-  - job_name: rabbitmq
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['rabbitmq:15692']
-        labels:
-          service: rabbitmq

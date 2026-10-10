@@ -82,6 +82,8 @@ docker_build.log
 # 数据卷备份包（T4 任务产生的 Chroma 快照，属产物非源码）
 chroma_backup_*.tar.gz
 *.tar.gz
+# 生产备份脚本输出目录（scripts/ops/backup_data.sh 生成 pg_dump + chroma tar）
+backup/
 # 浏览器测试报告（Playwright 产物）
 playwright-report.zip
 playwright-report/

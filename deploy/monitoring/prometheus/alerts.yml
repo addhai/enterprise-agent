@@ -1,5 +1,13 @@
 # =============================================================================
-# Prometheus 告警规则 — Enterprise Agent
+# Prometheus 告警规则 — Enterprise Agent（单机 8 容器生产架构）
+# =============================================================================
+# 2026-10-10 校准：剔除 K8s 时代幽灵告警
+#   - LLMCallFailures（llm_call_* 指标不存在，且描述残留"阿里百炼"已废弃）
+#   - QueueBacklog（rabbitmq_queue_messages_ready，无 RabbitMQ）
+#   - HighWSConnections（ws_active_connections，app 未暴露此指标）
+#   - CircuitBreakerOpen（apisix_plugin_breaker_status，无 APISIX）
+# 保留并校准为当前真实指标（app 端点实测暴露 http_requests_total、
+#   http_request_duration_seconds、agent_offline_events_total 等 8 个指标）。
 # =============================================================================
 
 groups:
@@ -35,25 +43,16 @@ groups:
           summary: "API 5xx 错误率 > 5%"
           description: "当前错误率 {{ $value | humanizePercentage }}"
 
-      # ---- LLM 调用失败 ----
-      - alert: LLMCallFailures
-        expr: rate(llm_call_errors_total[5m]) / rate(llm_call_total[5m]) > 0.1
-        for: 3m
+      # ---- Agent 掉线事件 ----
+      # agent_offline_events_total 为累计计数，用 increase 捕捉新增掉线。
+      - alert: AgentOffline
+        expr: increase(agent_offline_events_total[10m]) > 0
+        for: 1m
         labels:
           severity: warning
         annotations:
-          summary: "LLM 调用失败率 > 10%"
-          description: "阿里百炼 API 调用失败率 {{ $value | humanizePercentage }}"
-
-      # ---- RabbitMQ 消息堆积 ----
-      - alert: QueueBacklog
-        expr: rabbitmq_queue_messages_ready{queue="agent.inference.queue"} > 100
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "推理队列消息堆积 > 100"
-          description: "agent.inference.queue 积压 {{ $value }} 条消息，可能需要扩容 worker"
+          summary: "坐席 Agent 发生掉线"
+          description: "过去 10 分钟新增 {{ $value }} 次 agent 掉线事件"
 
       # ---- Redis 内存使用 ----
       - alert: RedisHighMemory
@@ -64,23 +63,3 @@ groups:
         annotations:
           summary: "Redis 内存使用 > 85%"
           description: "Redis 内存使用率 {{ $value | humanizePercentage }}"
-
-      # ---- WebSocket 连接数 ----
-      - alert: HighWSConnections
-        expr: ws_active_connections > 800
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "WebSocket 连接数接近上限"
-          description: "当前活跃连接 {{ $value }}，上限 1000"
-
-      # ---- 熔断器触发 ----
-      - alert: CircuitBreakerOpen
-        expr: apisix_plugin_breaker_status{name="api-breaker"} == 1
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "APISIX 熔断器已触发"
-          description: "API 断路器已熔断，后端服务可能异常"
