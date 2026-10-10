@@ -3,7 +3,7 @@
 > 这份文件回答「现在的真实状态是什么」。每完成一个阶段就覆盖更新一次。
 > 与 PROJECT.md 配套：PROJECT.md 讲不变的，本文件讲在变的。
 >
-> 最后更新：2026-10-10 下午（**P0 认证边界收口 H1/H2/H3/H4 全部上线并镜像固化**，PR #2 已合入 master，CI run 38032792853 五 job 全绿）。新镜像 latest=**49d26d7874d4**（旧 8b0ab6432965 备份 tag `backup-pre-p0-security-20261010`），容器注入 `ENVIRONMENT=production`，镜像内 11 文件 MD5 与 worktree 全一致，鉴权探针热部署/干净镜像两轮 12/12，金标子集 7 题 6 pass（GF20 已归因 7B 生成波动非回归）。chat 强制鉴权、坐席 WS 握手鉴权、会话 IDOR 双层边界、登录失败锁定、生产 JWT 强校验、默认账号强制改密全部生效。本地 1701 passed/17 skipped。**运营待办**：三个 seed 账号仍是出厂密码，需安排改密。详见下「2026-10-10」时间线。
+> 最后更新：2026-10-10 晚（**P0 安全收口全链路上线 + 运营收尾完成**）。P0 认证边界（H1/H2/H3/H4）已镜像固化（latest=49d26d7874d4，备份 tag `backup-pre-p0-security-20261010`）；三个 seed 账号已改密（随机 16 位，旧密码失效）；M3 全量回归 40/50 达标（≥39 红线），10 题归因完成；P0-4 备份脚本重写（修复 MAX_RETRIES 清空 bug + 生产化，实跑 PG 468K + Chroma 43M）；P0-5 Prometheus 监控接通（4 真实目标全 up，删 8 幽灵 job + 4 幽灵告警）；移除废弃 cron 定时脚本、清理 .worktrees 残留与已合并分支。详见「2026-10-10」时间线。
 > 状态来源：`git` 实测 + `pytest` 实跑 + 容器内实测，不接受「应该/大概」式描述。
 
 ---
@@ -23,6 +23,22 @@
 **真机验证（三轮证据）**：①热部署 11 文件 docker cp 进 prod-app-1，MD5 双向一致，restart 后 healthy，探针 12/12（无/坏 token 401、smoke_kbmode 正常、admin 默认密码业务接口 403 `PASSWORD_CHANGE_REQUIRED`、me/改密白名单可达、锁定 429）；②镜像固化：备份 tag `backup-pre-p0-security-20261010`=8b0ab6432965；worktree 补不入库构建资产 `main.py` + 实体复制 models(1082MB)/static/chroma_data（BuildKit 不跟随 Windows junction，首次 build 实测三个 COPY 全 not found，改实体复制后通过）；定向 compose build app + up -d，新 latest **49d26d7874d4**，recreate 后容器注入 ENVIRONMENT=production 且未拒启动（生产 JWT_SECRET 为 80 位真实值）、镜像 sha 一致、镜像内 11 文件 MD5 全一致、探针再跑 12/12、8 容器 healthy；③金标子集 7 题（GF15/GF20/GS04/GS06/GP08/GP10/GR02，报告 `scripts/golden/reports_p0_sec/`）6 pass，事实/综合/程序/拒答四类链路全通，WS 鉴权对问答零影响。唯一 GF20 fail 归因：M3 同题 30 字 pass，本次 100 字答出 IP40 却漏掉「1.2 米跌落」并答「资料未明确给出」，同账号同库同检索链路，属 7B 生成覆盖波动，按熔断纪律不重跑刷分。
 
 **运营待办与边界**：生产 admin/agent/viewer 三个 seed 账号仍是出厂密码，业务侧需安排登录后改密（改密前业务 REST 与坐席 WS 拦截，仅 /auth/me、/auth/change-password、logout 放行）；如需短期保持连续，显式置 `REQUIRE_DEFAULT_PASSWORD_CHANGE=false` 并登记限期。登录锁定为进程内单副本实现，多副本化需迁移 Redis。agent 密级四级全开是临时口径，待密级标签业务校准。
+
+---
+
+## 2026-10-10 收尾：seed 改密 + M3 达标 + P0-4/P0-5 上线 + 目录清理
+
+**seed 账号改密（已完成）**：admin/agent/viewer 三账号走 `POST /auth/change-password` 改为 16 位随机密码，旧密码 admin123/agent123/viewer123 全部失效（登录返回"用户名或密码错误"），`must_change_password` 全 false，业务 REST 解除 PASSWORD_CHANGE_REQUIRED 拦截。新密码记录在 `deploy/prod/.env.seed-credentials`（`.env.*` gitignore 排除，不入库）。
+
+**M3 全量回归达标**：40/50 pass（≥39 红线），p50 181.8s，p95 360.7s。10 题 fail 归因：6 题 7B 覆盖缺口（料在上下文内模型未提取，GS02 缺"12个月"/GS10 缺"每年"/GS14 缺"纸巾丙酮香蕉水"/GP03 缺"排线"/GP04 缺"±0.2℃"/GP06 缺"7天"）、1 题 7B 生成错误（GS12 把导出写成 Clear All）、1 题 7B 自截断（GP05 停在"打包邮寄："冒号）、1 题已知检索边界（GS11 "20%" 块 rank7/8 被 reranker top5 切掉）、1 题库外收口（GR05 编造打印机步骤）。与既有判断一致：继续磨 prompt 边际收益已尽，需更大模型或综合题专用编排。
+
+**P0-4 备份脚本重写**：`scripts/ops/backup_data.sh` 修复致命 bug（原第 53 行 `MAX_RETRIES` 未定义，`tail -n +1` 每次备份清空所有备份），生产化（docker exec pg_dump 自定义格式 + tar Chroma 卷，保留 5 份），加 `MSYS2_ARG_CONV_EXCL='/tmp;/app'` 修复 Git Bash 路径转换。实跑验证：PG 468K（magic PGDMP）+ Chroma 43M（117 条目 HNSW 索引完整）。`.gitignore` 新增 `backup/` 规则。删除废弃的 `scripts/backup.sh`/`scripts/backup-init.sh`（旧 MinIO/Milvus 架构，含 crontab 每日 2 点定时规则，生产已由 backup_data.sh 承接，当前阶段无自动备份需求）。
+
+**P0-5 Prometheus 监控接通**：`deploy/monitoring/prometheus/prometheus.yml` 把 8 个 K8s 幽灵 job（apisix/rag-service/ws-service/milvus/rabbitmq）替换为 4 个真实 prod-net 目标（prod-app-1:8000 的 /api/v1/metrics/prometheus、agent-pg-exporter:9187、agent-redis-exporter:9121、自监控），external_labels 改 production；`alerts.yml` 删 4 幽灵告警（llm_call_* 残留"阿里百炼"、rabbitmq、ws_active_connections、apisix 熔断），新增 AgentOffline。promtool check 通过，reload 后 4 目标全 up、droppedTargets 全 0。告警外部通知出口（Alertmanager）暂未配置，告警仅 Prometheus 内部 /alerts 可见，待通知目标确定后接入。
+
+**目录清理**：`git worktree remove --force .worktrees/p0-security` + 删除空 .worktrees 目录 + `git branch -d fix/p0-security-boundaries`（已合入 master 的 worktree 分支）。剩余分支 feature/chapter-path（未合并，保留）+ master。
+
+**恢复演练评估（暂缓）**：项目未上线（交付就绪度 58/100，工程化半成品），生产无真实业务数据需保障；备份脚本核心 bug 已修复、备份功能已实跑验证（PG PGDMP magic + Chroma 结构完整）；恢复演练涉及生产写操作（restore 到临时库/卷）有风险，当前阶段收益低。结论：暂缓恢复演练，登记为上线前必做项（上线前在测试环境删除业务表与 Chroma 集合后从备份恢复，金标冒烟题通过）。
 
 ---
 
