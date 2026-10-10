@@ -1,52 +1,81 @@
 """
 管理后台 API — 会话管理与渠道配置
 """
+
+import logging
 import os
 import time
 import uuid
-import logging
-from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Path, Depends, Header, Body
+from typing import Any
+
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Request
 from pydantic import BaseModel, Field
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-from src.websocket.session_manager import get_session_manager, SessionMode
-from src.config import settings
-from src.api.rbac import require_roles, require_user_manage, Role
-from src.db.repositories import tenant_create, tenant_exists, tenant_list
+from src.api.rbac import Role, require_roles, require_user_manage
 from src.api.sessions_service import (
-    delete_session as _delete_session,
+    _session_access_allowed,
+    _session_owner_allowed,
+)
+from src.api.sessions_service import (
+    delete_session_checked as _delete_session_checked,
+)
+from src.api.sessions_service import (
+    get_last_message_preview as _get_last_message_preview,
+)
+from src.api.sessions_service import (
     get_session_detail as _get_session_detail,
-    get_session_owner as _get_session_owner,
+)
+from src.api.sessions_service import (
+    get_session_ownership as _get_session_ownership,
+)
+from src.api.sessions_service import (
     list_sessions as _list_sessions,
 )
+from src.api.sessions_service import (
+    session_to_dict as _session_to_dict,
+)
+from src.config import settings
+from src.db.repositories import tenant_create, tenant_exists, tenant_list
+from src.websocket.session_manager import SessionMode, get_session_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
 
 
-def _get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
-    """可选的用户认证（未登录也能访问，但会过滤会话）"""
-    if not authorization:
+async def _get_current_user_optional(
+    request: Request,
+    authorization: str | None = Header(None),
+) -> dict[str, Any] | None:
+    """可选的用户认证（未登录/坏 token 按匿名处理，下游按身份过滤会话）
+
+    P0-1/P0-6 收口：token 有效时必须走统一鉴权 get_current_user，
+    停用账号（403）与默认密码未改（403）不得因为是「可选依赖」就被放行；
+    仅 401（无效/过期 token）维持匿名语义，与无 header 行为一致。
+    """
+    if not authorization or not authorization.startswith("Bearer "):
         return None
-    if not authorization.startswith("Bearer "):
-        return None
-    token = authorization[7:]
+    from src.api.auth import get_current_user
+
     try:
-        from src.api.auth import _get_user_by_token
-        return _get_user_by_token(token)
-    except Exception:
-        return None
+        return await get_current_user(authorization=authorization, request=request)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            return None
+        raise
 
 
 # ====================================================================
 # 普通用户会话 API（需要登录，只能看到自己的会话）
 # ====================================================================
 
+
 @router.get("/sessions")
-async def get_user_sessions(current_user: Optional[Dict[str, Any]] = Depends(_get_current_user_optional)):
+async def get_user_sessions(
+    current_user: dict[str, Any] | None = Depends(_get_current_user_optional),
+):
     """获取当前用户的会话列表（内存活跃会话 + 持久化 DB 历史会话合并）
 
     需要用户登录，返回当前用户的所有会话；重启后仍在 DB 的历史会话也会被合并进来。
@@ -58,14 +87,17 @@ async def get_user_sessions(current_user: Optional[Dict[str, Any]] = Depends(_ge
 @router.get("/sessions/{session_id}")
 async def get_user_session_detail(
     session_id: str = Path(..., description="会话 ID"),
-    current_user: Optional[Dict[str, Any]] = Depends(_get_current_user_optional),
+    current_user: dict[str, Any] | None = Depends(_get_current_user_optional),
 ):
-    """获取当前用户的会话详情和历史消息（内存优先，回退持久化 DB）"""
-    user_id = current_user.get("user_id") if current_user else None
-    owner = _get_session_owner(session_id)
-    if owner is None:
+    """获取当前用户的会话详情和历史消息（内存优先，回退持久化 DB）
+
+    P0-3：用户端严格本人 + 同租户（角色不豁免，员工跨用户走 /admin 接口）；
+    未登录拒绝；不存在统一 404，不泄露存在性。
+    """
+    ownership = _get_session_ownership(session_id)
+    if ownership is None:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
-    if user_id and owner != user_id:
+    if not _session_owner_allowed(current_user, ownership):
         raise HTTPException(status_code=403, detail="无权访问此会话")
     detail = _get_session_detail(session_id)
     if not detail:
@@ -76,19 +108,20 @@ async def get_user_session_detail(
 @router.delete("/sessions/{session_id}")
 async def delete_user_session(
     session_id: str = Path(..., description="会话 ID"),
-    current_user: Optional[Dict[str, Any]] = Depends(_get_current_user_optional),
+    current_user: dict[str, Any] | None = Depends(_get_current_user_optional),
 ):
     """删除当前用户的会话
 
     需要用户登录，只能删除自己的会话；同时从内存与持久化 DB 删除（重启后不会重现）。
+    P0-3：用户端严格本人（角色不豁免）；未登录 / 跨用户 / 跨租户一律 403；
+    不存在统一 404。
     """
-    user_id = current_user.get("user_id") if current_user else None
-    owner = _get_session_owner(session_id)
-    if owner is None:
+    try:
+        ok = _delete_session_checked(session_id, current_user, owner_only=True)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="无权删除此会话") from None
+    if not ok:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
-    if user_id and owner != user_id:
-        raise HTTPException(status_code=403, detail="无权删除此会话")
-    _delete_session(session_id)
     return {"success": True, "message": "会话已删除"}
 
 
@@ -96,9 +129,10 @@ async def delete_user_session(
 # 管理员会话 API（需要 admin 权限，可以看到所有会话）
 # ====================================================================
 
+
 @router.get("/admin/sessions")
 async def get_admin_sessions(
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取所有用户的会话列表（管理员版，内存活跃 + 持久化 DB 历史合并）"""
     result = _list_sessions(current_user, None, 500, include_live=True, all_users=True)
@@ -108,9 +142,17 @@ async def get_admin_sessions(
 @router.get("/admin/sessions/{session_id}")
 async def get_admin_session_detail(
     session_id: str = Path(..., description="会话 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
-    """获取会话详情（管理员版，内存优先，回退持久化 DB）"""
+    """获取会话详情（管理员版，内存优先，回退持久化 DB）
+
+    P0-3：管理角色同样受租户隔离约束，仅能读本租户会话。
+    """
+    ownership = _get_session_ownership(session_id)
+    if ownership is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    if not _session_access_allowed(current_user, ownership):
+        raise HTTPException(status_code=403, detail="无权访问此会话")
     detail = _get_session_detail(session_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
@@ -120,10 +162,16 @@ async def get_admin_session_detail(
 @router.delete("/admin/sessions/{session_id}")
 async def delete_admin_session(
     session_id: str = Path(..., description="会话 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
-    """删除任意用户的会话（管理员版，同时从内存与持久化 DB 删除）"""
-    ok = _delete_session(session_id)
+    """删除任意用户的会话（管理员版，同时从内存与持久化 DB 删除）
+
+    P0-3：仅限本租户会话，跨租户删除返回 403。
+    """
+    try:
+        ok = _delete_session_checked(session_id, current_user)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="无权删除此会话") from None
     if not ok:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
     return {"success": True, "message": "会话已删除"}
@@ -131,10 +179,10 @@ async def delete_admin_session(
 
 @router.get("/admin/channels")
 async def get_channels(
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """获取渠道列表及配置
-    
+
     需要 admin 角色
     返回所有支持的渠道及其配置信息（敏感字段脱敏）
     """
@@ -163,7 +211,9 @@ async def get_channels(
                 "api_token_configured": bool(settings.channel_chatwoot_api_token),
                 "account_id": settings.channel_chatwoot_account_id,
                 "inbox_id": settings.channel_chatwoot_inbox_id,
-                "webhook_token_configured": bool(settings.channel_chatwoot_webhook_token),
+                "webhook_token_configured": bool(
+                    settings.channel_chatwoot_webhook_token
+                ),
                 "webhook_url": "/api/v1/chatwoot/webhook",
             },
         },
@@ -178,10 +228,10 @@ async def get_channels(
 @router.get("/admin/channels/{channel_name}/config")
 async def get_channel_config(
     channel_name: str,
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """获取指定渠道的完整配置（包含敏感字段）
-    
+
     需要 admin 角色
     仅返回当前配置值（token 等敏感信息仅返回是否已配置，不返回原值）
     """
@@ -194,7 +244,9 @@ async def get_channel_config(
                 "api_token_configured": bool(settings.channel_chatwoot_api_token),
                 "account_id": settings.channel_chatwoot_account_id,
                 "inbox_id": settings.channel_chatwoot_inbox_id,
-                "webhook_token_configured": bool(settings.channel_chatwoot_webhook_token),
+                "webhook_token_configured": bool(
+                    settings.channel_chatwoot_webhook_token
+                ),
                 "webhook_url": "/api/v1/chatwoot/webhook",
             },
         }
@@ -219,21 +271,22 @@ async def get_channel_config(
 @router.put("/admin/channels/{channel_name}/config")
 async def update_channel_config(
     channel_name: str,
-    config_data: Dict[str, Any] = Body(...),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    config_data: dict[str, Any] = Body(...),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """更新渠道配置
-    
+
     需要 admin 角色
     支持启用/禁用渠道，更新配置参数
     """
-    import httpx
-    
+
     if channel_name == "chatwoot":
         if "enabled" in config_data:
             settings.channel_chatwoot_enabled = bool(config_data["enabled"])
         if "base_url" in config_data:
-            settings.channel_chatwoot_base_url = str(config_data["base_url"]).rstrip("/")
+            settings.channel_chatwoot_base_url = str(config_data["base_url"]).rstrip(
+                "/"
+            )
         if "api_token" in config_data and config_data["api_token"]:
             settings.channel_chatwoot_api_token = str(config_data["api_token"])
         if "account_id" in config_data:
@@ -242,7 +295,7 @@ async def update_channel_config(
             settings.channel_chatwoot_inbox_id = str(config_data["inbox_id"])
         if "webhook_token" in config_data and config_data["webhook_token"]:
             settings.channel_chatwoot_webhook_token = str(config_data["webhook_token"])
-        
+
         return {
             "success": True,
             "name": "chatwoot",
@@ -252,7 +305,9 @@ async def update_channel_config(
                 "api_token_configured": bool(settings.channel_chatwoot_api_token),
                 "account_id": settings.channel_chatwoot_account_id,
                 "inbox_id": settings.channel_chatwoot_inbox_id,
-                "webhook_token_configured": bool(settings.channel_chatwoot_webhook_token),
+                "webhook_token_configured": bool(
+                    settings.channel_chatwoot_webhook_token
+                ),
             },
         }
     elif channel_name == "feishu":
@@ -262,7 +317,7 @@ async def update_channel_config(
             settings.channel_feishu_app_id = str(config_data["app_id"])
         if "app_secret" in config_data and config_data["app_secret"]:
             settings.channel_feishu_app_secret = str(config_data["app_secret"])
-        
+
         return {
             "success": True,
             "name": "feishu",
@@ -272,28 +327,36 @@ async def update_channel_config(
                 "app_secret_configured": bool(settings.channel_feishu_app_secret),
             },
         }
-    
+
     raise HTTPException(status_code=404, detail=f"不支持的渠道: {channel_name}")
 
 
 @router.post("/admin/channels/{channel_name}/test")
 async def test_channel_connection(
     channel_name: str,
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """测试渠道连接
-    
+
     需要 admin 角色
     测试 Chatwoot API 是否能正常连通
     """
     import httpx
-    
+
     if channel_name == "chatwoot":
-        if not settings.channel_chatwoot_base_url or not settings.channel_chatwoot_api_token:
-            raise HTTPException(status_code=400, detail="请先配置 Chatwoot Base URL 和 API Token")
-        
+        if (
+            not settings.channel_chatwoot_base_url
+            or not settings.channel_chatwoot_api_token
+        ):
+            raise HTTPException(
+                status_code=400, detail="请先配置 Chatwoot Base URL 和 API Token"
+            )
+
         try:
-            url = f"{settings.channel_chatwoot_base_url}/accounts/{settings.channel_chatwoot_account_id}/conversations"
+            url = (
+                f"{settings.channel_chatwoot_base_url}/accounts/"
+                f"{settings.channel_chatwoot_account_id}/conversations"
+            )
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(
                     url,
@@ -320,7 +383,10 @@ async def test_channel_connection(
                     return {
                         "success": False,
                         "message": f"连接失败 (HTTP {resp.status_code})",
-                        "details": {"status_code": resp.status_code, "response": resp.text[:200]},
+                        "details": {
+                            "status_code": resp.status_code,
+                            "response": resp.text[:200],
+                        },
                     }
         except httpx.ConnectError as e:
             return {
@@ -336,8 +402,10 @@ async def test_channel_connection(
             }
     elif channel_name == "feishu":
         if not settings.channel_feishu_app_id or not settings.channel_feishu_app_secret:
-            raise HTTPException(status_code=400, detail="请先配置飞书 App ID 和 App Secret")
-        
+            raise HTTPException(
+                status_code=400, detail="请先配置飞书 App ID 和 App Secret"
+            )
+
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.post(
@@ -349,12 +417,24 @@ async def test_channel_connection(
                 )
                 data = resp.json()
                 if data.get("code") == 0:
-                    return {"success": True, "message": "飞书连接成功", "details": {"tenant_token_obtained": True}}
+                    return {
+                        "success": True,
+                        "message": "飞书连接成功",
+                        "details": {"tenant_token_obtained": True},
+                    }
                 else:
-                    return {"success": False, "message": f"飞书连接失败: {data.get('msg', '未知错误')}", "details": data}
+                    return {
+                        "success": False,
+                        "message": f"飞书连接失败: {data.get('msg', '未知错误')}",
+                        "details": data,
+                    }
         except Exception as e:
-            return {"success": False, "message": f"测试失败: {str(e)}", "details": {"error": str(e)}}
-    
+            return {
+                "success": False,
+                "message": f"测试失败: {str(e)}",
+                "details": {"error": str(e)},
+            }
+
     raise HTTPException(status_code=404, detail=f"不支持的渠道: {channel_name}")
 
 
@@ -362,25 +442,27 @@ async def test_channel_connection(
 # 人工客服坐席 API
 # ====================================================================
 
+
 @router.get("/admin/handoff/queue")
 async def get_handoff_queue(
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取转接人工客服队列
-    
+
     返回所有等待人工接入的会话，按等待时间排序
     需要 admin/agent 角色
     """
     session_mgr = get_session_manager()
     all_sessions = list(session_mgr._sessions.values())
-    
+
     waiting_sessions = [
-        s for s in all_sessions 
+        s
+        for s in all_sessions
         if s.mode in (SessionMode.WAITING_HUMAN, SessionMode.HUMAN_CHAT)
     ]
-    
+
     waiting_sessions.sort(key=lambda s: s.last_active)
-    
+
     return {
         "total": len(waiting_sessions),
         "queue": [
@@ -391,10 +473,14 @@ async def get_handoff_queue(
                 "created_at": s.created_at,
                 "last_active": s.last_active,
                 "turn_count": s.turn_count,
-                "last_message_preview": _get_last_message_preview(s.conversation_history),
+                "last_message_preview": _get_last_message_preview(
+                    s.conversation_history
+                ),
                 "handoff_context": s.handoff_context,
                 "assigned_agent": s.assigned_agent,
-                "wait_time": int(time.time() - s.last_active) if s.mode == SessionMode.WAITING_HUMAN else 0,
+                "wait_time": int(time.time() - s.last_active)
+                if s.mode == SessionMode.WAITING_HUMAN
+                else 0,
             }
             for s in waiting_sessions
         ],
@@ -405,7 +491,7 @@ async def get_handoff_queue(
 async def accept_handoff(
     session_id: str = Path(..., description="会话 ID"),
     agent_id: str = Body(default="admin", embed=True),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """人工坐席接入会话
 
@@ -425,6 +511,7 @@ async def accept_handoff(
     # 触发通知
     try:
         from src.api.notifications import add_notification
+
         add_notification(
             type="handoff",
             level="info",
@@ -447,7 +534,7 @@ async def agent_reply(
     session_id: str = Path(..., description="会话 ID"),
     message: str = Body(..., embed=True),
     agent_id: str = Body(default="admin", embed=True),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """人工坐席发送回复消息
 
@@ -461,32 +548,36 @@ async def agent_reply(
 
     if session.mode != SessionMode.HUMAN_CHAT:
         raise HTTPException(status_code=400, detail="该会话未处于人工对话状态")
-    
+
     now = time.time()
-    
-    session.conversation_history.append({
-        "role": "assistant",
-        "content": message,
-        "timestamp": now,
-        "is_human_agent": True,
-        "agent_id": agent_id,
-    })
-    
+
+    session.conversation_history.append(
+        {
+            "role": "assistant",
+            "content": message,
+            "timestamp": now,
+            "is_human_agent": True,
+            "agent_id": agent_id,
+        }
+    )
+
     session.last_active = now
     session.turn_count += 1
-    
-    if session._websocket_ref and hasattr(session._websocket_ref, 'send_json'):
+
+    if session._websocket_ref and hasattr(session._websocket_ref, "send_json"):
         try:
-            await session._websocket_ref.send_json({
-                "type": "human_agent_message",
-                "session_id": session_id,
-                "agent_id": agent_id,
-                "content": message,
-                "timestamp": now,
-            })
+            await session._websocket_ref.send_json(
+                {
+                    "type": "human_agent_message",
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    "content": message,
+                    "timestamp": now,
+                }
+            )
         except Exception as e:
             logger.warning(f"Failed to push agent reply to session {session_id}: {e}")
-    
+
     return {
         "success": True,
         "message": "回复已发送",
@@ -497,7 +588,7 @@ async def agent_reply(
 async def close_handoff(
     session_id: str = Path(..., description="会话 ID"),
     agent_id: str = Body(default="admin", embed=True),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """结束人工服务，将会话转回 AI 或关闭
 
@@ -513,16 +604,21 @@ async def close_handoff(
     session.assigned_agent = None
 
     now = time.time()
-    session.conversation_history.append({
-        "role": "system",
-        "content": "人工客服已结束服务，将由 AI 继续为您服务。请问您对本次服务是否满意？",
-        "timestamp": now,
-    })
+    session.conversation_history.append(
+        {
+            "role": "system",
+            "content": (
+                "人工客服已结束服务，将由 AI 继续为您服务。请问您对本次服务是否满意？"
+            ),
+            "timestamp": now,
+        }
+    )
 
     # 触发满意度评价邀请通知
     try:
         from src.api.satisfaction import create_satisfaction_invite
-        invite = create_satisfaction_invite(session_id, session.user_id, agent_id)
+
+        create_satisfaction_invite(session_id, session.user_id, agent_id)
     except Exception as e:
         logger.warning("Failed to create satisfaction invite: %s", e)
 
@@ -536,9 +632,10 @@ async def close_handoff(
 # HITL 人工审批 API（对齐 langgraph_multi-agent 的 humanloop_manager）
 # ======================================================================
 
+
 @router.get("/admin/approvals")
 async def list_pending_approvals(
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """列出所有待审批请求
 
@@ -547,6 +644,7 @@ async def list_pending_approvals(
     """
     try:
         from src.integrations.humanloop import get_humanloop_manager
+
         manager = get_humanloop_manager()
         pending = manager.list_pending()
         return {
@@ -568,7 +666,7 @@ async def list_pending_approvals(
         }
     except Exception as e:
         logger.error("List pending approvals failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/admin/approvals/{request_id}/review")
@@ -576,7 +674,7 @@ async def review_approval(
     request_id: str = Path(..., description="审批请求 ID"),
     approved: bool = Body(..., embed=True, description="是否批准"),
     comment: str = Body(default="", embed=True, description="审批意见"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """提交审批结果
 
@@ -585,6 +683,7 @@ async def review_approval(
     """
     try:
         from src.integrations.humanloop import get_humanloop_manager
+
         manager = get_humanloop_manager()
         reviewer_id = current_user.get("user_id", "unknown")
 
@@ -612,13 +711,13 @@ async def review_approval(
         raise
     except Exception as e:
         logger.error("Review approval failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/admin/approvals/{request_id}")
 async def get_approval_status(
     request_id: str = Path(..., description="审批请求 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """查询审批请求状态
 
@@ -626,6 +725,7 @@ async def get_approval_status(
     """
     try:
         from src.integrations.humanloop import get_humanloop_manager
+
         manager = get_humanloop_manager()
         request = manager.get_request(request_id)
 
@@ -649,43 +749,53 @@ async def get_approval_status(
         raise
     except Exception as e:
         logger.error("Get approval status failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # ====================================================================
 # 多租户管理 API（仅超级管理员）
 # ====================================================================
 
+
 class TenantCreateRequest(BaseModel):
     """创建租户请求"""
+
     tenant_id: str = Field(..., min_length=2, max_length=50, description="租户唯一标识")
     name: str = Field(..., min_length=1, max_length=100, description="租户名称")
     plan: str = Field("free", description="套餐: free/standard/pro")
-    admin_username: Optional[str] = Field(None, description="可选：为新租户预置一个管理员账号用户名")
-    admin_password: Optional[str] = Field(None, description="可选：预置管理员密码（提供 admin_username 时必填）")
+    admin_username: str | None = Field(
+        None, description="可选：为新租户预置一个管理员账号用户名"
+    )
+    admin_password: str | None = Field(
+        None, description="可选：预置管理员密码（提供 admin_username 时必填）"
+    )
 
 
 class TenantResponse(BaseModel):
     """租户响应"""
+
     tenant_id: str
     name: str
     plan: str
     status: str
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    admin_username: Optional[str] = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    admin_username: str | None = None
 
 
-def _to_tenant_response(d: Dict[str, Any]) -> TenantResponse:
-    return TenantResponse(**{
-        k: d.get(k) for k in ("tenant_id", "name", "plan", "status", "created_at", "updated_at")
-    })
+def _to_tenant_response(d: dict[str, Any]) -> TenantResponse:
+    return TenantResponse(
+        **{
+            k: d.get(k)
+            for k in ("tenant_id", "name", "plan", "status", "created_at", "updated_at")
+        }
+    )
 
 
 @router.post("/admin/tenants", response_model=TenantResponse)
 async def create_tenant(
     request: TenantCreateRequest,
-    current_user: Dict[str, Any] = Depends(require_user_manage),
+    current_user: dict[str, Any] = Depends(require_user_manage),
 ):
     """创建租户（仅超级管理员）
 
@@ -693,35 +803,48 @@ async def create_tenant(
     """
     try:
         if tenant_exists(request.tenant_id):
-            raise HTTPException(status_code=409, detail=f"租户已存在: {request.tenant_id}")
-        created = tenant_create({
-            "tenant_id": request.tenant_id,
-            "name": request.name,
-            "plan": request.plan,
-            "status": "active",
-        })
+            raise HTTPException(
+                status_code=409, detail=f"租户已存在: {request.tenant_id}"
+            )
+        created = tenant_create(
+            {
+                "tenant_id": request.tenant_id,
+                "name": request.name,
+                "plan": request.plan,
+                "status": "active",
+            }
+        )
         admin_username = None
         # 可选：为新租户预置一个管理员账号，使其创建后即可登录（不再是空壳）
         if request.admin_username:
             if not request.admin_password:
-                raise HTTPException(status_code=400, detail="提供 admin_username 时必须提供 admin_password")
+                raise HTTPException(
+                    status_code=400,
+                    detail="提供 admin_username 时必须提供 admin_password",
+                )
             from src.api.auth import _get_user_by_username, hash_password
             from src.db.repositories import user_create
+
             if _get_user_by_username(request.admin_username):
-                raise HTTPException(status_code=400, detail=f"管理员用户名已存在: {request.admin_username}")
-            user_create({
-                "user_id": str(uuid.uuid4()),
-                "username": request.admin_username,
-                "password_hash": hash_password(request.admin_password),
-                "avatar": request.admin_username[0].upper(),
-                "created_at": time.time(),
-                "is_admin": True,
-                "role": "admin",
-                "status": "active",
-                "tenant_id": request.tenant_id,
-                "email": f"{request.admin_username}@{request.tenant_id}.local",
-                "department": "租户管理员",
-            })
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"管理员用户名已存在: {request.admin_username}",
+                )
+            user_create(
+                {
+                    "user_id": str(uuid.uuid4()),
+                    "username": request.admin_username,
+                    "password_hash": hash_password(request.admin_password),
+                    "avatar": request.admin_username[0].upper(),
+                    "created_at": time.time(),
+                    "is_admin": True,
+                    "role": "admin",
+                    "status": "active",
+                    "tenant_id": request.tenant_id,
+                    "email": f"{request.admin_username}@{request.tenant_id}.local",
+                    "department": "租户管理员",
+                }
+            )
             admin_username = request.admin_username
         resp = _to_tenant_response(created)
         if admin_username:
@@ -731,12 +854,12 @@ async def create_tenant(
         raise
     except Exception as e:
         logger.error("Create tenant failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/admin/tenants", response_model=List[TenantResponse])
+@router.get("/admin/tenants", response_model=list[TenantResponse])
 async def list_tenants(
-    current_user: Dict[str, Any] = Depends(require_user_manage),
+    current_user: dict[str, Any] = Depends(require_user_manage),
 ):
     """列出所有租户（仅超级管理员）"""
     try:
@@ -744,4 +867,4 @@ async def list_tenants(
         return [_to_tenant_response(r) for r in rows]
     except Exception as e:
         logger.error("List tenants failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

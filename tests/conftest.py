@@ -9,7 +9,6 @@
 import os
 
 import pytest
-
 from src.agent.fake_llm import FakeLLMClient
 
 
@@ -51,6 +50,7 @@ def _init_test_database():
     except Exception:
         pass
 
+
 # ---- 收集时忽略清单
 # 历史：这里曾屏蔽 test_graph/test_rag/test_api/test_memory/test_protocols/
 #      test_integrations/test_websocket 七个目录（另有 test_langchain、security 两个
@@ -89,7 +89,10 @@ def pytest_collection_modifyitems(config, items):
     if _run_llm_tests():
         return
     skip_marker = pytest.mark.skip(
-        reason="需要真实 LLM/Embedding 凭据，默认跳过；设置 RUN_LLM_TESTS=1 并配置 API Key 后运行"
+        reason=(
+            "需要真实 LLM/Embedding 凭据，默认跳过；"
+            "设置 RUN_LLM_TESTS=1 并配置 API Key 后运行"
+        )
     )
     for item in items:
         if "requires_llm" in item.keywords:
@@ -99,9 +102,7 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def fake_llm_client():
     """返回一个确定性假 LLM：固定回复，不涉及任何外部调用。"""
-    return FakeLLMClient(
-        content="这是一段确定性的测试回复，包含关键词：密码重置。"
-    )
+    return FakeLLMClient(content="这是一段确定性的测试回复，包含关键词：密码重置。")
 
 
 @pytest.fixture
@@ -184,16 +185,38 @@ class FakeWorkflow:
 def fake_workflow(monkeypatch):
     """把 routes.chat 的工作流换成假实现，返回该假实例供断言。
 
-    用法：
-        def test_xxx(client, fake_workflow):
-            resp = client.post("/api/v1/chat", json={"message": "你好"})
+    用法（P0-1 起 /chat 强制登录，需先登录拿 token）：
+        def test_xxx(client, fake_workflow, admin_token):
+            resp = client.post(
+                "/api/v1/chat",
+                json={"message": "你好"},
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
             assert resp.status_code == 200
-            # 可断言调用方传了什么 state
-            assert fake_workflow.calls[0]["state"]["user_id"] == "anonymous"
+            # 可断言调用方传了什么 state（身份取自 token，非请求体）
+            assert fake_workflow.calls[0]["state"]["user_id"] == "<token 用户>"
     """
     wf = FakeWorkflow()
     monkeypatch.setattr("src.api.routes.get_workflow", lambda: wf)
     return wf
+
+
+@pytest.fixture(autouse=True)
+def _security_test_isolation(monkeypatch):
+    """P0-6 安全策略的测试隔离。
+
+    1. 套件默认关闭「默认密码强制改密」拦截：大量既有用例直接拿 seed
+       admin token 调业务接口，强制拦截会把它们全部打成 403。
+       需要验证拦截行为的用例自行 monkeypatch 重新打开。
+    2. 每个用例前清空登录失败计数，防止跨用例累积触发账号锁定。
+    """
+    from src.api.login_guard import get_login_guard
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "require_default_password_change", False)
+    get_login_guard().reset()
+    yield
+    get_login_guard().reset()
 
 
 @pytest.fixture(autouse=True)

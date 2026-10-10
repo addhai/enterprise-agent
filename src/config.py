@@ -2,7 +2,7 @@ import logging
 import os
 import secrets
 
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     """全局配置，从 .env 和环境变量读取"""
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
     )
 
     # OpenAI-compatible (阿里云百炼)
@@ -48,13 +51,33 @@ class Settings(BaseSettings):
     langsmith_project: str = "enterprise-agent"
     langsmith_tracing: bool = True
 
+    # 运行环境：development / production（由 ENVIRONMENT 或 APP_ENV 注入）。
+    # production 下安全策略取最严档（JWT 密钥强制配置等，见下方 validator）。
+    # AliasChoices 让两个常见环境变量名都能命中；populate_by_name 保证
+    # 测试里 Settings(app_env=...) 直传构造仍然可用。
+    app_env: str = Field(
+        default="development",
+        validation_alias=AliasChoices("ENVIRONMENT", "APP_ENV"),
+    )
+
     # JWT 认证（无状态 token，支持多副本部署）。
-    # 未配置 JWT_SECRET 时，config 会生成持久化随机密钥
+    # 未配置 JWT_SECRET 时，dev 环境会生成持久化随机密钥
     # （.jwt_secret，gitignored）兜底，
     # 杜绝使用仓库内写死的已知默认密钥（可被伪造）；
+    # production 环境未配置（或仍是占位/空值）则直接拒启动；
     # 多副本/生产务必在 .env 配置 JWT_SECRET 共享密钥。
     jwt_secret: str = "enterprise-agent-dev-secret-please-change-in-prod"
     access_token_expire_hours: int = 12
+
+    # 登录爆破防护（P0-6）：同一用户名连续失败 N 次后锁定 M 分钟。
+    login_max_failures: int = 5
+    login_lockout_minutes: int = 15
+
+    # 默认密码账号（admin/admin123 等 seed 账号）是否强制改密后才能访问
+    # 业务接口（登录本身与 /auth/me、/auth/change-password 始终放行）。
+    # 默认开启；前端改密页上线前，现网可通过环境变量临时置 false 保持连续，
+    # 但必须在安全收尾中明确登记该豁免。
+    require_default_password_change: bool = True
 
     # Chroma
     chroma_persist_dir: str = "./chroma_data"
@@ -311,16 +334,25 @@ class Settings(BaseSettings):
     def _resolve_jwt_secret(self) -> "Settings":
         """JWT 密钥解析（生产级安全兜底）。
 
-        - 若已通过环境变量 / .env 配置 JWT_SECRET（jwt_secret 不再是默认占位值），
-          直接使用。生产 / 多副本部署必须如此：所有副本共用同一密钥，
-          token 才能跨副本验签。
-        - 若未配置（仍是仓库默认占位值）：进入 dev/demo 模式，改用持久化在
-          .jwt_secret（gitignored）的随机密钥，避免暴露写死的已知默认密钥（可被伪造）。
+        - production（app_env=production）：JWT_SECRET 缺失、为空或仍是仓库
+          占位值一律拒启动（fail fast），杜绝用公开默认密钥签发可伪造 token。
+          生产 / 多副本部署必须显式配置共享密钥。
+        - development / 其他：未配置时进入 dev/demo 模式，改用持久化在
+          .jwt_secret（gitignored）的随机密钥，避免暴露写死的已知默认密钥。
           随机密钥首次启动生成并落盘，重启后仍稳定；
           多副本未设共享密钥时各副本密钥不同，token 仅本副本有效，
           因此多副本务必配置 JWT_SECRET 环境变量。
         """
-        if self.jwt_secret != _JWT_DEV_DEFAULT:
+        secret = (self.jwt_secret or "").strip()
+        is_production = (self.app_env or "").strip().lower() == "production"
+        if is_production and (not secret or secret == _JWT_DEV_DEFAULT):
+            raise RuntimeError(
+                "生产环境（ENVIRONMENT=production）必须显式配置非默认的 "
+                "JWT_SECRET（建议 openssl rand -hex 32 生成），"
+                "拒绝使用空值或仓库占位密钥启动。"
+            )
+        if secret and secret != _JWT_DEV_DEFAULT:
+            self.jwt_secret = secret
             return self  # 已显式配置，直接使用
         self.jwt_secret = self._load_or_create_dev_jwt_secret()
         return self

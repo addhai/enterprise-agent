@@ -3,10 +3,10 @@
 用 FakeSessionManager / FakeWS 覆盖转接分发、坐席分配、通知、坐席回复、
 Copilot 建议、会话迁移与各类查询接口，不触网。
 """
+
 import asyncio
 
 import pytest
-
 import src.websocket.dispatcher as disp
 from src.websocket.dispatcher import TransferDispatcher
 
@@ -77,7 +77,9 @@ async def test_handle_escalation_assigns_agent(dispatcher):
         "intent": "refund",
         "quality_score": 0.2,
     }
-    res = await dispatcher.handle_escalation("s1", state, [{"role": "user", "content": "退款"}])
+    res = await dispatcher.handle_escalation(
+        "s1", state, [{"role": "user", "content": "退款"}]
+    )
     assert res["needs_human"] is True
     assert res["agent_assigned"] == "agent1"
     assert dispatcher._fake.modes["s1"].value == "waiting_human"
@@ -106,6 +108,7 @@ async def test_handle_escalation_notify_failure_queues(dispatcher):
 async def test_agent_reply_direct(dispatcher):
     ws = FakeWS()
     st = FakeState(ws=ws)
+    st.assigned_agent = "agent1"  # 会话已分配给 agent1
     dispatcher._fake.sessions["s4"] = st
     ok = await dispatcher.agent_reply("agent1", "s4", "你好")
     assert ok is True
@@ -118,8 +121,50 @@ async def test_agent_reply_no_session(dispatcher):
     assert ok is False
 
 
+async def test_agent_reply_blocked_without_assignment(dispatcher):
+    """P0-2：会话存在但从未分配给任何坐席，回复必须被拒（防 session 枚举注入）"""
+    st = FakeState(ws=FakeWS())
+    dispatcher._fake.sessions["s4b"] = st
+    ok = await dispatcher.agent_reply("agent1", "s4b", "你好")
+    assert ok is False
+
+
+async def test_agent_reply_blocked_for_non_assigned_agent(dispatcher):
+    """P0-2：非归属坐席回复必须被拒"""
+    ws = FakeWS()
+    st = FakeState(ws=ws)
+    st.assigned_agent = "agent1"
+    dispatcher._fake.sessions["s4c"] = st
+    ok = await dispatcher.agent_reply("agent2", "s4c", "冒发消息")
+    assert ok is False
+    # 客户侧不得收到任何消息
+    assert not ws.sent
+
+
+async def test_agent_reply_allowed_by_transfer_record(dispatcher):
+    """P0-2：归属以转接记录为准，record.assigned_agent 命中即放行"""
+    from src.websocket.dispatcher import TransferRecord
+
+    ws = FakeWS()
+    st = FakeState(ws=ws)  # state 上不设 assigned_agent
+    dispatcher._fake.sessions["s4d"] = st
+    dispatcher._session_transfers["s4d"] = "t-assign"
+    dispatcher._records["t-assign"] = TransferRecord(
+        transfer_id="t-assign",
+        session_id="s4d",
+        user_id="u1",
+        context={},
+        urgency="normal",
+        assigned_agent="agent9",
+    )
+    ok = await dispatcher.agent_reply("agent9", "s4d", "转接回复")
+    assert ok is True
+    assert ws.sent and ws.sent[0]["text"] == "转接回复"
+
+
 async def test_agent_reply_no_ws_queues(dispatcher):
     st = FakeState(ws=None)
+    st.assigned_agent = "a"
     dispatcher._fake.sessions["s5"] = st
     ok = await dispatcher.agent_reply("a", "s5", "hi")
     assert ok is False
@@ -130,6 +175,7 @@ async def test_agent_reply_no_ws_queues(dispatcher):
 async def test_agent_reply_ws_send_failure(dispatcher):
     ws = FakeWS(fail=True)
     st = FakeState(ws=ws)
+    st.assigned_agent = "a"
     dispatcher._fake.sessions["s6"] = st
     ok = await dispatcher.agent_reply("a", "s6", "hi")
     assert ok is False
@@ -168,8 +214,12 @@ async def test_push_copilot_suggestions_happy(dispatcher):
     from src.websocket.dispatcher import TransferRecord
 
     rec = TransferRecord(
-        transfer_id="t1", session_id="s7", user_id="u1",
-        context={}, urgency="normal", assigned_agent="agent1",
+        transfer_id="t1",
+        session_id="s7",
+        user_id="u1",
+        context={},
+        urgency="normal",
+        assigned_agent="agent1",
     )
     dispatcher._records["t1"] = rec
     await dispatcher.push_copilot_suggestions("s7", "报错", [])
@@ -186,8 +236,12 @@ async def test_push_copilot_no_assigned_agent(dispatcher):
     from src.websocket.dispatcher import TransferRecord
 
     rec = TransferRecord(
-        transfer_id="t2", session_id="s8", user_id="u1",
-        context={}, urgency="normal", assigned_agent=None,
+        transfer_id="t2",
+        session_id="s8",
+        user_id="u1",
+        context={},
+        urgency="normal",
+        assigned_agent=None,
     )
     dispatcher._records["t2"] = rec
     await dispatcher.push_copilot_suggestions("s8", "hi", [])
@@ -223,7 +277,11 @@ def test_get_transfer_record_and_session(dispatcher):
     from src.websocket.dispatcher import TransferRecord
 
     rec = TransferRecord(
-        transfer_id="t3", session_id="s11", user_id="u1", context={}, urgency="normal",
+        transfer_id="t3",
+        session_id="s11",
+        user_id="u1",
+        context={},
+        urgency="normal",
     )
     dispatcher._records["t3"] = rec
     dispatcher._session_transfers["s11"] = "t3"
@@ -236,8 +294,13 @@ def test_get_stats(dispatcher):
     from src.websocket.dispatcher import TransferRecord
 
     dispatcher._records["t4"] = TransferRecord(
-        transfer_id="t4", session_id="s12", user_id="u1", context={},
-        urgency="normal", assigned_agent="a", status="assigned",
+        transfer_id="t4",
+        session_id="s12",
+        user_id="u1",
+        context={},
+        urgency="normal",
+        assigned_agent="a",
+        status="assigned",
     )
     dispatcher._queue.append(dispatcher._records["t4"])
     stats = dispatcher.get_stats()

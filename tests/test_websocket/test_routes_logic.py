@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage
@@ -416,14 +417,16 @@ def test_chat_resume_no_session_id(monkeypatch):
 def test_chat_resume_new_session_from_db(monkeypatch):
     _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
     _patch_authed(monkeypatch)
-    # 模拟从 DB 恢复历史
+    # 模拟从 DB 恢复历史（P0-3 起 message_list 带租户参数）
     monkeypatch.setattr(
         "src.db.repositories.message_list",
-        lambda sid, n: [
+        lambda sid, n, tenant_id=None: [
             {"role": "user", "content": "之前问过什么"},
             {"role": "assistant", "content": "之前的回答"},
         ],
     )
+    # DB 无会话记录 → 全新 id 允许重建并恢复
+    monkeypatch.setattr("src.db.repositories.conversation_get", lambda sid: None)
     client = _client()
     with client.websocket_connect("/ws/chat") as ws:
         ws.receive_json()  # session_ready
@@ -433,6 +436,113 @@ def test_chat_resume_new_session_from_db(monkeypatch):
         assert resp["source"] == "database"
         assert resp["session_id"] == "old-sess-xyz"
         assert resp["restored_count"] == 2
+
+
+def test_chat_resume_memory_other_user_forbidden(monkeypatch):
+    """P0-3：内存中属于他人的会话不得续接（H3 IDOR）"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    _patch_authed(monkeypatch)  # 当前身份 u-test / t-test
+    mgr = get_session_manager()
+    victim_sid = "idor-memory-victim-001"
+    mgr.create_session(
+        session_id=victim_sid,
+        user_id="user-victim",
+        tenant_id="t-test",
+        mode=SessionMode.AI_CHAT,
+    )
+    try:
+        client = _client()
+        with client.websocket_connect("/ws/chat") as ws:
+            ws.receive_json()  # session_ready
+            ws.send_text(f'{{"type": "resume_session", "session_id": "{victim_sid}"}}')
+            frame = ws.receive_json()
+            assert frame["type"] == "session_forbidden"
+            assert frame["error_code"] == "SESSION_FORBIDDEN"
+            # 受害者会话的 ws 引用不得被攻击者连接顶替
+            assert mgr.get_session(victim_sid)._websocket_ref is None
+    finally:
+        mgr.remove_session(victim_sid)
+
+
+def test_chat_resume_db_other_user_forbidden(monkeypatch):
+    """P0-3：DB 中属于他人的会话历史不得恢复，且不得调用 message_list"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    _patch_authed(monkeypatch)  # u-test / t-test
+    monkeypatch.setattr(
+        "src.db.repositories.conversation_get",
+        lambda sid: {
+            "id": sid,
+            "session_id": sid,
+            "user_id": "user-victim",
+            "tenant_id": "t-test",
+            "status": "active",
+        },
+    )
+    called = {"n": 0}
+
+    def _message_list(sid, n, tenant_id=None):
+        called["n"] += 1
+        return [{"role": "user", "content": "受害者密语"}]
+
+    monkeypatch.setattr("src.db.repositories.message_list", _message_list)
+    client = _client()
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.receive_json()
+        ws.send_text('{"type": "resume_session", "session_id": "idor-db-victim-001"}')
+        frame = ws.receive_json()
+        assert frame["type"] == "session_forbidden"
+        assert called["n"] == 0  # 历史拉取必须被挡在校验之前
+
+
+def test_chat_resume_db_other_tenant_forbidden(monkeypatch):
+    """P0-3：同 user_id 跨租户同样拒绝（租户隔离维度）"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    _patch_authed(monkeypatch)  # u-test / t-test
+    monkeypatch.setattr(
+        "src.db.repositories.conversation_get",
+        lambda sid: {
+            "id": sid,
+            "session_id": sid,
+            "user_id": "u-test",
+            "tenant_id": "tenant-other",
+            "status": "active",
+        },
+    )
+    client = _client()
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.receive_json()
+        ws.send_text('{"type": "resume_session", "session_id": "idor-tenant-001"}')
+        frame = ws.receive_json()
+        assert frame["type"] == "session_forbidden"
+
+
+def test_chat_resume_own_db_session_restored(monkeypatch):
+    """P0-3：归属一致时 DB 历史正常恢复（正向不回归）"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    _patch_authed(monkeypatch)  # u-test / t-test
+    monkeypatch.setattr(
+        "src.db.repositories.conversation_get",
+        lambda sid: {
+            "id": sid,
+            "session_id": sid,
+            "user_id": "u-test",
+            "tenant_id": "t-test",
+            "status": "active",
+        },
+    )
+    monkeypatch.setattr(
+        "src.db.repositories.message_list",
+        lambda sid, n, tenant_id=None: (
+            [{"role": "user", "content": "我的历史"}] if tenant_id == "t-test" else []
+        ),
+    )
+    client = _client()
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.receive_json()
+        ws.send_text('{"type": "resume_session", "session_id": "own-db-session-001"}')
+        frame = ws.receive_json()
+        assert frame["type"] == "session_resumed"
+        assert frame["restored_count"] == 1
 
 
 def test_chat_human_escalation(monkeypatch):
@@ -461,9 +571,27 @@ def test_chat_human_escalation(monkeypatch):
 # ===========================================================================
 
 
+def _patch_agent_auth(monkeypatch, agent_id="agent-007"):
+    """让坐席 WS 以指定身份通过强鉴权（P0-2）"""
+    monkeypatch.setattr(
+        "src.websocket.routes._authenticate_agent_ws",
+        lambda ws, aid: (
+            {
+                "user_id": agent_id,
+                "role": "agent",
+                "tenant_id": "default",
+                "status": "active",
+            }
+            if aid == agent_id
+            else None
+        ),
+    )
+
+
 def test_agent_connect_heartbeat_reply_logout(monkeypatch):
     disp = FakeDispatcher()
     _patch_route_globals(monkeypatch, fake_dispatcher=disp)
+    _patch_agent_auth(monkeypatch)
     client = _client()
     with client.websocket_connect("/ws/agent/agent-007") as ws:
         # 心跳
@@ -481,6 +609,136 @@ def test_agent_connect_heartbeat_reply_logout(monkeypatch):
         assert disp.replies == [("agent-007", "s1", "您好，马上为您处理")]
         # 登出
         ws.send_text('{"type": "agent_logout"}')
+
+
+def _expect_ws_rejected(client, url: str):
+    """握手应被服务端以 1008 policy violation 拒绝，且连接无法建立。"""
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        client.websocket_connect(url).__enter__()
+    assert exc_info.value.code == 1008
+
+
+def test_agent_ws_rejected_without_token(monkeypatch):
+    """无 token 连接坐席台必须在握手阶段被 1008 拒绝（H2 核心）"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    client = _client()
+    _expect_ws_rejected(client, "/ws/agent/agent-007")
+
+
+def test_agent_ws_rejected_with_bad_token(monkeypatch):
+    """伪造 token 必须被拒"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    client = _client()
+    _expect_ws_rejected(client, "/ws/agent/agent-007?token=forged.token.value")
+
+
+def test_agent_ws_rejected_for_viewer_role(monkeypatch):
+    """viewer 只读角色不得接入坐席台"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    monkeypatch.setattr(
+        "src.websocket.routes._ws_decode_token",
+        lambda token, secret: {"sub": "u-viewer"},
+    )
+    monkeypatch.setattr(
+        "src.db.repositories.user_get_by_id",
+        lambda uid: {
+            "user_id": "u-viewer",
+            "tenant_id": "default",
+            "role": "viewer",
+            "status": "active",
+        },
+    )
+    client = _client()
+    _expect_ws_rejected(client, "/ws/agent/u-viewer?token=valid-looking")
+
+
+def test_agent_ws_rejected_for_identity_mismatch(monkeypatch):
+    """token 身份与路径 agent_id 不一致（抢坐席 id）必须被拒"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    monkeypatch.setattr(
+        "src.websocket.routes._ws_decode_token",
+        lambda token, secret: {"sub": "agent-A"},
+    )
+    monkeypatch.setattr(
+        "src.db.repositories.user_get_by_id",
+        lambda uid: {
+            "user_id": "agent-A",
+            "tenant_id": "default",
+            "role": "agent",
+            "status": "active",
+        },
+    )
+    client = _client()
+    # A 持自己的 token 想注册成 agent-B
+    _expect_ws_rejected(client, "/ws/agent/agent-B?token=valid-looking")
+
+
+def test_agent_ws_rejected_for_suspended_user(monkeypatch):
+    """停用账号即便 token 未过期也必须被拒"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    monkeypatch.setattr(
+        "src.websocket.routes._ws_decode_token",
+        lambda token, secret: {"sub": "agent-s"},
+    )
+    monkeypatch.setattr(
+        "src.db.repositories.user_get_by_id",
+        lambda uid: {
+            "user_id": "agent-s",
+            "tenant_id": "default",
+            "role": "agent",
+            "status": "suspended",
+        },
+    )
+    client = _client()
+    _expect_ws_rejected(client, "/ws/agent/agent-s?token=valid-looking")
+
+
+def _patch_seed_agent_token(monkeypatch):
+    """模拟 seed agent 账号（密码哈希能验通出厂密码 agent123）的合法 token。"""
+    from src.api.auth import hash_password
+
+    monkeypatch.setattr(
+        "src.websocket.routes._ws_decode_token",
+        lambda token, secret: {"sub": "agent-default"},
+    )
+    monkeypatch.setattr(
+        "src.db.repositories.user_get_by_id",
+        lambda uid: {
+            "user_id": "agent-default",
+            "username": "agent",
+            "tenant_id": "default",
+            "role": "agent",
+            "status": "active",
+            "password_hash": hash_password("agent123"),
+        },
+    )
+
+
+def test_agent_ws_rejected_for_default_password(monkeypatch):
+    """出厂默认密码未改（开关开启）时坐席 WS 必须 1008 拒绝（P0-6）"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    monkeypatch.setattr(
+        "src.websocket.routes._ws_settings.require_default_password_change", True
+    )
+    _patch_seed_agent_token(monkeypatch)
+    client = _client()
+    _expect_ws_rejected(client, "/ws/agent/agent-default?token=valid-looking")
+
+
+def test_agent_ws_default_password_allowed_when_switch_off(monkeypatch):
+    """现网灰度豁免（开关关闭）时默认密码账号仍可接入并收到心跳响应"""
+    _patch_route_globals(monkeypatch, fake_dispatcher=FakeDispatcher())
+    monkeypatch.setattr(
+        "src.websocket.routes._ws_settings.require_default_password_change", False
+    )
+    _patch_seed_agent_token(monkeypatch)
+    client = _client()
+    with client.websocket_connect("/ws/agent/agent-default?token=valid-looking") as ws:
+        ws.send_text('{"type": "heartbeat"}')
+        ack = ws.receive_json()
+        assert ack["type"] == "heartbeat_ack"
 
 
 # ===========================================================================

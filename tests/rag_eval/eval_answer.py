@@ -75,14 +75,20 @@ def hit_test_inprocess(query: str, top_k: int = 5) -> list[dict]:
     return resp.json().get("hits", [])
 
 
-def chat_http(base_url: str, message: str) -> dict:
-    """通过 HTTP 调用 /chat"""
+def chat_http(base_url: str, message: str, token: str | None = None) -> dict:
+    """通过 HTTP 调用 /chat
+
+    P0-1 起 /chat 强制 JWT 认证，token 由调用方先登录获取后传入。
+    """
     url = f"{base_url}/api/v1/chat"
     payload = json.dumps({"message": message}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:

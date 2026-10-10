@@ -87,10 +87,12 @@ def test_resume_session_rebuilds_from_db_when_memory_misses():
     sid = f"WS-RES-DB-{uuid.uuid4().hex[:8]}"
     _cleanup_session(sid)
 
-    # 往 DB 塞历史（不通过 WebSocket，直接走仓储层）
-    conversation_ensure(sid, "default", "u1", channel="web")
-    message_save(sid, "default", "u1", "user", "DB 历史问题")
-    message_save(sid, "default", "u1", "assistant", "DB 历史回答")
+    # 往 DB 塞历史（不通过 WebSocket，直接走仓储层）。
+    # 租户/用户必须与 autouse fixture 的认证身份 (u1, t1) 一致，
+    # P0-3 起 resume 按服务端 token 身份做归属校验，客户端声明不再被采信。
+    conversation_ensure(sid, "t1", "u1", channel="web")
+    message_save(sid, "t1", "u1", "user", "DB 历史问题")
+    message_save(sid, "t1", "u1", "assistant", "DB 历史回答")
 
     try:
         with client.websocket_connect("/ws/chat") as ws:
@@ -118,6 +120,44 @@ def test_resume_session_rebuilds_from_db_when_memory_misses():
             assert s is not None
             assert len(s.conversation_history) == 2
             assert s.conversation_history[0]["content"] == "DB 历史问题"
+    finally:
+        _cleanup_session(sid)
+
+
+def test_resume_session_from_db_rejected_for_other_user(monkeypatch):
+    """P0-3 IDOR：DB 会话属于 u1 时，u2 的连接不得拖走其历史。
+
+    即使 resume 帧里伪造 user_id=u1，服务端以连接身份 (u2, t1) 判定，
+    必须回 session_forbidden，且不得在内存中重建该会话。
+    """
+    client = _client()
+    sid = f"WS-RES-IDOR-{uuid.uuid4().hex[:8]}"
+    _cleanup_session(sid)
+    conversation_ensure(sid, "t1", "u1", channel="web")
+    message_save(sid, "t1", "u1", "user", "u1 的私密问题")
+
+    # 本连接身份切换为 u2（autouse 默认是 u1）
+    monkeypatch.setattr(
+        "src.websocket.routes._resolve_ws_identity",
+        lambda ws, s: ("u2", "t1", "free", "agent", True),
+    )
+    try:
+        with client.websocket_connect("/ws/chat") as ws:
+            ws.receive_json()  # session_ready
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "resume_session",
+                        "session_id": sid,
+                        "user_id": "u1",  # 帧内伪造，服务端不得采信
+                    }
+                )
+            )
+            resp = ws.receive_json()
+            assert resp["type"] == "session_forbidden"
+            assert resp["error_code"] == "SESSION_FORBIDDEN"
+        # 连接关闭后也不应留下重建出来的会话
+        assert get_session_manager().get_session(sid) is None
     finally:
         _cleanup_session(sid)
 

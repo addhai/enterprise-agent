@@ -13,11 +13,13 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import chromadb
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
+from src.api.auth import get_current_user
 from src.api.dependencies import get_workflow
+from src.api.rbac import role_to_access_levels
 from src.config import settings
 from src.graph.state import AgentState
 
@@ -192,9 +194,24 @@ async def health_detail():
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """同步对话接口"""
+async def chat(
+    request: ChatRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """同步对话接口（需要登录）
+
+    安全约束（2026-10 P0-1 收口 H1 跨租户越权）：
+        user_id / tenant_id / user_access_levels / user_roles 一律以服务端
+        验签后的 token 用户为唯一来源。请求体中的同名字段仅为向后兼容保留，
+        服务端不读取、不采信，防止匿名调用自报租户与四级密级检索他租户知识库。
+    """
     session_id = request.session_id or str(uuid.uuid4())
+
+    # 身份三元组全部来自服务端，客户端无法通过请求体提权或串租户。
+    server_user_id = current_user["user_id"]
+    server_tenant_id = current_user.get("tenant_id") or "default"
+    server_role = current_user.get("role", "viewer")
+    server_access_levels = role_to_access_levels(server_role)
 
     try:
         app = get_workflow()
@@ -206,12 +223,11 @@ async def chat(request: ChatRequest):
             needs_human=False,
             turn_count=0,
             final_response="",
-            user_id=request.user_id or "anonymous",
+            user_id=server_user_id,
             session_id=session_id,
-            tenant_id=request.tenant_id or "",
-            user_access_levels=request.user_access_levels
-            or ["public", "internal", "confidential", "restricted"],
-            user_roles=request.user_roles or [],
+            tenant_id=server_tenant_id,
+            user_access_levels=server_access_levels,
+            user_roles=[server_role],
             user_plan=request.user_plan or "free",
             faq_match=None,
             # 每次请求重新读取，使 max_reasoning_turns 的热更新立即生效。
