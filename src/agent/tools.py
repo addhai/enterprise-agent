@@ -886,6 +886,14 @@ def create_tools(
             return "[权限不足] 您没有权限调用此工具。如需帮助请联系管理员。"
 
         if retriever is None:
+            # 装配失败属服务端缺陷，必须留 ERROR 痕迹便于告警与排障；
+            # 用户侧仍返回稳定话术，不暴露内部异常。
+            logger.error(
+                "search_knowledge_base 调用时 retriever 为空，"
+                "检索能力未正确装配（tenant=%s user=%s）",
+                tenant_id,
+                user_id,
+            )
             return "知识库当前不可用。请转人工客服。"
 
         try:

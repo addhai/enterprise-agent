@@ -1345,10 +1345,48 @@ def rag_node(
     effective_access = state.get("user_access_levels", None)
 
     def _run_preretrieval_search() -> list:
-        """预检索/探测共用同一次检索口径，参数与 always 预检索完全一致。"""
+        """预检索/探测共用同一次检索口径，参数与 always 预检索完全一致。
+
+        查询改写在此统一生效：always 预检索与 smart 探测是生产最热的两条
+        检索路径，2026-11 前改写只接在 ReAct 工具里，高置信直答旁路在改写
+        之前就返回，同义词表投资在主路径完全收不到回报。纯规则计算零 LLM
+        开销，异常时用原始查询兜底，不阻断检索。
+        """
         top_k = min(50, max(1, int(getattr(settings, "retrieval_top_k", 5) or 5)))
+        search_query = content
+        if getattr(settings, "rewrite_enabled", True):
+            try:
+                from src.rag.query_rewriter import rewrite_query
+
+                search_query = rewrite_query(content) or content
+                if search_query != content:
+                    logger.debug("预检索查询改写: %r → %r", content, search_query)
+            except Exception as e:  # noqa: BLE001 - 改写失败必须回落原查询
+                logger.debug("预检索改写失败，使用原始查询：%s", e)
+                search_query = content
+
+        # 语义改写（HyDE/多查询）默认关闭，开启后走多路召回入口；
+        # 产物为空或生成异常时 build_semantic_expansion 内部已降级
+        if getattr(settings, "semantic_rewrite_enabled", False):
+            try:
+                from src.rag.semantic_rewriter import build_semantic_expansion
+
+                expansion = build_semantic_expansion(content)
+                if not expansion.is_empty:
+                    return retriever.search_with_expansion(
+                        content,
+                        extra_queries=expansion.extra_queries,
+                        hyde_text=expansion.hyde_text,
+                        top_k=top_k,
+                        user_id=effective_user,
+                        tenant_id=effective_tenant,
+                        user_access_levels=effective_access,
+                    )
+            except Exception as e:  # noqa: BLE001 - 语义链路故障静默回退普通检索
+                logger.warning("语义扩展检索失败，回退普通检索：%s", e)
+
         return retriever.search(
-            content,
+            search_query,
             top_k=top_k,
             user_id=effective_user,
             tenant_id=effective_tenant,
@@ -1729,6 +1767,9 @@ def rag_node(
                         doc.metadata["score"] = (
                             fake_score  # 双存一份兼容读 score 的代码
                         )
+                        # P2-14：显式标识伪分来源，与真实向量相似度区分，
+                        # 供 _build_citations 与前端识别，避免排名占位被误读成置信度
+                        doc.metadata["score_source"] = "tail_backfill"
                     except Exception:
                         logger.debug("fallback doc metadata 盖戳失败", exc_info=True)
                 retrieved_docs = fallback_docs

@@ -1,4 +1,5 @@
-import pytest
+import logging
+
 from src.agent.tools import create_tools
 
 
@@ -40,8 +41,9 @@ def test_all_tools_have_descriptions():
 
     for tool in tools:
         assert tool.description, f"Tool {tool.name} has no description"
-        assert len(tool.description) > 20, \
+        assert len(tool.description) > 20, (
             f"Tool {tool.name} description too short: {tool.description}"
+        )
 
 
 def test_create_tools_default_excludes_ticket_and_resource():
@@ -68,14 +70,40 @@ def test_create_tools_with_flags_includes_ticket_and_resource():
     name_set = set(names)
 
     # 不重复
-    assert len(names) == len(name_set), f"存在重复工具: {[n for n in names if names.count(n) > 1]}"
+    assert len(names) == len(name_set), (
+        f"存在重复工具: {[n for n in names if names.count(n) > 1]}"
+    )
 
     # 工单 6 件齐全
-    for t in ["ticket_create", "ticket_query", "ticket_list",
-              "ticket_update", "ticket_close", "ticket_add_comment"]:
+    for t in [
+        "ticket_create",
+        "ticket_query",
+        "ticket_list",
+        "ticket_update",
+        "ticket_close",
+        "ticket_add_comment",
+    ]:
         assert t in name_set, f"缺少工单工具: {t}"
 
     # 资源 3 件齐全
     for t in ["query_resources", "describe_resource", "get_resource_monitor"]:
         assert t in name_set, f"缺少资源工具: {t}"
 
+
+def test_none_retriever_emits_error_and_stable_reply(caplog):
+    """retriever 装配失败时留 ERROR 痕迹，用户侧仍得到稳定话术（P1-10）"""
+    tools = create_tools(retriever=None, user_id="test_user", tenant_id="tenant_a")
+    kb_tool = [t for t in tools if t.name == "search_knowledge_base"][0]
+
+    with caplog.at_level(logging.ERROR, logger="src.agent.tools"):
+        reply = kb_tool.invoke({"query": "F02 故障如何处理"})
+
+    assert "知识库当前不可用" in reply
+    error_records = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.ERROR and "retriever 为空" in r.message
+    ]
+    assert len(error_records) == 1
+    # 日志带上租户上下文，便于按租户聚合告警
+    assert "tenant_a" in error_records[0].message

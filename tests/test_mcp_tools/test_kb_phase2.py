@@ -8,13 +8,16 @@
       做确定性断言；不再依赖 BM25 对混合中英文关键词的召回率（不稳定）。
     - 多源摄取测试直接调用 source_ingest 的纯函数；URL 联网抓取用本地 HTML 替身 mock。
 """
+
+import contextlib
+
 import pytest
 from langchain_core.documents import Document
-
 
 # ---------------------------------------------------------------------------
 # 检索器：增量入库 + kb_id 隔离
 # ---------------------------------------------------------------------------
+
 
 class _FakeEmbedder:
     """零依赖的假向量化器：固定维度、不触网、不需要任何 API Key。"""
@@ -57,20 +60,27 @@ def isolated_retriever(monkeypatch):
         retriever.sentence_store.add_documents = lambda *a, **k: []
         retriever.sentence_store.search_with_scores = lambda *a, **k: []
     yield retriever
-    try:
+    with contextlib.suppress(Exception):
         retriever.delete_collection()
-    except Exception:
-        pass
 
 
 def test_add_documents_is_incremental_and_injects_tenant(isolated_retriever):
     """add_documents 不应清空既有索引，且应为缺失 tenant_id 的 chunk 补上租户。"""
     r = isolated_retriever
-    docs_a = [Document("ALPHATOKEN_A 知识库A的独有内容", metadata={"kb_id": "KBA", "source": "a.md"})]
+    docs_a = [
+        Document(
+            "ALPHATOKEN_A 知识库A的独有内容",
+            metadata={"kb_id": "KBA", "source": "a.md"},
+        )
+    ]
     r.add_documents(docs_a, tenant_id="tenant_X")
     assert docs_a[0].metadata["tenant_id"] == "tenant_X"
 
-    docs_b = [Document("BETATOKEN_B 知识库B的独有内容", metadata={"kb_id": "KBB", "source": "b.md"})]
+    docs_b = [
+        Document(
+            "BETATOKEN_B 知识库B的独有内容", metadata={"kb_id": "KBB", "source": "b.md"}
+        )
+    ]
     r.add_documents(docs_b, tenant_id="")
 
     # 第二次增量添加后，累积文档数应为 2（证明未清空既有索引）
@@ -110,8 +120,12 @@ def test_apply_filter_by_kb_id_is_deterministic(isolated_retriever):
 def test_kb_id_filter_returns_only_matching_kb(isolated_retriever):
     """按 kb_id 过滤时，返回结果中只含该知识库的 chunk。"""
     r = isolated_retriever
-    r.add_documents([Document("ALPHATOKEN_A 知识库A内容", metadata={"kb_id": "KBA"})], tenant_id="")
-    r.add_documents([Document("BETATOKEN_B 知识库B内容", metadata={"kb_id": "KBB"})], tenant_id="")
+    r.add_documents(
+        [Document("ALPHATOKEN_A 知识库A内容", metadata={"kb_id": "KBA"})], tenant_id=""
+    )
+    r.add_documents(
+        [Document("BETATOKEN_B 知识库B内容", metadata={"kb_id": "KBB"})], tenant_id=""
+    )
 
     hits = r.search_with_scores("ALPHATOKEN_A", top_k=5, filter_by={"kb_id": "KBA"})
     # 即便 BM25 召回了无关文档，过滤后仍只保留 KBA
@@ -123,8 +137,12 @@ def test_kb_id_filter_returns_only_matching_kb(isolated_retriever):
 def test_kb_id_filter_no_cross_leak(isolated_retriever):
     """知识库隔离：过滤 KBA 时，返回结果中不得出现 KBB 的内容。"""
     r = isolated_retriever
-    r.add_documents([Document("ALPHATOKEN_A 知识库A内容", metadata={"kb_id": "KBA"})], tenant_id="")
-    r.add_documents([Document("BETATOKEN_B 知识库B内容", metadata={"kb_id": "KBB"})], tenant_id="")
+    r.add_documents(
+        [Document("ALPHATOKEN_A 知识库A内容", metadata={"kb_id": "KBA"})], tenant_id=""
+    )
+    r.add_documents(
+        [Document("BETATOKEN_B 知识库B内容", metadata={"kb_id": "KBB"})], tenant_id=""
+    )
 
     # 用 B 的关键词 + 限定只看下一个 KBA → 结果里绝不能出现 KBB
     hits = r.search_with_scores("BETATOKEN_B", top_k=5, filter_by={"kb_id": "KBA"})
@@ -135,6 +153,7 @@ def test_kb_id_filter_no_cross_leak(isolated_retriever):
 # ---------------------------------------------------------------------------
 # 多知识源摄取：纯文本 / 网页 URL
 # ---------------------------------------------------------------------------
+
 
 def test_text_to_documents_ingestion():
     """纯文本来源应被切分为带元数据的 Document 列表。"""
@@ -154,7 +173,11 @@ def test_text_to_documents_ingestion():
 
 def test_url_to_documents_ingestion_offline(monkeypatch):
     """网页来源摄取：离线用本地 HTML 替身替换联网抓取，验证整条管线。"""
+    from src.config import settings
     from src.rag import source_ingest
+
+    # P2-15：内网默认关闭网页摄取，本测试验证管线本身，需显式打开开关
+    monkeypatch.setattr(settings, "web_ingest_enabled", True)
 
     html = (
         "<html><body>"
@@ -164,7 +187,9 @@ def test_url_to_documents_ingestion_offline(monkeypatch):
     )
     monkeypatch.setattr(source_ingest, "fetch_url_text", lambda url, timeout=15.0: html)
 
-    docs = source_ingest.url_to_documents("https://example.com/doc", "示例网页", tenant_id="t1")
+    docs = source_ingest.url_to_documents(
+        "https://example.com/doc", "示例网页", tenant_id="t1"
+    )
     assert docs, "网页内容应被切分为 chunk"
     assert any("ALPHATOKEN_URL" in d.page_content for d in docs)
     assert all(d.metadata.get("category") == "web" for d in docs)
@@ -175,20 +200,25 @@ def test_url_to_documents_ingestion_offline(monkeypatch):
 # 入库落库：kb_id 注入到每个 chunk 元数据（隔离的根因保障）
 # ---------------------------------------------------------------------------
 
+
 def test_ingest_internal_injects_kb_id_into_chunks(monkeypatch):
     """_ingest_document_internal 必须为每个 chunk 注入 kb_id / tenant_id / doc_id，
     并调用 retriever.add_documents（修复前缺失该方法导致索引静默失败）。"""
-    from src.api.knowledge import KBSet, _ingest_document_internal
     import src.api.dependencies as dep
+    from src.api.knowledge import KBSet, _ingest_document_internal
 
     class FakeRetriever:
         def __init__(self):
             self.added = []
             self.calls = 0
+            self.sentence_added = []
 
         def add_documents(self, documents, tenant_id=""):
             self.calls += 1
             self.added.extend(documents)
+
+        def index_sentence_chunks(self, documents, tenant_id=""):
+            self.sentence_added.extend(documents)
 
     fake = FakeRetriever()
     monkeypatch.setattr(dep, "get_retriever", lambda: fake)

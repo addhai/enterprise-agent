@@ -396,11 +396,73 @@ class HybridRetriever:
         except Exception as e:
             logger.warning("BM25 rebuild failed (non-fatal): %s", e)
 
-    def index_sentence_chunks(self, sentence_chunks: list[Document]) -> None:
-        """索引句子级 chunk（由 HybridChunker.split_sentences() 产出）"""
+    def index_sentence_chunks(
+        self, sentence_chunks: list[Document], tenant_id: str = ""
+    ) -> None:
+        """索引句子级 chunk（由 HybridChunker.split_sentences() 产出）
+
+        与 add_documents 同口径补 tenant_id，保证句子集合不丢租户隔离元数据。
+        sentence_store 未启用（开关关闭或无 collection_name）时静默跳过，
+        调用方无需感知句子通道是否在线。
+        """
+        if not self.sentence_store:
+            return
+        if not sentence_chunks:
+            return
+        effective_tenant = tenant_id or "default"
+        for doc in sentence_chunks:
+            if not doc.metadata.get("tenant_id"):
+                doc.metadata["tenant_id"] = effective_tenant
+        self.sentence_store.add_documents(sentence_chunks)
+        logger.info("Indexed %d sentence chunks", len(sentence_chunks))
+
+    def delete_document_vectors(
+        self, doc_id: str, tenant_id: str = ""
+    ) -> dict[str, int]:
+        """按 doc_id 级联删除文档在两套集合中的全部 chunk，并重建 BM25。
+
+        管理后台删除/刷新文档的唯一向量清理入口，保证元数据与向量库同生共死：
+            1. 标准集合按 metadata.doc_id 删除
+            2. 句子集合按 metadata.doc_id 删除（通道在线时）
+            3. 从持久化集合全量重建内存 BM25，剔除已删块
+
+        失败策略：向量层异常直接向上抛，由调用方决定是否保留业务元数据。
+        静默吞异常会留下无法追踪的幽灵向量（元数据已删、块仍可被检索），
+        比 API 报错危险得多。remote 后端无对应删除协议，显式拒绝。
+
+        Returns:
+            ``{"standard_deleted": n, "sentence_deleted": m}``
+        """
+        if not doc_id:
+            raise ValueError("delete_document_vectors 需要 doc_id")
+        if self.backend == "remote":
+            raise NotImplementedError("remote 后端暂不支持文档级向量删除")
+
+        where = {"doc_id": doc_id}
+        standard_deleted = self.vector_store.delete_by_metadata(where)
+        sentence_deleted = 0
         if self.sentence_store:
-            self.sentence_store.add_documents(sentence_chunks)
-            logger.info("Indexed %d sentence chunks", len(sentence_chunks))
+            sentence_deleted = self.sentence_store.delete_by_metadata(where)
+
+        # BM25 纯内存且只持有标准块，从持久化集合重建即可与向量库对齐。
+        # 重建失败不回滚已成功的集合删除（集合已是真相），告警后下次
+        # warmup 或重启会自愈，期间 BM25 可能多召回已删块，权限过滤仍兜底。
+        try:
+            self.warmup_bm25_from_store()
+        except Exception as e:
+            logger.warning("BM25 rebuild after document delete failed: %s", e)
+
+        logger.info(
+            "Document vectors deleted: doc_id=%s tenant=%s standard=%d sentence=%d",
+            doc_id,
+            tenant_id or "default",
+            standard_deleted,
+            sentence_deleted,
+        )
+        return {
+            "standard_deleted": standard_deleted,
+            "sentence_deleted": sentence_deleted,
+        }
 
     def search(
         self,
@@ -440,6 +502,78 @@ class HybridRetriever:
             user_access_levels=user_access_levels,
         )
         return [doc for doc, _ in results]
+
+    def search_with_expansion(
+        self,
+        query: str,
+        extra_queries: list[str] | None = None,
+        hyde_text: str = "",
+        top_k: int = 5,
+        expand_context: bool = True,
+        filter_by: dict | None = None,
+        user_id: str = "",
+        tenant_id: str = "",
+        user_access_levels: list[str] | None = None,
+    ) -> list[Document]:
+        """语义改写启用时的多路召回入口（HyDE / 多查询）。
+
+        执行顺序：
+            1. 原查询走完整 search_with_scores 基线（向量+BM25+句子+RRF+rerank+权限）
+            2. 扩展问法与 HyDE 段落只走向量通道补召回，按 page_content 去重
+            3. 补入候选与基线合并后，用**原查询**统一 rerank，保证重排接地
+               对象是用户真实问题而非假设段落
+            4. 权限过滤同口径再跑一遍（对基线幂等），截断 top_k
+
+        扩展产物为空时等价于普通 search，零额外开销。
+        """
+        base = self.search_with_scores(
+            query,
+            top_k=top_k,
+            expand_context=expand_context,
+            filter_by=filter_by,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            user_access_levels=user_access_levels,
+        )
+        expansion_inputs = [q for q in (extra_queries or []) if q and q != query]
+        if hyde_text and hyde_text != query:
+            expansion_inputs.append(hyde_text)
+        if not expansion_inputs:
+            return [doc for doc, _ in base]
+
+        seen = {doc.page_content for doc, _ in base}
+        extras: list[tuple[Document, float]] = []
+        for eq in expansion_inputs:
+            try:
+                hits = self._vector_search(eq, top_k * 2, filter_by)
+            except Exception as e:  # noqa: BLE001 - 单路扩展失败不拖垮整体
+                logger.warning("Expansion vector search failed for %r: %s", eq[:30], e)
+                continue
+            for doc, score in hits:
+                if doc.page_content not in seen:
+                    seen.add(doc.page_content)
+                    extras.append((doc, score))
+
+        if not extras:
+            return [doc for doc, _ in base]
+
+        pool = base + extras
+        if self._rerank_enabled:
+            pool = self._rerank(query, pool)
+
+        if user_access_levels is None:
+            user_access_levels = ["public", "internal", "confidential", "restricted"]
+        pool = self._filter_by_permission(pool, tenant_id, user_id, user_access_levels)
+        logger.info(
+            "Expansion retrieval: base=%d extras=%d merged=%d "
+            "(extra_queries=%d hyde=%s)",
+            len(base),
+            len(extras),
+            len(pool),
+            len(extra_queries or []),
+            bool(hyde_text),
+        )
+        return [doc for doc, _ in pool[:top_k]]
 
     def keyword_search(
         self,
@@ -496,7 +630,7 @@ class HybridRetriever:
         # 检索耗时计时起点（Prometheus rag_search_duration_seconds）
         _rag_t0 = time.perf_counter()
 
-        # 标准粒度：向量检索
+        # 标准粒度：向量检索（通道内部已按 kb_similarity_threshold 做绝对相似度过滤）
         vector_results = self._vector_search(query, top_k * 2, filter_by)
 
         # 标准粒度：BM25
@@ -509,7 +643,17 @@ class HybridRetriever:
             else []
         )
 
-        # RRF 融合（标准粒度）
+        # 设计决策（P1-11 固化）：绝对相似度阈值为什么只在向量通道内生效，
+        # RRF 融合之后不再按 kb_similarity_threshold 过滤。
+        #   1. RRF 的输入是各通道排名，输出分 1/(k+rank+1) 是排名倒数，
+        #      没有余弦相似度那种 0~1 绝对量纲，无法与同一阈值比较。
+        #   2. BM25 基于词频统计，天然不存在语义相似度分数；工业语料里
+        #      故障码、型号、参数名等关键词强命中恰恰主要靠 BM25 召回，
+        #      融合后再套绝对阈值会把这部分块误杀。
+        #   3. smart 模式「是否需要检索」的绝对判据走向量块 metadata 上的
+        #      vector_similarity 戳，由 call_policy 消费，与融合后过滤解耦。
+        # 因此阈值过滤前置到 _vector_search 内的 _filter_by_similarity，
+        # 融合链路上只做排名、精排、权限与版本处理。
         standard_merged = self._rrf_fusion(vector_results, bm25_results, top_k)
 
         # 句子粒度结果：展开上下文
@@ -520,12 +664,23 @@ class HybridRetriever:
         final = self._merge_standard_and_sentence(
             standard_merged, sentence_results, top_k
         )
+        # 检索漏斗计数（P1-12）：各阶段数量留痕，便于还原「召回 N、保留 M」
+        funnel = {
+            "vector": len(vector_results),
+            "bm25": len(bm25_results),
+            "sentence": len(sentence_results),
+            "rrf": len(standard_merged),
+            "merged": len(final),
+        }
 
         # ===== 重排序（对齐阿里云百炼 + RAGFlow）=====
         # 在 RRF 融合后、权限过滤前，用 reranker 对候选结果二次排序
         # 可显著提升 top-k 的精确度（预期提升 10-20%）
-        if self._rerank_enabled and final:
+        rerank_on = self._rerank_enabled and bool(final)
+        if rerank_on:
             final = self._rerank(query, final)
+        # -1 哨兵表示 rerank 未启用，输出日志时转成可读的 off
+        funnel["rerank"] = len(final) if rerank_on else -1
 
         # ===== 权限过滤（二次过滤） =====
         before_count = len(final)
@@ -554,6 +709,27 @@ class HybridRetriever:
             )
         except Exception:  # pragma: no cover - 指标不应影响业务
             logger.debug("record_rag_search metric failed", exc_info=True)
+
+        # 单次检索一条漏斗日志，完整还原各阶段召回与过滤数量。
+        # 只记 query 长度不记原文，避免敏感语料进日志。
+        rerank_label = str(funnel["rerank"]) if funnel["rerank"] >= 0 else "off"
+        logger.info(
+            "Retrieval funnel backend=%s qlen=%d vector=%d bm25=%d "
+            "sentence=%d rrf=%d merged=%d rerank=%s perm=%d->%d "
+            "final=%d elapsed_ms=%.1f",
+            self.backend,
+            len(query),
+            funnel["vector"],
+            funnel["bm25"],
+            funnel["sentence"],
+            funnel["rrf"],
+            funnel["merged"],
+            rerank_label,
+            before_count,
+            after_count,
+            len(final),
+            (time.perf_counter() - _rag_t0) * 1000,
+        )
 
         return final
 

@@ -761,6 +761,10 @@ interface ChatCitation {
   // 6.4 章节面包屑，outline 切块时写入，形如「1. 概述 / 2.1 认证方式」；
   // 老索引块与无章节语料为 null/undefined，前端不占位
   chapter_path?: string | null
+  // P2-14 分数来源：retrieval 为正常检索，tail_backfill 为尾部补检的排名占位伪分
+  score_source?: string
+  // 真实绝对向量相似度；补检块无此戳，为 null/undefined
+  vector_similarity?: number | null
 }
 
 interface ChatMessage {
@@ -1222,7 +1226,18 @@ function FloatingChatWidget({ user, token, onLoginClick }: { user: User | null; 
                                 {typeof c.page === 'number' && c.page > 0 && (
                                   <span className="chat-citation-page">第 {c.page} 页</span>
                                 )}
-                                <span className="chat-citation-score">匹配度 {(c.score ?? 0).toFixed(3)}</span>
+                                {c.score_source === 'tail_backfill' ? (
+                                  <span
+                                    className="chat-citation-score chat-citation-score-backfill"
+                                    title="该片段由安全网补检召回，数值为排名占位而非真实相似度"
+                                  >
+                                    补检参考
+                                  </span>
+                                ) : (
+                                  <span className="chat-citation-score">
+                                    匹配度 {(c.vector_similarity ?? c.score ?? 0).toFixed(3)}
+                                  </span>
+                                )}
                               </div>
                               {c.chapter_path && (
                                 <div className="chat-citation-chapter" title={c.chapter_path}>

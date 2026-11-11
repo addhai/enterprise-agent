@@ -9,20 +9,22 @@
 存储：复用 src.mcp_tools.kb._kb_store（TenantIsolatedStore）和 KBItem 模型，
      新增 KBSet 模型与 _kb_set_store，用于管理"知识库集合"本身。
 """
+
+import contextlib
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from src.api.rbac import Role, require_roles
 from src.config import settings
+from src.db.stores import PgKBSetStore
 from src.mcp_tools.common import (
     current_utc_time,
     generate_id,
 )
-from src.db.stores import PgKBSetStore
 from src.mcp_tools.kb import (
     KBItem,
     KBItemStatus,
@@ -34,6 +36,14 @@ from src.mcp_tools.kb import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["knowledge"])
+
+
+class DocumentContentEmptyError(Exception):
+    """文档解析后无任何可用内容块。
+
+    归类为客户端可纠正的输入错误（HTTP 400），与向量库/嵌入服务不可用
+    这类服务端故障（HTTP 500）区分开，便于调用方决定修正输入还是重试。
+    """
 
 
 # ====================================================================
@@ -129,12 +139,14 @@ def _validate_upload_ext(filename: str) -> str:
 # 数据模型
 # ====================================================================
 
+
 class KBSet(BaseModel):
     """知识库集合（KBSet）— 一组文档的容器
 
     对齐阿里云百炼"知识库"概念：一个知识库下可包含多个文档，
     并可独立配置相似度阈值、权重、版本等。
     """
+
     id: str
     tenant_id: str
     name: str
@@ -157,7 +169,7 @@ _kb_set_store: PgKBSetStore = PgKBSetStore()
 _DEFAULT_TENANT = "default"
 
 
-def _get_tenant_id(current_user: Dict[str, Any]) -> str:
+def _get_tenant_id(current_user: dict[str, Any]) -> str:
     """从当前用户提取 tenant_id，回退到 default"""
     return current_user.get("tenant_id") or _DEFAULT_TENANT
 
@@ -170,25 +182,31 @@ def _utc_iso() -> str:
 # 请求模型
 # ====================================================================
 
+
 class KBCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, description="知识库名称")
     description: str = Field("", max_length=512, description="描述")
     kb_version: str = Field("standard", description="standard / flagship")
-    kb_type: str = Field("document", description="document / data / image / audio_video")
+    kb_type: str = Field(
+        "document", description="document / data / image / audio_video"
+    )
     similarity_threshold: float = Field(0.2, ge=0.01, le=1.0)
     weight: float = Field(1.0, ge=0.5, le=2.0)
 
 
 class KBUpdateRequest(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=128)
-    description: Optional[str] = Field(None, max_length=512)
-    similarity_threshold: Optional[float] = Field(None, ge=0.01, le=1.0)
-    weight: Optional[float] = Field(None, ge=0.5, le=2.0)
+    name: str | None = Field(None, min_length=1, max_length=128)
+    description: str | None = Field(None, max_length=512)
+    similarity_threshold: float | None = Field(None, ge=0.01, le=1.0)
+    weight: float | None = Field(None, ge=0.5, le=2.0)
 
 
 class DocumentCreateRequest(BaseModel):
     """通过文件路径 / 网页 URL / 纯文本 创建文档（不通过 multipart 上传时使用）"""
-    file_path: str = Field("", description="本地文件路径或网页 URL（document / url 来源）")
+
+    file_path: str = Field(
+        "", description="本地文件路径或网页 URL（document / url 来源）"
+    )
     content: str = Field("", description="纯文本内容（source_type=text 时使用）")
     title: str = Field("", description="文档标题（可选）")
     source_type: str = Field("document", description="document / url / text / api")
@@ -201,14 +219,15 @@ class HitTestRequest(BaseModel):
 
 
 class BatchDeleteRequest(BaseModel):
-    doc_ids: List[str] = Field(..., min_items=1, description="要删除的文档 ID 列表")
+    doc_ids: list[str] = Field(..., min_items=1, description="要删除的文档 ID 列表")
 
 
 # ====================================================================
 # 响应辅助
 # ====================================================================
 
-def _kb_set_to_dict(kb: KBSet) -> Dict[str, Any]:
+
+def _kb_set_to_dict(kb: KBSet) -> dict[str, Any]:
     return {
         "id": kb.id,
         "name": kb.name,
@@ -225,7 +244,7 @@ def _kb_set_to_dict(kb: KBSet) -> Dict[str, Any]:
     }
 
 
-def _kb_item_to_dict(item: KBItem) -> Dict[str, Any]:
+def _kb_item_to_dict(item: KBItem) -> dict[str, Any]:
     return {
         "id": item.id,
         "kb_id": item.kb_id,
@@ -247,7 +266,7 @@ def _kb_item_to_dict(item: KBItem) -> Dict[str, Any]:
     }
 
 
-def _recount_kb(tenant_id: str, kb_id: str) -> Optional[KBSet]:
+def _recount_kb(tenant_id: str, kb_id: str) -> KBSet | None:
     """重新统计知识库的 document_count 和 total_chunks"""
     kb = _kb_set_store.get(tenant_id, kb_id)
     if kb is None:
@@ -261,14 +280,36 @@ def _recount_kb(tenant_id: str, kb_id: str) -> Optional[KBSet]:
     return kb
 
 
+def _purge_document_vectors(doc_id: str, tenant_id: str) -> None:
+    """删除文档在双集合中的全部向量。
+
+    向量层失败时抛 500 且刻意保留业务元数据：元数据一旦先删，残留向量
+    就成了无主幽灵，既无法被管理接口追踪也无法再次触发清理。保留元数据
+    后运维可凭 doc_id 重试删除，故障可恢复。
+    """
+    try:
+        from src.api.dependencies import get_retriever
+
+        get_retriever().delete_document_vectors(doc_id, tenant_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Vector purge failed: doc_id=%s", doc_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"向量删除失败，文档元数据已保留，请稍后重试: {e}",
+        ) from e
+
+
 # ====================================================================
 # 知识库 CRUD
 # ====================================================================
 
+
 @router.post("/admin/knowledge")
 async def create_knowledge_base(
     req: KBCreateRequest,
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """创建知识库
 
@@ -281,7 +322,7 @@ async def create_knowledge_base(
         kb_version = KBVersion(req.kb_version)
         kb_type = KBType(req.kb_type)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"参数错误: {e}")
+        raise HTTPException(status_code=400, detail=f"参数错误: {e}") from e
 
     kb = KBSet(
         id=generate_id("KBS"),
@@ -307,7 +348,7 @@ async def create_knowledge_base(
 async def list_knowledge_bases(
     kb_type: str = Query("", description="按类型筛选"),
     kb_version: str = Query("", description="按版本筛选"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """列出所有知识库
 
@@ -330,7 +371,7 @@ async def list_knowledge_bases(
 @router.get("/admin/knowledge/{kb_id}")
 async def get_knowledge_base(
     kb_id: str = Path(..., description="知识库 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取知识库详情"""
     tenant_id = _get_tenant_id(current_user)
@@ -346,7 +387,7 @@ async def get_knowledge_base(
 async def update_knowledge_base(
     req: KBUpdateRequest,
     kb_id: str = Path(..., description="知识库 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """更新知识库配置（仅 admin）
 
@@ -375,7 +416,7 @@ async def update_knowledge_base(
 @router.delete("/admin/knowledge/{kb_id}")
 async def delete_knowledge_base(
     kb_id: str = Path(..., description="知识库 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """删除知识库（同时删除其下所有文档）
 
@@ -386,18 +427,22 @@ async def delete_knowledge_base(
     if kb is None:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
 
-    # 删除该 KB 下所有文档
+    # 删除该 KB 下所有文档：先级联清向量，再删业务元数据。
+    # 任一文档向量清理失败即中断并保留现场，由调用方重试，杜绝幽灵向量。
     items = _kb_store.list(tenant_id, 2000)
     deleted_docs = 0
     for item in items:
         if item.kb_id == kb_id:
+            _purge_document_vectors(item.id, tenant_id)
             _kb_store.delete(tenant_id, item.id)
             deleted_docs += 1
 
     _kb_set_store.delete(tenant_id, kb_id)
     logger.info(
         "KBSet deleted: id=%s docs_removed=%d by=%s",
-        kb_id, deleted_docs, current_user.get("user_id"),
+        kb_id,
+        deleted_docs,
+        current_user.get("user_id"),
     )
     return {
         "success": True,
@@ -408,7 +453,7 @@ async def delete_knowledge_base(
 @router.post("/admin/knowledge/{kb_id}/reindex")
 async def reindex_knowledge_base(
     kb_id: str = Path(..., description="知识库 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """重建知识库索引（仅 admin）
 
@@ -432,13 +477,75 @@ async def reindex_knowledge_base(
             reindexed += 1
 
     _recount_kb(tenant_id, kb_id)
-    logger.info("KBSet reindexed: id=%s docs=%d by=%s", kb_id, reindexed, current_user.get("user_id"))
+    logger.info(
+        "KBSet reindexed: id=%s docs=%d by=%s",
+        kb_id,
+        reindexed,
+        current_user.get("user_id"),
+    )
     return {"success": True, "reindexed": reindexed}
 
 
 # ====================================================================
 # 文档 CRUD
 # ====================================================================
+
+
+def _index_document_chunks(
+    tenant_id: str,
+    kb_id: str,
+    doc_id: str,
+    source_type: str,
+    raw_docs: list[Any],
+) -> tuple[int, int]:
+    """统一入库管线：元数据盖戳 → HybridChunker 双粒度切分 → 双集合写入。
+
+    所有管理端入库（上传 / URL / 文本 / 刷新）必须走这里，与
+    scripts/rebuild_index.py 的离线灌库路径保持同构：
+        1. 每个源块注入 kb_id / tenant_id / source_type / doc_id，
+           doc_id 是后续级联删除向量的唯一锚点
+        2. HybridChunker 产出标准块（512/64）与句子窗口块两种粒度
+        3. 标准块写标准集合并重建 BM25，句子块写独立句子集合
+
+    任何一步失败都向上抛异常，由调用方把 KBItem 置为 FAILED。
+    返回 (标准块数, 句子块数)。
+    """
+    if not raw_docs:
+        raise DocumentContentEmptyError("文档加载结果为空，无内容可索引")
+
+    for d in raw_docs:
+        d.metadata["kb_id"] = kb_id
+        if tenant_id and not d.metadata.get("tenant_id"):
+            d.metadata["tenant_id"] = tenant_id
+        d.metadata["source_type"] = source_type
+        d.metadata["doc_id"] = doc_id
+
+    from src.rag.chunker import HybridChunker
+
+    chunker = HybridChunker(
+        chunk_size=settings.chunk_size,
+        chunk_overlap=settings.chunk_overlap,
+    )
+    standard_chunks = chunker.split_standard(raw_docs)
+    sentence_chunks = chunker.split_sentences(raw_docs)
+    if not standard_chunks:
+        raise DocumentContentEmptyError("文档切块结果为空，可能内容过短或格式不受支持")
+
+    from src.api.dependencies import get_retriever
+
+    retriever = get_retriever()
+    retriever.add_documents(standard_chunks, tenant_id=tenant_id)
+    retriever.index_sentence_chunks(sentence_chunks, tenant_id=tenant_id)
+
+    logger.info(
+        "Document indexed: doc_id=%s kb=%s standard_chunks=%d sentence_chunks=%d",
+        doc_id,
+        kb_id,
+        len(standard_chunks),
+        len(sentence_chunks),
+    )
+    return len(standard_chunks), len(sentence_chunks)
+
 
 def _ingest_document_internal(
     tenant_id: str,
@@ -448,14 +555,17 @@ def _ingest_document_internal(
     source_type: str,
     upload_method: str,
     kb: KBSet,
-    docs: Optional[List] = None,
+    docs: list | None = None,
 ) -> KBItem:
-    """内部：创建 KBItem 并模拟解析/索引流程
+    """内部：创建 KBItem 并执行真实解析/双粒度索引流程。
 
-    生产环境应替换为真正的异步后台任务。支持三种来源：
+    支持三种来源：
         - document：file_path 为本地文件路径（由上传接口落盘）
         - url：file_path 为网页 URL（由调用方预抓取为 docs 传入）
         - text：由调用方将纯文本预加载为 docs 传入
+
+    状态机：pending → parsing → indexed；任一步失败置 failed 并抛 500，
+    失败原因写入 parse_status，禁止再用占位 chunk 伪装成功。
     """
     # doc_format 推导：URL / 文本来源无扩展名，按 source_type 归类
     if source_type == "url":
@@ -467,10 +577,8 @@ def _ingest_document_internal(
 
     file_size = 0
     if file_path and os.path.exists(file_path):
-        try:
+        with contextlib.suppress(OSError):
             file_size = os.path.getsize(file_path)
-        except OSError:
-            pass
 
     # 展示标题与存储路径（不同来源差异化）
     if source_type == "url":
@@ -502,42 +610,51 @@ def _ingest_document_internal(
     )
     _kb_store.save(tenant_id, kb_item.id, kb_item)
 
-    # 模拟处理流程
     kb_item.status = KBItemStatus.PARSING
     kb_item.parse_status = "parsing"
     _kb_store.save(tenant_id, kb_item.id, kb_item)
 
-    # 加载文档（若未预加载则按 file_path 加载），并注入知识库隔离元数据
-    chunk_count = 0
     try:
         if docs is None:
             from src.rag.loader import DocumentLoader
+
             loader = DocumentLoader(default_tenant_id=tenant_id)
             docs = loader.load_file(file_path) if file_path else []
-        # 每个 chunk 注入 kb_id / tenant_id / source_type / doc_id，
-        # 保证检索时可按知识库隔离（对齐阿里云百炼知识库隔离）。
-        for d in docs:
-            d.metadata["kb_id"] = kb_id
-            if tenant_id and not d.metadata.get("tenant_id"):
-                d.metadata["tenant_id"] = tenant_id
-            d.metadata["source_type"] = source_type
-            d.metadata["doc_id"] = kb_item.id
-        chunk_count = len(docs)
-        # 真正向量化（best-effort，失败不阻塞 API 响应）
-        if chunk_count > 0:
-            try:
-                from src.api.dependencies import get_retriever
-                retriever = get_retriever()
-                retriever.add_documents(docs, tenant_id=tenant_id)
-            except Exception as e:
-                logger.warning("Vector add failed (non-fatal): %s", e)
+        standard_count, _sentence_count = _index_document_chunks(
+            tenant_id=tenant_id,
+            kb_id=kb_id,
+            doc_id=kb_item.id,
+            source_type=source_type,
+            raw_docs=docs,
+        )
+    except DocumentContentEmptyError as e:
+        # 输入类错误：内容为空或无法解析，调用方应修正文档后重试
+        kb_item.status = KBItemStatus.FAILED
+        kb_item.parse_status = f"failed: {type(e).__name__}: {e}"[:200]
+        kb_item.chunk_count = 0
+        _kb_store.save(tenant_id, kb_item.id, kb_item)
+        logger.warning(
+            "Document ingestion rejected (empty content): doc_id=%s kb=%s: %s",
+            kb_item.id,
+            kb_id,
+            e,
+        )
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        logger.warning("Document load failed, using placeholder: %s", e)
-        chunk_count = chunk_count or 42
+        # 服务端故障：嵌入/向量库异常等，如实落库失败状态。
+        # parse_status 为自由字符串字段，截断到 200 字防止超长异常信息撑爆。
+        kb_item.status = KBItemStatus.FAILED
+        kb_item.parse_status = f"failed: {type(e).__name__}: {e}"[:200]
+        kb_item.chunk_count = 0
+        _kb_store.save(tenant_id, kb_item.id, kb_item)
+        logger.exception(
+            "Document ingestion failed: doc_id=%s kb=%s", kb_item.id, kb_id
+        )
+        raise HTTPException(status_code=500, detail=f"文档索引失败: {e}") from e
 
     kb_item.status = KBItemStatus.INDEXED
     kb_item.parse_status = "completed"
-    kb_item.chunk_count = chunk_count
+    kb_item.chunk_count = standard_count
     kb_item.indexed_at = _utc_iso()
     _kb_store.save(tenant_id, kb_item.id, kb_item)
 
@@ -548,7 +665,7 @@ def _ingest_document_internal(
 async def create_document(
     req: DocumentCreateRequest,
     kb_id: str = Path(..., description="知识库 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """添加文档到知识库（支持 document / url / text 三种来源）
 
@@ -564,20 +681,30 @@ async def create_document(
     # 预加载非文件来源（URL / 文本），统一复用 DocumentLoader 分块管线
     if source_type == "url":
         if not req.file_path or not req.file_path.startswith(("http://", "https://")):
-            raise HTTPException(status_code=400, detail="URL 来源需提供合法的 http(s) 地址")
+            raise HTTPException(
+                status_code=400, detail="URL 来源需提供合法的 http(s) 地址"
+            )
         try:
-            from src.rag.source_ingest import url_to_documents
+            from src.rag.source_ingest import (
+                WebIngestDisabledError,
+                url_to_documents,
+            )
+
             docs = url_to_documents(req.file_path, req.title, tenant_id)
+        except WebIngestDisabledError as e:
+            # 内网策略禁用，403 与普通抓取失败的 400 区分，消息可直接展示给管理员
+            raise HTTPException(status_code=403, detail=str(e)) from e
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"网页抓取失败: {e}")
+            raise HTTPException(status_code=400, detail=f"网页抓取失败: {e}") from e
     elif source_type == "text":
         if not req.content or not req.content.strip():
             raise HTTPException(status_code=400, detail="文本来源需提供 content 内容")
         try:
             from src.rag.source_ingest import text_to_documents
+
             docs = text_to_documents(req.content, req.title, tenant_id)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"文本解析失败: {e}")
+            raise HTTPException(status_code=400, detail=f"文本解析失败: {e}") from e
     else:
         if not req.file_path:
             raise HTTPException(status_code=400, detail="document 来源需提供 file_path")
@@ -594,12 +721,15 @@ async def create_document(
             docs=docs,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"参数错误: {e}")
+        raise HTTPException(status_code=400, detail=f"参数错误: {e}") from e
 
     _recount_kb(tenant_id, kb_id)
     logger.info(
         "Document created: id=%s kb=%s source=%s by=%s",
-        item.id, kb_id, source_type, current_user.get("user_id"),
+        item.id,
+        kb_id,
+        source_type,
+        current_user.get("user_id"),
     )
     return {"success": True, "document": _kb_item_to_dict(item)}
 
@@ -609,7 +739,7 @@ async def upload_document_file(
     kb_id: str = Path(..., description="知识库 ID"),
     file: UploadFile = File(..., description="文档文件"),
     title: str = Query("", description="文档标题"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """通过 multipart 上传文档文件到知识库
 
@@ -653,15 +783,18 @@ async def upload_document_file(
     # startswith 会被「同前缀的兄弟目录」绕过（如 /a/uploads2 命中 /a/uploads）。
     if os.path.commonpath([upload_root, target_path]) != upload_root:
         logger.warning(
-            "拦截疑似路径穿越的上传: filename=%r resolved=%s", file.filename, target_path
+            "拦截疑似路径穿越的上传: filename=%r resolved=%s",
+            file.filename,
+            target_path,
         )
         raise HTTPException(status_code=400, detail="文件名非法")
 
     try:
-        with open(target_path, "wb") as f:
+        # 上传落盘为小型知识文件的一次性写入，阻塞开销可忽略
+        with open(target_path, "wb") as f:  # noqa: ASYNC230
             f.write(content)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文件保存失败: {e}")
+        raise HTTPException(status_code=500, detail=f"文件保存失败: {e}") from e
 
     try:
         item = _ingest_document_internal(
@@ -678,12 +811,15 @@ async def upload_document_file(
             kb=kb,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"参数错误: {e}")
+        raise HTTPException(status_code=400, detail=f"参数错误: {e}") from e
 
     _recount_kb(tenant_id, kb_id)
     logger.info(
         "Document uploaded: id=%s kb=%s filename=%s by=%s",
-        item.id, kb_id, safe_name, current_user.get("user_id"),
+        item.id,
+        kb_id,
+        safe_name,
+        current_user.get("user_id"),
     )
     return {"success": True, "document": _kb_item_to_dict(item)}
 
@@ -694,7 +830,7 @@ async def list_documents(
     status: str = Query("", description="按状态筛选"),
     doc_format: str = Query("", description="按格式筛选"),
     limit: int = Query(50, ge=1, le=200),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """列出知识库下的所有文档"""
     tenant_id = _get_tenant_id(current_user)
@@ -720,7 +856,7 @@ async def list_documents(
 async def get_document(
     kb_id: str = Path(..., description="知识库 ID"),
     doc_id: str = Path(..., description="文档 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """获取文档详情"""
     tenant_id = _get_tenant_id(current_user)
@@ -734,22 +870,26 @@ async def get_document(
 async def delete_document(
     kb_id: str = Path(..., description="知识库 ID"),
     doc_id: str = Path(..., description="文档 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """删除文档（仅 admin）
 
-    删除后同时刷新知识库统计。
+    先级联删除双集合中的文档向量，再删业务元数据并刷新知识库统计。
+    向量清理失败时返回 500 且保留元数据，可凭原 doc_id 重试。
     """
     tenant_id = _get_tenant_id(current_user)
     item = _kb_store.get(tenant_id, doc_id)
     if item is None or item.kb_id != kb_id:
         raise HTTPException(status_code=404, detail=f"文档不存在: {doc_id}")
 
+    _purge_document_vectors(doc_id, tenant_id)
     _kb_store.delete(tenant_id, doc_id)
     _recount_kb(tenant_id, kb_id)
     logger.info(
         "Document deleted: id=%s kb=%s by=%s",
-        doc_id, kb_id, current_user.get("user_id"),
+        doc_id,
+        kb_id,
+        current_user.get("user_id"),
     )
     return {"success": True, "message": f"文档 {doc_id} 已删除"}
 
@@ -758,31 +898,82 @@ async def delete_document(
 async def refresh_document(
     kb_id: str = Path(..., description="知识库 ID"),
     doc_id: str = Path(..., description="文档 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """刷新文档索引（仅 admin）
 
-    重新解析并索引该文档。
+    真重建流程：重新加载源内容 → 删除该文档旧向量 → 双粒度重新切块入库。
+    文本片段来源的原始内容未持久化（file_path 仅为 text:// 占位），
+    无法重载，显式返回 400，引导用户删除后重新添加。
+    任一步失败置 FAILED 并返回 500，不再假装刷新成功。
     """
     tenant_id = _get_tenant_id(current_user)
     item = _kb_store.get(tenant_id, doc_id)
     if item is None or item.kb_id != kb_id:
         raise HTTPException(status_code=404, detail=f"文档不存在: {doc_id}")
 
-    # 重置状态并重新处理
+    if item.source_type == "text":
+        raise HTTPException(
+            status_code=400,
+            detail="文本片段来源不支持刷新（原始内容未持久化），请删除后重新添加",
+        )
+
     item.status = KBItemStatus.PARSING
     item.parse_status = "parsing"
     _kb_store.save(tenant_id, item.id, item)
 
-    # 重新加载
-    chunk_count = item.chunk_count
+    # 异常类必须在 try 外导入：document 分支不执行 url 分支内的导入，
+    # 若名字只在分支内绑定，except 求值类型时会抛 UnboundLocalError。
+    from src.rag.source_ingest import WebIngestDisabledError
+
     try:
-        from src.rag.loader import DocumentLoader
-        loader = DocumentLoader(default_tenant_id=tenant_id)
-        docs = loader.load_file(item.file_path)
-        chunk_count = len(docs) or chunk_count
+        # 先重载源内容：加载失败时旧向量原样保留，文档仍可被检索
+        if item.source_type == "url":
+            from src.rag.source_ingest import url_to_documents
+
+            docs = url_to_documents(item.file_path, item.title, tenant_id)
+        else:
+            from src.rag.loader import DocumentLoader
+
+            loader = DocumentLoader(default_tenant_id=tenant_id)
+            docs = loader.load_file(item.file_path)
+
+        # 再删旧向量。新块同样带 doc_id 戳，若先入库后删除会误删新块，
+        # 因此删除必须排在重新入库之前。
+        _purge_document_vectors(doc_id, tenant_id)
+        chunk_count, _sentence_count = _index_document_chunks(
+            tenant_id=tenant_id,
+            kb_id=kb_id,
+            doc_id=doc_id,
+            source_type=item.source_type,
+            raw_docs=docs,
+        )
+    except DocumentContentEmptyError as e:
+        item.status = KBItemStatus.FAILED
+        item.parse_status = f"failed: {type(e).__name__}: {e}"[:200]
+        item.chunk_count = 0
+        _kb_store.save(tenant_id, item.id, item)
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except WebIngestDisabledError as e:
+        # 禁用发生在重载阶段、_purge_document_vectors 之前，旧向量完整保留；
+        # 回滚 PARSING 态避免文档卡在解析中，按 403 告知策略原因。
+        item.status = KBItemStatus.INDEXED
+        item.parse_status = "completed"
+        _kb_store.save(tenant_id, item.id, item)
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except HTTPException:
+        # _purge_document_vectors 的 500 已带保留语义，这里统一落 FAILED 后上抛
+        item.status = KBItemStatus.FAILED
+        item.parse_status = "failed: refresh aborted, see server logs"
+        _kb_store.save(tenant_id, item.id, item)
+        raise
     except Exception as e:
-        logger.warning("Refresh load failed: %s", e)
+        item.status = KBItemStatus.FAILED
+        item.parse_status = f"failed: {type(e).__name__}: {e}"[:200]
+        item.chunk_count = 0
+        _kb_store.save(tenant_id, item.id, item)
+        logger.exception("Document refresh failed: doc_id=%s kb=%s", doc_id, kb_id)
+        raise HTTPException(status_code=500, detail=f"文档刷新失败: {e}") from e
 
     item.status = KBItemStatus.INDEXED
     item.parse_status = "completed"
@@ -793,7 +984,10 @@ async def refresh_document(
 
     logger.info(
         "Document refreshed: id=%s kb=%s chunks=%d by=%s",
-        doc_id, kb_id, chunk_count, current_user.get("user_id"),
+        doc_id,
+        kb_id,
+        chunk_count,
+        current_user.get("user_id"),
     )
     return {"success": True, "document": _kb_item_to_dict(item)}
 
@@ -802,7 +996,7 @@ async def refresh_document(
 async def batch_delete_documents(
     req: BatchDeleteRequest,
     kb_id: str = Path(..., description="知识库 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
 ):
     """批量删除文档（仅 admin）"""
     tenant_id = _get_tenant_id(current_user)
@@ -817,13 +1011,19 @@ async def batch_delete_documents(
         if item is None or item.kb_id != kb_id:
             not_found.append(doc_id)
             continue
+        # 向量先删、元数据后删；向量失败抛 500 中断，已删除的文档
+        # 保持已提交状态，失败文档的元数据保留，可凭响应与日志重试。
+        _purge_document_vectors(doc_id, tenant_id)
         _kb_store.delete(tenant_id, doc_id)
         deleted += 1
 
     _recount_kb(tenant_id, kb_id)
     logger.info(
         "Batch delete: kb=%s deleted=%d not_found=%d by=%s",
-        kb_id, deleted, len(not_found), current_user.get("user_id"),
+        kb_id,
+        deleted,
+        len(not_found),
+        current_user.get("user_id"),
     )
     return {
         "success": True,
@@ -836,11 +1036,12 @@ async def batch_delete_documents(
 # 命中测试
 # ====================================================================
 
+
 @router.post("/admin/knowledge/{kb_id}/hit_test")
 async def hit_test(
     req: HitTestRequest,
     kb_id: str = Path(..., description="知识库 ID"),
-    current_user: Dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN, Role.AGENT)),
 ):
     """命中测试 — 验证知识库检索效果
 
@@ -854,18 +1055,19 @@ async def hit_test(
     try:
         from src.rag.retriever import HybridRetriever
     except ImportError as e:
-        raise HTTPException(status_code=503, detail=f"检索器未安装: {e}")
+        raise HTTPException(status_code=503, detail=f"检索器未安装: {e}") from e
 
     # 优先使用全局单例
     retriever = None
     try:
         from src.api.dependencies import get_retriever
+
         retriever = get_retriever()
     except Exception:
         try:
             retriever = HybridRetriever()
         except Exception as e:
-            raise HTTPException(status_code=503, detail=f"检索器初始化失败: {e}")
+            raise HTTPException(status_code=503, detail=f"检索器初始化失败: {e}") from e
 
     try:
         results = retriever.search_with_scores(
@@ -877,7 +1079,7 @@ async def hit_test(
         )
     except Exception as e:
         logger.exception("hit_test 检索失败: %s", e)
-        raise HTTPException(status_code=500, detail=f"检索失败: {e}")
+        raise HTTPException(status_code=500, detail=f"检索失败: {e}") from e
 
     hits = []
     for doc, score in results:
@@ -885,12 +1087,14 @@ async def hit_test(
         # 只保留该知识库内的命中（若 retriever 支持按 kb_id 过滤则更精确）
         if meta.get("kb_id") and meta.get("kb_id") != kb_id:
             continue
-        hits.append({
-            "content": (doc.page_content or "")[:300],
-            "score": float(score),
-            "source": meta.get("source") or meta.get("doc_id") or "",
-            "metadata": {k: v for k, v in meta.items() if k != "source"},
-        })
+        hits.append(
+            {
+                "content": (doc.page_content or "")[:300],
+                "score": float(score),
+                "source": meta.get("source") or meta.get("doc_id") or "",
+                "metadata": {k: v for k, v in meta.items() if k != "source"},
+            }
+        )
 
     return {
         "kb_id": kb_id,

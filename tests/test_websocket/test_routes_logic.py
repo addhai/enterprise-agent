@@ -284,6 +284,52 @@ def test_build_citations_blank_chapter_path_is_none():
     assert cites[1]["chapter_path"] == "123"
 
 
+def test_build_citations_tail_backfill_marks_pseudo_score():
+    # P2-14：尾部补检块带 score_source 戳，前端可识别伪分；无真实相似度戳
+    docs = [
+        Document(
+            page_content="补检块",
+            metadata={
+                "title": "安全网补检",
+                "score_source": "tail_backfill",
+                "rrf_score": 1.0,
+                "score": 1.0,
+            },
+        )
+    ]
+    cites = _build_citations(docs)
+    assert cites[0]["score_source"] == "tail_backfill"
+    assert cites[0]["vector_similarity"] is None
+    # 混合 score 仍保留兼容，但来源已被明确标记
+    assert cites[0]["score"] == 1.0
+
+
+def test_build_citations_retrieval_exposes_real_similarity():
+    # 正常检索块缺省 score_source=retrieval，真实绝对相似度独立透出
+    docs = [
+        Document(
+            page_content="正常块",
+            metadata={"title": "手册", "vector_similarity": 0.87321},
+        )
+    ]
+    cites = _build_citations(docs)
+    assert cites[0]["score_source"] == "retrieval"
+    assert abs(cites[0]["vector_similarity"] - 0.8732) < 1e-6
+
+
+def test_build_citations_bad_similarity_coerces_none():
+    # vector_similarity 脏值安全降级 None，不污染前端置信度展示
+    docs = [
+        Document(
+            page_content="脏值块",
+            metadata={"vector_similarity": "not-a-number"},
+        )
+    ]
+    cites = _build_citations(docs)
+    assert cites[0]["vector_similarity"] is None
+    assert cites[0]["score_source"] == "retrieval"
+
+
 # ===========================================================================
 # _resolve_ws_identity
 # ===========================================================================

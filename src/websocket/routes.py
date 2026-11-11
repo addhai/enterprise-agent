@@ -745,11 +745,28 @@ def _build_citations(retrieved_docs) -> list[dict[str, Any]]:
             )
         except (TypeError, ValueError):
             score = 0.0
+        # P2-14 分数来源分字段承载：
+        # score 仍是混合值（真实 RRF 分或尾部补检的 1/(rank+1) 占位），保留兼容；
+        # score_source 显式区分 retrieval（正常检索）与 tail_backfill（补检伪分）；
+        # vector_similarity 单独透出真实绝对余弦相似度，缺该戳时为 None，
+        # 前端与坐席据此判断 score 是否可作为置信度解读。
+        score_source = meta.get("score_source") or "retrieval"
+        raw_sim = meta.get("vector_similarity")
+        try:
+            vector_similarity = float(raw_sim) if raw_sim is not None else None
+        except (TypeError, ValueError):
+            vector_similarity = None
         citations.append(
             {
                 "title": title,
                 "content": content,
                 "score": round(score, 4),
+                "score_source": score_source,
+                "vector_similarity": (
+                    round(vector_similarity, 4)
+                    if vector_similarity is not None
+                    else None
+                ),
                 "source": source,
                 "doc_id": doc_id,
                 "kb_id": kb_id,
