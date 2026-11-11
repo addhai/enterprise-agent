@@ -155,6 +155,31 @@ class VectorStoreManager:
         except Exception:
             return 0
 
+    def delete_by_metadata(self, where: dict) -> int:
+        """按元数据条件删除文档（文档级级联删除的底层原语）。
+
+        典型 where：``{"doc_id": "KB1234"}``，删除该文档的全部 chunk。
+        空条件直接拒绝，防止误删整个集合。返回实际删除条数。
+
+        Chroma 的 ``Collection.delete(where=...)`` 不返回删除计数，
+        先 get 一次拿命中 ID 数量，再执行删除，保证调用方可观测。
+        """
+        if not where:
+            raise ValueError("delete_by_metadata 拒绝空条件，防止清空整个集合")
+
+        if self.backend == "milvus":
+            coll = self._milvus_store.ensure_collection()
+            expr = " and ".join(f'{k} == "{v}"' for k, v in where.items())
+            result = coll.delete(expr)
+            return result.delete_count
+
+        collection = self.store._collection
+        matched = collection.get(where=where, include=[])
+        count = len(matched.get("ids", []))
+        if count:
+            collection.delete(where=where)
+        return count
+
     def count(self) -> int:
         """返回集合中的文档数"""
         if self.backend == "milvus":

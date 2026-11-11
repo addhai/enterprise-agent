@@ -3,19 +3,31 @@
 在会话结束后或人工服务结束时，向用户推送满意度评价。
 支持 1-5 星评分、标签、文字留言。
 """
+
+import logging
 import os
 import time
-import logging
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
-from fastapi import APIRouter, HTTPException, Depends, Query
+from datetime import datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-from src.api.rbac import get_current_user, require_permissions, Permission
-from src.db.repositories import satisfaction_create, satisfaction_list, user_get_by_id, DEFAULT_TENANT
+from src.api.rbac import (
+    Permission,
+    Role,
+    require_permissions,
+    require_roles,
+)
+from src.db.repositories import (
+    DEFAULT_TENANT,
+    satisfaction_create,
+    satisfaction_list,
+    user_get_by_id,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["satisfaction"])
@@ -30,43 +42,84 @@ router = APIRouter(tags=["satisfaction"])
 # Pydantic 模型
 # ====================================================================
 
+
 class SubmitSatisfactionRequest(BaseModel):
     """提交满意度评价"""
+
     session_id: str = Field(..., description="会话ID")
     user_id: str = Field(..., description="用户ID")
     score: int = Field(..., ge=1, le=5, description="1-5星评分")
-    tags: List[str] = Field(default_factory=list, description="评价标签，如[解决问题, 响应慢]")
+    tags: list[str] = Field(
+        default_factory=list, description="评价标签，如[解决问题, 响应慢]"
+    )
     comment: str = Field(default="", max_length=500, description="文字评价")
-    agent_id: Optional[str] = Field(None, description="人工客服ID（如有）")
+    agent_id: str | None = Field(None, description="人工客服ID（如有）")
 
 
 class SatisfactionStats(BaseModel):
     """满意度统计"""
+
     total: int = 0
     average_score: float = 0.0
-    csat_rate: float = 0.0   # 4-5星占比
-    distribution: Dict[str, int] = Field(default_factory=lambda: {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0})
-    recent_trend: List[Dict[str, Any]] = Field(default_factory=list)
+    csat_rate: float = 0.0  # 4-5星占比
+    distribution: dict[str, int] = Field(
+        default_factory=lambda: {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0}
+    )
+    recent_trend: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ====================================================================
 # API 路由
 # ====================================================================
 
+
 @router.get("/satisfaction")
 async def list_satisfaction(
-    user_id: Optional[str] = Query(None, description="按用户筛选"),
-    session_id: Optional[str] = Query(None, description="按会话筛选"),
-    agent_id: Optional[str] = Query(None, description="按客服筛选"),
+    user_id: str | None = Query(None, description="按用户筛选"),
+    session_id: str | None = Query(None, description="按会话筛选"),
+    agent_id: str | None = Query(None, description="按客服筛选"),
     limit: int = Query(50, ge=1, le=200),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.SATISFACTION_VIEW)),
+    current_user: dict[str, Any] = Depends(
+        require_permissions(Permission.SATISFACTION_VIEW)
+    ),
 ):
     """获取满意度评价列表（仅本租户）"""
     records = satisfaction_list(
-        user_id=user_id, session_id=session_id, agent_id=agent_id,
-        tenant_id=current_user.get("tenant_id") or DEFAULT_TENANT, limit=limit,
+        user_id=user_id,
+        session_id=session_id,
+        agent_id=agent_id,
+        tenant_id=current_user.get("tenant_id") or DEFAULT_TENANT,
+        limit=limit,
     )
     return {"total": len(records), "records": records}
+
+
+@router.get("/satisfaction/hard_cases")
+async def list_hard_cases(
+    score_threshold: int = Query(
+        2, ge=1, le=3, description="低分阈值，评分≤该值计入难例"
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    current_user: dict[str, Any] = Depends(require_roles(Role.ADMIN)),
+):
+    """低分评价难例挖掘（仅 admin）。
+
+    关联满意度与会话消息，输出去重后的失败问答及检索元数据，
+    golden_candidate=true 的条目可导出后进入金标题库评审流程。
+    派生视图不落库，每次请求实时计算。
+    """
+    from src.evaluation.feedback_loop import export_jsonl, mine_hard_cases
+
+    tenant_id = current_user.get("tenant_id") or DEFAULT_TENANT
+    cases = mine_hard_cases(
+        tenant_id=tenant_id, score_threshold=score_threshold, limit=limit
+    )
+    return {
+        "total": len(cases),
+        "golden_candidates": sum(1 for c in cases if c.golden_candidate),
+        "cases": [c.__dict__ for c in cases],
+        "jsonl": export_jsonl(cases),
+    }
 
 
 @router.post("/satisfaction")
@@ -93,17 +146,32 @@ async def submit_satisfaction(request: SubmitSatisfactionRequest):
 
     satisfaction_create(record)
 
-    logger.info("Satisfaction submitted: session=%s user=%s score=%s", request.session_id, request.user_id, request.score)
+    logger.info(
+        "Satisfaction submitted: session=%s user=%s score=%s",
+        request.session_id,
+        request.user_id,
+        request.score,
+    )
 
     # 触发通知
     try:
         from src.api.notifications import add_notification
-        level = "success" if request.score >= 4 else "warning" if request.score == 3 else "error"
+
+        level = (
+            "success"
+            if request.score >= 4
+            else "warning"
+            if request.score == 3
+            else "error"
+        )
         add_notification(
             type="satisfaction",
             level=level,
             title=f"满意度评价 {request.score} 星",
-            message=f"用户 {request.user_id} 对会话 {request.session_id[:8]} 评价 {request.score} 星",
+            message=(
+                f"用户 {request.user_id} 对会话 "
+                f"{request.session_id[:8]} 评价 {request.score} 星"
+            ),
             target_roles=["super_admin", "admin"],
         )
     except Exception as e:
@@ -115,13 +183,20 @@ async def submit_satisfaction(request: SubmitSatisfactionRequest):
 @router.get("/satisfaction/stats")
 async def get_satisfaction_stats(
     days: int = Query(7, ge=1, le=90, description="统计最近 N 天"),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.SATISFACTION_VIEW)),
+    current_user: dict[str, Any] = Depends(
+        require_permissions(Permission.SATISFACTION_VIEW)
+    ),
 ):
     """获取满意度统计"""
     cutoff = time.time() - days * 24 * 3600
-    records = [r for r in satisfaction_list(
-        limit=100000, tenant_id=current_user.get("tenant_id") or DEFAULT_TENANT,
-    ) if r["created_at"] >= cutoff]
+    records = [
+        r
+        for r in satisfaction_list(
+            limit=100000,
+            tenant_id=current_user.get("tenant_id") or DEFAULT_TENANT,
+        )
+        if r["created_at"] >= cutoff
+    ]
 
     stats = SatisfactionStats(total=len(records))
     if records:
@@ -133,6 +208,7 @@ async def get_satisfaction_stats(
 
     # 近 N 天趋势
     from collections import defaultdict
+
     daily = defaultdict(list)
     for r in records:
         day = datetime.fromtimestamp(r["created_at"]).strftime("%m-%d")
@@ -140,7 +216,11 @@ async def get_satisfaction_stats(
 
     sorted_days = sorted(daily.keys())
     stats.recent_trend = [
-        {"date": d, "avg_score": round(sum(daily[d]) / len(daily[d]), 2), "count": len(daily[d])}
+        {
+            "date": d,
+            "avg_score": round(sum(daily[d]) / len(daily[d]), 2),
+            "count": len(daily[d]),
+        }
         for d in sorted_days
     ]
 
@@ -151,13 +231,17 @@ async def get_satisfaction_stats(
 async def get_agent_satisfaction_stats(
     agent_id: str,
     days: int = Query(7, ge=1, le=90),
-    current_user: Dict[str, Any] = Depends(require_permissions(Permission.SATISFACTION_VIEW)),
+    current_user: dict[str, Any] = Depends(
+        require_permissions(Permission.SATISFACTION_VIEW)
+    ),
 ):
     """获取指定客服的满意度统计"""
     cutoff = time.time() - days * 24 * 3600
     records = [
-        r for r in satisfaction_list(
-            agent_id=agent_id, limit=100000,
+        r
+        for r in satisfaction_list(
+            agent_id=agent_id,
+            limit=100000,
             tenant_id=current_user.get("tenant_id") or DEFAULT_TENANT,
         )
         if r.get("agent_id") == agent_id and r["created_at"] >= cutoff
@@ -179,7 +263,10 @@ async def get_agent_satisfaction_stats(
 # 公共函数（供其他模块调用）
 # ====================================================================
 
-def create_satisfaction_invite(session_id: str, user_id: str, agent_id: Optional[str] = None) -> Dict[str, Any]:
+
+def create_satisfaction_invite(
+    session_id: str, user_id: str, agent_id: str | None = None
+) -> dict[str, Any]:
     """创建满意度评价邀请（由会话关闭/人工服务结束时调用）"""
     return {
         "invite_id": f"INV-{int(time.time() * 1000)}",

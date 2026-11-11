@@ -79,6 +79,7 @@ class PdfLoader(BaseLoader):
         # 逐页提取文字，做结构化处理
         processed_pages: list[str] = []
         page_numbers: list[int] = []
+        table_extract_on = getattr(settings, "pdf_table_extract_enabled", True)
         for page_num in range(len(doc_handle)):
             page = doc_handle[page_num]
             text = page.get_text()
@@ -86,6 +87,19 @@ class PdfLoader(BaseLoader):
 
             lines = text.split("\n")
             processed_text, page_info, title_info = _process_page_header_footer(lines)
+
+            # 表格结构化：识别结果以 Markdown 追加在本页正文之后，
+            # 仍处于 PAGE-BREAK 边界之内，页码传播与章节切分逻辑零改动。
+            if table_extract_on:
+                from src.rag.table_extractor import extract_page_tables
+
+                table_md = extract_page_tables(page)
+                if table_md:
+                    processed_text = (
+                        f"{processed_text}\n\n{table_md}"
+                        if processed_text
+                        else table_md
+                    )
 
             if page_info:
                 page_numbers.append(page_info.get("page", page_num + 1))

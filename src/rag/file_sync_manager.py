@@ -12,14 +12,14 @@
 数据流（全量模式）：
     清空向量库 → 全量加载 → 重建同步表
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Literal
 
 from src.rag.chunker import HybridChunker
 from src.rag.loader import DocumentLoader
@@ -76,9 +76,18 @@ class FileSyncManager:
         vector_store: VectorStoreManager,
         chunker: HybridChunker,
         loader: DocumentLoader,
-        sync_dir: Optional[str] = None,
+        sync_dir: str | None = None,
+        sentence_store: VectorStoreManager | None = None,
     ) -> None:
         self.vector_store = vector_store
+        # 句子粒度独立集合。2026-11 修复前句子块被写进标准 store，
+        # 双索引架构名存实亡；未注入时降级为只维护标准集合并告警。
+        self.sentence_store = sentence_store
+        if sentence_store is None:
+            logger.warning(
+                "FileSyncManager 未注入 sentence_store，句子块将跳过写入，"
+                "双索引检索能力不完整"
+            )
         self.chunker = chunker
         self.loader = loader
 
@@ -118,7 +127,7 @@ class FileSyncManager:
         else:
             return self._sync_incremental(directory, start)
 
-    def scan(self, directory: str) -> Dict[str, FileChange]:
+    def scan(self, directory: str) -> dict[str, FileChange]:
         """扫描目录，对比同步表，返回变更分类
 
         不调用加载器或向量库，只做变更检测。
@@ -149,7 +158,7 @@ class FileSyncManager:
         logger.info("Full sync: %s", directory)
 
         table = self._load_or_empty_table()
-        errors: List[SyncError] = []
+        errors: list[SyncError] = []
 
         # 1. 删除向量库中所有旧文档
         chunks_removed = self._delete_all_vector_docs(table)
@@ -157,12 +166,14 @@ class FileSyncManager:
 
         # 2. 扫描 + 加载所有文件
         changes = self._collect_all_files(directory)
-        result = self._process_changes(directory, changes, table, errors)
+        self._process_changes(directory, changes, table, errors)
 
         # 3. 持久化
         self._state_store.save(table, directory)
 
-        return self._build_result(changes, table, errors, start, chunks_removed=chunks_removed)
+        return self._build_result(
+            changes, table, errors, start, chunks_removed=chunks_removed
+        )
 
     # --------------------------------------------------------------
     # 增量同步
@@ -173,19 +184,21 @@ class FileSyncManager:
         logger.info("Incremental sync: %s", directory)
 
         table = self._load_or_empty_table()
-        errors: List[SyncError] = []
+        errors: list[SyncError] = []
 
         # 1. 扫描目录，对比同步表
         changes = self._classify_files(directory, table)
 
         # 2. 处理变更（删除 → 新增/修改）
         chunks_removed = self._handle_deletes(changes, table, errors)
-        result = self._process_changes(directory, changes, table, errors)
+        self._process_changes(directory, changes, table, errors)
 
         # 3. 持久化
         self._state_store.save(table, directory)
 
-        return self._build_result(changes, table, errors, start, chunks_removed=chunks_removed)
+        return self._build_result(
+            changes, table, errors, start, chunks_removed=chunks_removed
+        )
 
     # --------------------------------------------------------------
     # 内部方法：变更检测
@@ -201,7 +214,7 @@ class FileSyncManager:
 
     def _classify_files(
         self, directory: str, table: SyncTable
-    ) -> Dict[str, FileChange]:
+    ) -> dict[str, FileChange]:
         """扫描目录，对比同步表，分类每个文件的变更
 
         遍历磁盘上的所有文件，计算 hash + mtime，与同步表对比：
@@ -212,12 +225,14 @@ class FileSyncManager:
         source = self._get_source_for_dir(directory)
         file_infos = source.list_files()
 
-        changes: Dict[str, FileChange] = {}
+        changes: dict[str, FileChange] = {}
         for info in file_infos:
             abs_path = str(info.path.resolve())
             raw_text = source.read_file(info)
             if isinstance(raw_text, bytes):
-                raw_text = raw_text.decode(info.metadata.get("encoding", "utf-8"), errors="replace")
+                raw_text = raw_text.decode(
+                    info.metadata.get("encoding", "utf-8"), errors="replace"
+                )
 
             content_hash = compute_content_hash(raw_text)
             mtime = info.path.stat().st_mtime
@@ -256,17 +271,19 @@ class FileSyncManager:
 
         return changes
 
-    def _collect_all_files(self, directory: str) -> Dict[str, FileChange]:
+    def _collect_all_files(self, directory: str) -> dict[str, FileChange]:
         """全量模式下收集所有文件（全部标记为 NEW）"""
         source = self._get_source_for_dir(directory)
         file_infos = source.list_files()
 
-        changes: Dict[str, FileChange] = {}
+        changes: dict[str, FileChange] = {}
         for info in file_infos:
             abs_path = str(info.path.resolve())
             raw_text = source.read_file(info)
             if isinstance(raw_text, bytes):
-                raw_text = raw_text.decode(info.metadata.get("encoding", "utf-8"), errors="replace")
+                raw_text = raw_text.decode(
+                    info.metadata.get("encoding", "utf-8"), errors="replace"
+                )
             content_hash = compute_content_hash(raw_text)
             changes[abs_path] = FileChange(
                 file_path=abs_path,
@@ -281,38 +298,53 @@ class FileSyncManager:
 
     def _handle_deletes(
         self,
-        changes: Dict[str, FileChange],
+        changes: dict[str, FileChange],
         table: SyncTable,
-        errors: List[SyncError],
+        errors: list[SyncError],
     ) -> int:
-        """处理删除的文件：从向量库删除其所有 chunk IDs"""
+        """处理删除的文件：从标准/句子两个集合删除其全部 chunk IDs"""
         total_removed = 0
 
         for path, change in changes.items():
             if change.change_type != ChangeType.DELETED or change.old_entry is None:
                 continue
 
-            ids_to_delete = (
-                change.old_entry.standard_chunk_ids +
-                change.old_entry.sentence_chunk_ids
-            )
-            if ids_to_delete:
-                removed = self.vector_store.delete_by_ids(ids_to_delete)
-                total_removed += removed
-                logger.info("Deleted %d chunks for removed file: %s", removed, path)
+            std_ids = change.old_entry.standard_chunk_ids
+            sent_ids = change.old_entry.sentence_chunk_ids
+            try:
+                if std_ids:
+                    total_removed += self.vector_store.delete_by_ids(std_ids)
+                if sent_ids and self.sentence_store is not None:
+                    total_removed += self.sentence_store.delete_by_ids(sent_ids)
+                logger.info(
+                    "Deleted chunks for removed file: %s (std=%d sent=%d)",
+                    path,
+                    len(std_ids),
+                    len(sent_ids),
+                )
                 del table[path]
+            except Exception as e:
+                # 保留表项，下次同步仍能重试，避免向量残留变成无主幽灵
+                logger.error("Failed to delete chunks for %s: %s", path, e)
+                errors.append(
+                    SyncError(
+                        file_path=path,
+                        error_type="VECTOR_ERROR",
+                        message=str(e),
+                    )
+                )
 
         return total_removed
 
     def _process_changes(
         self,
         directory: str,
-        changes: Dict[str, FileChange],
+        changes: dict[str, FileChange],
         table: SyncTable,
-        errors: List[SyncError],
+        errors: list[SyncError],
     ) -> None:
         """处理新增/修改的文件：加载 → 切块 → 入库"""
-        source = self._get_source_for_dir(directory)
+        self._get_source_for_dir(directory)
 
         for path, change in changes.items():
             if not change.is_relevant:
@@ -322,17 +354,38 @@ class FileSyncManager:
                 continue
 
             try:
+                # MODIFIED 先删旧块：旧 chunk ID 来自同步表，标准与句子
+                # 两个集合分别清理。跳过这一步会让同文件旧版本块永久残留，
+                # 检索时新旧版本互相污染。
+                if change.change_type == ChangeType.MODIFIED and change.old_entry:
+                    old_std = change.old_entry.standard_chunk_ids
+                    old_sent = change.old_entry.sentence_chunk_ids
+                    if old_std:
+                        self.vector_store.delete_by_ids(old_std)
+                    if old_sent and self.sentence_store is not None:
+                        self.sentence_store.delete_by_ids(old_sent)
+                    logger.info(
+                        "Purged old chunks before re-sync: %s (std=%d sent=%d)",
+                        path,
+                        len(old_std),
+                        len(old_sent),
+                    )
+
                 # 加载文件
                 docs = self.loader.load_file(path)
                 if not docs:
                     logger.warning("No documents produced for %s", path)
-                    errors.append(SyncError(
-                        file_path=path,
-                        error_type="LOAD_ERROR",
-                        message="No documents produced by loader",
-                    ))
+                    errors.append(
+                        SyncError(
+                            file_path=path,
+                            error_type="LOAD_ERROR",
+                            message="No documents produced by loader",
+                        )
+                    )
                     # 保留旧状态或标记失败
-                    old = changes.get(path, FileChange(path, ChangeType.UNCHANGED)).old_entry
+                    old = changes.get(
+                        path, FileChange(path, ChangeType.UNCHANGED)
+                    ).old_entry
                     if old:
                         table[path] = SyncStateEntry(
                             file_path=path,
@@ -347,16 +400,15 @@ class FileSyncManager:
                     continue
 
                 # 切块（带确定性 ID）
-                standard_chunks = self.chunker.split_standard(
-                    docs, source_file=path
-                )
-                sentence_chunks = self.chunker.split_sentences(
-                    docs, source_file=path
-                )
+                standard_chunks = self.chunker.split_standard(docs, source_file=path)
+                sentence_chunks = self.chunker.split_sentences(docs, source_file=path)
 
-                # 入库
+                # 入库：标准块写标准集合，句子块写独立句子集合
                 std_ids = self.vector_store.add_documents(standard_chunks)
-                sent_ids = self.vector_store.add_documents(sentence_chunks)
+                if self.sentence_store is not None and sentence_chunks:
+                    sent_ids = self.sentence_store.add_documents(sentence_chunks)
+                else:
+                    sent_ids = []
 
                 # 更新同步表
                 table[path] = SyncStateEntry(
@@ -371,18 +423,24 @@ class FileSyncManager:
 
                 logger.info(
                     "Synced %s: %d standard + %d sentence chunks",
-                    path, len(std_ids), len(sent_ids),
+                    path,
+                    len(std_ids),
+                    len(sent_ids),
                 )
 
             except Exception as e:
                 logger.error("Failed to sync %s: %s", path, e)
-                errors.append(SyncError(
-                    file_path=path,
-                    error_type="LOAD_ERROR",
-                    message=str(e),
-                ))
+                errors.append(
+                    SyncError(
+                        file_path=path,
+                        error_type="LOAD_ERROR",
+                        message=str(e),
+                    )
+                )
                 # 保留旧状态或标记失败
-                old = changes.get(path, FileChange(path, ChangeType.UNCHANGED)).old_entry
+                old = changes.get(
+                    path, FileChange(path, ChangeType.UNCHANGED)
+                ).old_entry
                 if old:
                     table[path] = SyncStateEntry(
                         file_path=path,
@@ -400,12 +458,13 @@ class FileSyncManager:
     # --------------------------------------------------------------
 
     def _delete_all_vector_docs(self, table: SyncTable) -> int:
-        """删除同步表中所有文件的 chunk IDs"""
+        """删除同步表中所有文件的 chunk IDs（标准 + 句子两个集合）"""
         total = 0
         for entry in table.values():
-            ids = entry.standard_chunk_ids + entry.sentence_chunk_ids
-            if ids:
-                total += self.vector_store.delete_by_ids(ids)
+            if entry.standard_chunk_ids:
+                total += self.vector_store.delete_by_ids(entry.standard_chunk_ids)
+            if entry.sentence_chunk_ids and self.sentence_store is not None:
+                total += self.sentence_store.delete_by_ids(entry.sentence_chunk_ids)
         return total
 
     # --------------------------------------------------------------
@@ -414,9 +473,9 @@ class FileSyncManager:
 
     def _build_result(
         self,
-        changes: Dict[str, FileChange],
+        changes: dict[str, FileChange],
         table: SyncTable,
-        errors: List[SyncError],
+        errors: list[SyncError],
         start: float,
         chunks_removed: int = 0,
     ) -> SyncResult:
@@ -433,10 +492,18 @@ class FileSyncManager:
 
         return SyncResult(
             files_scanned=len(changes),
-            files_new=sum(1 for c in changes.values() if c.change_type == ChangeType.NEW),
-            files_modified=sum(1 for c in changes.values() if c.change_type == ChangeType.MODIFIED),
-            files_deleted=sum(1 for c in changes.values() if c.change_type == ChangeType.DELETED),
-            files_unchanged=sum(1 for c in changes.values() if c.change_type == ChangeType.UNCHANGED),
+            files_new=sum(
+                1 for c in changes.values() if c.change_type == ChangeType.NEW
+            ),
+            files_modified=sum(
+                1 for c in changes.values() if c.change_type == ChangeType.MODIFIED
+            ),
+            files_deleted=sum(
+                1 for c in changes.values() if c.change_type == ChangeType.DELETED
+            ),
+            files_unchanged=sum(
+                1 for c in changes.values() if c.change_type == ChangeType.UNCHANGED
+            ),
             chunks_added=chunks_added,
             chunks_removed=chunks_removed,
             errors=errors,
@@ -450,11 +517,13 @@ class FileSyncManager:
     def _get_source_for_dir(self, directory: str):
         """获取指定目录的数据源"""
         from src.rag.data_sources import LocalDirectoryDataSource
+
         return LocalDirectoryDataSource(directory)
 
     def _make_file_info(self, abs_path: str, directory: str):
         """从绝对路径构造 FileInfo"""
-        from src.rag.data_sources import FileInfo, LocalDirectoryDataSource
+        from src.rag.data_sources import FileInfo
+
         p = Path(abs_path)
         return FileInfo(
             path=p,

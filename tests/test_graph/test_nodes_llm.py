@@ -410,6 +410,139 @@ def test_kb_mode_always_preretrieves_and_injects(llm_env, monkeypatch):
     assert res["retrieval_count"] == 1
 
 
+def test_always_preretrieval_applies_query_rewrite(llm_env, monkeypatch):
+    """预检索主路径必须经过 QueryRewriter（2026-11 前移接线回归）"""
+    monkeypatch.setattr(settings, "kb_call_mode", "always")
+    monkeypatch.setattr(settings, "kb_direct_answer_enabled", False)
+    monkeypatch.setattr(settings, "rewrite_enabled", True)
+    retriever = _RecordingRetriever(
+        [Document(page_content="激光模组指示灯故障排查", metadata={"source": "m.md"})]
+    )
+    _install_recording_agent(monkeypatch)
+
+    rag_node(_state("激光定位灯不亮"), user_id="u", retriever=retriever)
+
+    assert len(retriever.calls) == 1
+    searched = retriever.calls[0]["query"]
+    # 原始提问保留，同义词表扩展词被拼入检索查询
+    assert "激光定位灯不亮" in searched
+    assert "激光模组" in searched
+
+
+def test_always_preretrieval_skips_rewrite_when_disabled(llm_env, monkeypatch):
+    monkeypatch.setattr(settings, "kb_call_mode", "always")
+    monkeypatch.setattr(settings, "kb_direct_answer_enabled", False)
+    monkeypatch.setattr(settings, "rewrite_enabled", False)
+    retriever = _RecordingRetriever(
+        [Document(page_content="激光模组说明", metadata={"source": "m.md"})]
+    )
+    _install_recording_agent(monkeypatch)
+
+    rag_node(_state("激光定位灯不亮"), user_id="u", retriever=retriever)
+
+    assert retriever.calls[0]["query"] == "激光定位灯不亮"
+
+
+def test_always_preretrieval_rewrite_failure_falls_back(llm_env, monkeypatch):
+    """改写器异常时检索仍用原始查询，主链路不被规则表故障阻断"""
+    monkeypatch.setattr(settings, "kb_call_mode", "always")
+    monkeypatch.setattr(settings, "kb_direct_answer_enabled", False)
+    monkeypatch.setattr(settings, "rewrite_enabled", True)
+
+    def _boom(query):
+        raise RuntimeError("rewriter broken")
+
+    monkeypatch.setattr("src.rag.query_rewriter.rewrite_query", _boom)
+    retriever = _RecordingRetriever(
+        [Document(page_content="兜底资料", metadata={"source": "m.md"})]
+    )
+    _install_recording_agent(monkeypatch)
+
+    rag_node(_state("激光定位灯不亮"), user_id="u", retriever=retriever)
+
+    assert retriever.calls[0]["query"] == "激光定位灯不亮"
+
+
+class _ExpansionRecordingRetriever(_RecordingRetriever):
+    """同时记录普通检索与语义扩展检索的入口选择。"""
+
+    def __init__(self, docs):
+        super().__init__(docs)
+        self.expansion_calls = []
+
+    def search_with_expansion(self, query, extra_queries=None, hyde_text="", **kw):
+        self.expansion_calls.append(
+            {"query": query, "extra": extra_queries, "hyde": hyde_text}
+        )
+        return list(self.docs)
+
+
+def test_semantic_rewrite_disabled_uses_plain_search(llm_env, monkeypatch):
+    monkeypatch.setattr(settings, "kb_call_mode", "always")
+    monkeypatch.setattr(settings, "kb_direct_answer_enabled", False)
+    monkeypatch.setattr(settings, "semantic_rewrite_enabled", False)
+    retriever = _ExpansionRecordingRetriever(
+        [Document(page_content="普通检索资料", metadata={"source": "m.md"})]
+    )
+    _install_recording_agent(monkeypatch)
+
+    rag_node(_state("设备无法开机"), user_id="u", retriever=retriever)
+
+    assert retriever.expansion_calls == []
+    assert len(retriever.calls) == 1
+
+
+def test_semantic_rewrite_enabled_routes_to_expansion(llm_env, monkeypatch):
+    monkeypatch.setattr(settings, "kb_call_mode", "always")
+    monkeypatch.setattr(settings, "kb_direct_answer_enabled", False)
+    monkeypatch.setattr(settings, "semantic_rewrite_enabled", True)
+
+    from src.rag.semantic_rewriter import SemanticExpansion
+
+    monkeypatch.setattr(
+        "src.rag.semantic_rewriter.build_semantic_expansion",
+        lambda q: SemanticExpansion(
+            extra_queries=["设备开不了机怎么排查"], hyde_text="假设手册段落"
+        ),
+    )
+    retriever = _ExpansionRecordingRetriever(
+        [Document(page_content="扩展检索资料", metadata={"source": "m.md"})]
+    )
+    _install_recording_agent(monkeypatch)
+
+    rag_node(_state("设备无法开机"), user_id="u", retriever=retriever)
+
+    assert len(retriever.expansion_calls) == 1
+    call = retriever.expansion_calls[0]
+    assert call["query"] == "设备无法开机"
+    assert call["extra"] == ["设备开不了机怎么排查"]
+    assert call["hyde"] == "假设手册段落"
+    # 走扩展入口后不再触发普通 search
+    assert retriever.calls == []
+
+
+def test_semantic_rewrite_empty_expansion_falls_back(llm_env, monkeypatch):
+    monkeypatch.setattr(settings, "kb_call_mode", "always")
+    monkeypatch.setattr(settings, "kb_direct_answer_enabled", False)
+    monkeypatch.setattr(settings, "semantic_rewrite_enabled", True)
+
+    from src.rag.semantic_rewriter import SemanticExpansion
+
+    monkeypatch.setattr(
+        "src.rag.semantic_rewriter.build_semantic_expansion",
+        lambda q: SemanticExpansion(),
+    )
+    retriever = _ExpansionRecordingRetriever(
+        [Document(page_content="兜底资料", metadata={"source": "m.md"})]
+    )
+    _install_recording_agent(monkeypatch)
+
+    rag_node(_state("设备无法开机"), user_id="u", retriever=retriever)
+
+    assert retriever.expansion_calls == []
+    assert len(retriever.calls) == 1
+
+
 def test_kb_mode_never_zero_retrieval(llm_env, monkeypatch):
     monkeypatch.setattr(settings, "kb_call_mode", "never")
     llm_env["fake_chat"].resp = "纯对话模式回答"

@@ -773,6 +773,41 @@ def satisfaction_count_since(cutoff_float: float) -> int:
         )
 
 
+def negative_satisfaction_list(
+    tenant_id: str,
+    max_score: int = 2,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """低分评价查询（反馈闭环的难例挖掘入口）。
+
+    与 satisfaction_list 分开定义，避免给高频统计查询引入可选过滤分支。
+    租户强制过滤，不提供跨租户查询形态。
+    """
+    with db_session() as s:
+        rows = (
+            s.query(Satisfaction)
+            .filter(Satisfaction.tenant_id == tenant_id)
+            .filter(Satisfaction.score <= max_score)
+            .order_by(Satisfaction.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "tenant_id": r.tenant_id,
+                "session_id": r.session_id,
+                "user_id": r.user_id,
+                "score": r.score,
+                "tags": _loads(r.tags_json, []),
+                "comment": r.comment,
+                "agent_id": r.agent_id,
+                "created_at": _dt2f(r.created_at),
+            }
+            for r in rows
+        ]
+
+
 # ---------------------------------------------------------------------------
 # 通知（Notification）
 # ---------------------------------------------------------------------------
