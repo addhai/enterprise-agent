@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # 单轮对话工作流墙钟硬超时（秒）。WS 断开/客户端静默掉线后，图最多在
     # 当前 LLM 调用边界（≤ llm_request_timeout）收卷，整体上限约为本值 + 一次请求。
     ws_workflow_hard_timeout: float = 600.0
+    # REST /chat 全局并发闸门容量（在线 P0-B）。同步工作流经 asyncio.to_thread
+    # 占用默认线程池，CPU 单实例 7B 形态下无界并发会让请求静默排队、上下文与
+    # 内存持续膨胀；满员时新请求立即 503 快速失败并带 Retry-After，把背压显式
+    # 传导给调用方。0 或负数表示关闭闸门（默认，保持历史行为），生产建议按核数
+    # 通过环境变量 CHAT_MAX_CONCURRENT 显式设 1~2。
+    chat_max_concurrent: int = 0
 
     # LangSmith
     langsmith_api_key: str = ""
@@ -178,6 +184,13 @@ class Settings(BaseSettings):
     synthesis_enabled: bool = False
     synthesis_max_injected_docs: int = 6  # 保底补块后的注入上限（原 5 + 补 1）
 
+    # 网页 URL 知识源摄取开关（P2-15 内网隔离）。
+    # url_to_documents 走 httpx 外网抓取，全离线内网形态下默认关闭，
+    # 关闭时 URL 入库请求被确定性拒绝并返回明确提示，不发起任何网络连接。
+    # 纯文本 text_to_documents 不联网，不受此开关影响。
+    # 仅在具备外网出口的部署中通过 env WEB_INGEST_ENABLED=true 显式打开。
+    web_ingest_enabled: bool = False
+
     # Agent
     max_reasoning_turns: int = 5
     max_turns_faq: int = 1
@@ -228,6 +241,17 @@ class Settings(BaseSettings):
     deepdoc_enabled: bool = False  # 启用 DeepDoc（扫描件 PDF 渲染图片→Vision/OCR）
     deepdoc_scan_threshold: int = 50  # 扫描件判定阈值（每页最少字符数）
     deepdoc_render_dpi: int = 150  # 扫描页渲染 DPI（越高越清晰但越慢）
+    # PDF 表格轻量结构化（PyMuPDF find_tables，零新增依赖，默认开启）
+    # 关闭后退回纯文本提取，金标回归出现表格类退化时可秒级关回
+    pdf_table_extract_enabled: bool = True
+    # 语义查询改写（HyDE / 多查询），LLM 驱动，默认关闭。
+    # CPU 7B 上每次改写是一次额外生成调用，必须经金标 A/B 验证收益后再开，
+    # 与纯规则零成本的 rewrite_enabled 是两个独立开关。
+    semantic_rewrite_enabled: bool = False
+    # hyde：生成假设答案段落做向量召回；multi_query：生成 N 个同义问法；both：两者都做
+    semantic_rewrite_mode: str = "hyde"
+    semantic_rewrite_variants: int = 2  # multi_query 问法数，硬上限 3
+    semantic_rewrite_max_tokens: int = 256
     dedup_exact_enabled: bool = True  # 一级：精确去重（整文档哈希）
     dedup_simhash_enabled: bool = True  # 二级：SimHash 近重去重
     dedup_simhash_threshold: float = 0.95  # SimHash 相似度阈值
