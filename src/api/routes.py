@@ -2,6 +2,7 @@
 API 路由定义
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -29,6 +30,19 @@ router = APIRouter()
 # ollama 探测超时（秒）。整体预算须小于 docker-compose.prod.yml
 # 健康探针的 5s timeout，ollama 是其中唯一走网络的探测项。
 _DETAIL_BUDGET_OLLAMA = 2.0
+
+# REST /chat 全局并发闸门（在线 P0-B）。Semaphore 按容量惰性创建并缓存，
+# 避免模块导入期绑定事件循环；chat_max_concurrent <= 0 时不取用，等于关闭。
+_chat_semaphores: dict[int, asyncio.Semaphore] = {}
+
+
+def _get_chat_semaphore(limit: int) -> asyncio.Semaphore:
+    """按容量取缓存的信号量，容量变化（测试 monkeypatch/热配）时新建。"""
+    semaphore = _chat_semaphores.get(limit)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(limit)
+        _chat_semaphores[limit] = semaphore
+    return semaphore
 
 
 class ChatRequest(BaseModel):
@@ -213,6 +227,25 @@ async def chat(
     server_role = current_user.get("role", "viewer")
     server_access_levels = role_to_access_levels(server_role)
 
+    # 并发闸门（P0-B）：满员立即 503 快速失败，不进工作流、不占线程池槽位。
+    # 判断与获取放在主 try 之外，避免 503 被兜底 except 改写成 500。
+    concurrency_limit = settings.chat_max_concurrent
+    chat_semaphore = (
+        _get_chat_semaphore(concurrency_limit) if concurrency_limit > 0 else None
+    )
+    if chat_semaphore is not None and chat_semaphore.locked():
+        logger.warning(
+            "Chat concurrency limit reached (%d), reject session=%s",
+            concurrency_limit,
+            session_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Service busy, please retry later",
+            headers={"Retry-After": "30"},
+        )
+    if chat_semaphore is not None:
+        await chat_semaphore.acquire()
     try:
         app = get_workflow()
 
@@ -245,7 +278,13 @@ async def chat(
             suggest_human=False,
         )
 
-        result = app.invoke(state, config={"configurable": {"thread_id": session_id}})
+        # P0-A：同步 LangGraph 卸载到工作线程执行，避免长耗时生成阻塞事件循环，
+        # 写法对齐 websocket/routes.py 中 WS 主链路的 asyncio.to_thread 模式。
+        result = await asyncio.to_thread(
+            app.invoke,
+            state,
+            config={"configurable": {"thread_id": session_id}},
+        )
 
         # 权限过滤信息：如果被过滤了文档，提示用户
         access_filtered = result.get("access_filtered", 0)
@@ -337,8 +376,12 @@ async def chat(
             intent=result.get("intent"),
         )
 
-    except Exception as e:
-        logger.exception(f"Error processing chat: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Internal error: {str(e)[:200]}"
-        ) from e
+    except Exception:
+        # P0-C：异常细节（内部路径/依赖报错文本）只进服务端日志，
+        # 对外统一通用文案，杜绝通过 detail 字段泄漏内部实现信息。
+        logger.exception("Error processing chat session=%s", session_id)
+        raise HTTPException(status_code=500, detail="Internal server error") from None
+    finally:
+        # 异常路径也必须释放槽位，否则一次失败会永久吃掉一个并发额度。
+        if chat_semaphore is not None:
+            chat_semaphore.release()
